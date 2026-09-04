@@ -15,6 +15,8 @@ pub const MAX_CPU_SECONDS: u64 = 60;
 pub const MAX_MEMORY_MB: u64 = 2048;
 pub const MAX_PROCS: u64 = 512;
 pub const MAX_FILES: usize = 64;
+pub const MAX_ARGS: usize = 64;
+pub const MAX_ARG_LENGTH: usize = 4096;
 pub const MAX_TOTAL_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
@@ -72,6 +74,8 @@ pub enum Request {
         entry: Option<String>,
         files: Vec<SourceFile>,
         stdin: String,
+        /// Passed to the program verbatim, never through a shell.
+        args: Vec<String>,
         limits: Limits,
     },
     /// Liveness and capacity probe used by the gateway's health endpoint.
@@ -174,12 +178,32 @@ pub fn parse_request(line: &str) -> Result<Request, String> {
         return Err("request carries no source files".to_string());
     }
 
+    let mut args = Vec::new();
+    if let Some(items) = value.get("args").and_then(Json::as_array) {
+        if items.len() > MAX_ARGS {
+            return Err(format!("request carries more than {MAX_ARGS} arguments"));
+        }
+        for item in items {
+            let argument = item
+                .as_str()
+                .ok_or_else(|| "every argument must be a string".to_string())?;
+            if argument.len() > MAX_ARG_LENGTH {
+                return Err(format!("an argument exceeds {MAX_ARG_LENGTH} characters"));
+            }
+            if argument.contains('\0') {
+                return Err("an argument contains a null byte".to_string());
+            }
+            args.push(argument.to_string());
+        }
+    }
+
     Ok(Request::Execute {
         id,
         language,
         entry,
         files,
         stdin: value.get("stdin").and_then(Json::as_str).unwrap_or("").to_string(),
+        args,
         limits: Limits::from_json(value.get("limits")),
     })
 }
@@ -288,6 +312,27 @@ mod tests {
             r#"{"language":"python; rm -rf /","files":[{"name":"m.py","content":"x"}]}"#,
         );
         assert!(request.is_err());
+    }
+
+    #[test]
+    fn carries_program_arguments_through_verbatim() {
+        let request = parse_request(
+            r#"{"language":"python","files":[{"name":"m.py","content":"x"}],
+                "args":["--flag","a value","-n"]}"#,
+        )
+        .unwrap();
+        let Request::Execute { args, .. } = request else { panic!("expected execute") };
+        assert_eq!(args, vec!["--flag", "a value", "-n"]);
+    }
+
+    #[test]
+    fn rejects_too_many_arguments() {
+        let many: Vec<String> = (0..MAX_ARGS + 1).map(|i| format!("\"a{i}\"")).collect();
+        let payload = format!(
+            r#"{{"language":"python","files":[{{"name":"m.py","content":"x"}}],"args":[{}]}}"#,
+            many.join(",")
+        );
+        assert!(parse_request(&payload).is_err());
     }
 
     #[test]

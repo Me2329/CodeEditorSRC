@@ -57,12 +57,29 @@ class ExecutionLimits(BaseModel):
     allow_net: bool = Field(default=False)
 
 
+MAX_PROGRAM_ARGS = 64
+MAX_ARG_LENGTH = 4096
+
+
 class ExecutionRequest(BaseModel):
     language: str
     files: list[SourceFile] = Field(default_factory=list, max_length=settings.max_files)
     entry: str | None = None
     stdin: str = ""
+    # Passed to the program after its own argv[0]. Never interpolated into a
+    # shell: each entry travels as one argument all the way down.
+    args: list[str] = Field(default_factory=list, max_length=MAX_PROGRAM_ARGS)
     limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
+
+    @field_validator("args")
+    @classmethod
+    def _check_args(cls, value: list[str]) -> list[str]:
+        for argument in value:
+            if len(argument) > MAX_ARG_LENGTH:
+                raise ValueError(f"an argument exceeds {MAX_ARG_LENGTH} characters")
+            if "\0" in argument:
+                raise ValueError("an argument contains a null byte")
+        return value
 
     @field_validator("language")
     @classmethod

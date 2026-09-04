@@ -13,6 +13,7 @@
 #   --workspace <dir>     Pre-populated workspace. Omit to read source on stdin.
 #   --entry <file>        Override the runtime's default entry filename.
 #   --stdin-file <file>   File piped to the program's stdin (default /dev/null).
+#   --arg <value>         Argument passed to the program. Repeatable, ordered.
 #   --meta-file <file>    Write a JSON run report to this path.
 #   --timeout <sec>       Wall-clock limit for the run phase       (default 10).
 #   --compile-timeout <s> Wall-clock limit for the compile phase   (default 30).
@@ -62,6 +63,7 @@ WORKSPACE=""
 ENTRY_OVERRIDE=""
 STDIN_FILE="/dev/null"
 META_FILE=""
+declare -a PROGRAM_ARGS=()
 WALL_TIMEOUT=10
 COMPILE_TIMEOUT=30
 CPU_SECONDS=5
@@ -79,6 +81,9 @@ while [[ $# -gt 0 ]]; do
         --workspace)       WORKSPACE="${2:-}"; shift 2 ;;
         --entry)           ENTRY_OVERRIDE="${2:-}"; shift 2 ;;
         --stdin-file)      STDIN_FILE="${2:-}"; shift 2 ;;
+        # Repeatable, and never word-split: an argument containing spaces stays
+        # one argument all the way to the program.
+        --arg)             PROGRAM_ARGS+=("${2:-}"); shift 2 ;;
         --meta-file)       META_FILE="${2:-}"; shift 2 ;;
         --timeout)         WALL_TIMEOUT="${2:-}"; shift 2 ;;
         --compile-timeout) COMPILE_TIMEOUT="${2:-}"; shift 2 ;;
@@ -478,7 +483,7 @@ fi
 # Run phase
 # ---------------------------------------------------------------------------
 run_start="$(now_ms)"
-run_phase "$WALL_TIMEOUT" "$CPU_SECONDS" "$AS_POLICY" "${RUN_ARGV[@]}"
+run_phase "$WALL_TIMEOUT" "$CPU_SECONDS" "$AS_POLICY" "${RUN_ARGV[@]}" "${PROGRAM_ARGS[@]}"
 RUN_EXIT=$?
 RUN_MS=$(( $(now_ms) - run_start ))
 RUN_EXIT="$(normalise_timeout_exit "$RUN_EXIT" "$RUN_MS" "$WALL_TIMEOUT")"

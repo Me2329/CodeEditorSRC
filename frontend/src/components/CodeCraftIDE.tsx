@@ -11,12 +11,17 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Code2,
   Cpu,
+  Download,
   Loader2,
+  Maximize2,
   Play,
+  Search,
+  Settings as SettingsIcon,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
+  Upload,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -24,13 +29,32 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { ApiError, api } from '../lib/api';
-import type { AnalysisResult, HealthInfo, RuntimeInfo, VirtualFile } from '../lib/types';
-import { createFile, loadWorkspace, saveWorkspace } from '../lib/vfs';
+import type { Command } from '../lib/commands';
+import {
+  applyTheme,
+  DEFAULT_PREFERENCES,
+  loadPreferences,
+  savePreferences,
+  themeById,
+  THEMES,
+  type Preferences,
+} from '../lib/preferences';
+import type {
+  AnalysisResult,
+  HealthInfo,
+  RuntimeInfo,
+  Symbol as WorkspaceSymbol,
+  VirtualFile,
+} from '../lib/types';
+import { createFile, loadWorkspace, saveWorkspace, validateFileName } from '../lib/vfs';
 import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
+import { CommandPalette, type PaletteMode } from './CommandPalette';
 import { FileExplorer } from './FileExplorer';
 import { PreviewPane } from './PreviewPane';
+import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
+import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
 const ANALYSIS_DEBOUNCE_MS = 700;
@@ -61,6 +85,16 @@ export function CodeCraftIDE() {
   const [bottomTab, setBottomTab] = useState<'assistant' | 'analysis'>('assistant');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
+
+  const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
+  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
+  const [stdin, setStdin] = useState('');
+  const [argsText, setArgsText] = useState('');
+  const [statusNote, setStatusNote] = useState('');
+
+  const importRef = useRef<HTMLInputElement>(null);
 
   const terminalRef = useRef<TerminalHandle>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -117,6 +151,29 @@ export function CodeCraftIDE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const updatePreference = useCallback(
+    <K extends keyof Preferences>(key: K, value: Preferences[K]) => {
+      setPreferences((previous) => {
+        const next = { ...previous, [key]: value };
+        savePreferences(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Theme tokens are CSS custom properties on the root, so a change repaints
+  // the whole interface without threading colours through every component.
+  useEffect(() => {
+    applyTheme(themeById(preferences.theme));
+  }, [preferences.theme]);
+
+  /** Show a transient note in the status bar. */
+  const notify = useCallback((message: string) => {
+    setStatusNote(message);
+    window.setTimeout(() => setStatusNote((current) => (current === message ? '' : current)), 4000);
+  }, []);
+
   const loadTemplate = useCallback(async (runtimeId: string, cancelled = false) => {
     const template = await api.template(runtimeId);
     if (cancelled) return;
@@ -133,7 +190,7 @@ export function CodeCraftIDE() {
 
   // ----------------------------------------------------------------- analysis
   useEffect(() => {
-    if (!activeFile || health?.analyzer === false) return;
+    if (!activeFile || health?.analyzer === false || !preferences.liveAnalysis) return;
 
     const timer = window.setTimeout(() => {
       setAnalysisPending(true);
@@ -155,7 +212,41 @@ export function CodeCraftIDE() {
     }, ANALYSIS_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [activeFile?.content, language, health?.analyzer, activeFile]);
+  }, [activeFile?.content, language, health?.analyzer, activeFile, preferences.liveAnalysis]);
+
+  // Symbols power go-to-symbol and the outline. They come from the assistant's
+  // index, which is why this is cheap enough to refresh as the workspace changes.
+  useEffect(() => {
+    if (files.length === 0) return;
+    let cancelled = false;
+
+    const timer = window.setTimeout(() => {
+      void api
+        .symbols({
+          language,
+          files: files.map((file) => ({ name: file.name, content: file.content })),
+          active_file: activeFile?.name ?? '',
+          line: caret.line,
+          column: caret.column,
+          selection: '',
+        })
+        .then((result) => {
+          if (!cancelled) setSymbols(result.items);
+        })
+        .catch(() => {
+          // The assistant daemon may not be running; the outline stays empty
+          // and the palette says so rather than showing a stale list.
+          if (!cancelled) setSymbols([]);
+        });
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // Only the file contents matter here, not the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language, files]);
 
   // ---------------------------------------------------------------- execution
   const socket = useExecutionSocket({
@@ -208,22 +299,74 @@ export function CodeCraftIDE() {
     }
 
     setLastRun(null);
-    terminalRef.current?.writeLine(ansi.accent(`> ${activeRuntime.label}`));
-    socket.run({ language, files, entry: activeRuntime.entry });
-  }, [activeRuntime, files, language, socket]);
+    const args = parseArgs(argsText);
+    terminalRef.current?.writeLine(
+      ansi.accent(`> ${activeRuntime.label}${args.length ? ` ${args.join(' ')}` : ''}`),
+    );
+    socket.run({
+      language,
+      files,
+      entry: activeRuntime.entry,
+      stdin,
+      args,
+      limits: {
+        wall_seconds: preferences.wallSeconds,
+        memory_mb: preferences.memoryMb,
+      },
+    });
+  }, [activeRuntime, files, language, socket, stdin, argsText, preferences]);
 
-  // Ctrl+Enter and Cmd+Enter run, matching the editor's own binding.
+  // Global shortcuts. Monaco owns the ones that act on text; these are the
+  // application-level bindings, so they are registered on the window and each
+  // one calls preventDefault to stop the browser's own handling.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      const modifier = event.ctrlKey || event.metaKey;
+
+      if (modifier && event.key === 'Enter') {
         event.preventDefault();
         if (socket.isRunning) socket.abort();
         else handleRun();
+        return;
+      }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        setPaletteMode('commands');
+        return;
+      }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        setPaletteMode('symbols');
+        return;
+      }
+      if (modifier && !event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        setPaletteMode('files');
+        return;
+      }
+      if (modifier && event.key === ',') {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
+      if (event.altKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        updatePreference('wordWrap', !preferences.wordWrap);
+        return;
+      }
+      if (event.key === 'F11') {
+        event.preventDefault();
+        updatePreference('zenMode', !preferences.zenMode);
+        return;
+      }
+      if (event.key === 'Escape' && preferences.zenMode) {
+        updatePreference('zenMode', false);
       }
     };
+
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleRun, socket]);
+  }, [handleRun, socket, preferences.wordWrap, preferences.zenMode, updatePreference]);
 
   // ------------------------------------------------------------- interactions
   const handleLanguageChange = useCallback(
@@ -249,6 +392,66 @@ export function CodeCraftIDE() {
     [activeFile],
   );
 
+  /** Save the workspace as a JSON file the editor can read back. */
+  const handleExport = useCallback(() => {
+    const payload = JSON.stringify(
+      {
+        version: 1,
+        language,
+        files: files.map((file) => ({ name: file.name, content: file.content })),
+      },
+      null,
+      2,
+    );
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `codecraft-${language}-workspace.json`;
+    anchor.click();
+    // Revoking immediately can cancel the download in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    notify('Workspace exported.');
+  }, [files, language, notify]);
+
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const parsed = JSON.parse(await file.text()) as {
+          language?: string;
+          files?: { name?: string; content?: string }[];
+        };
+        const incoming = (parsed.files ?? []).filter(
+          (entry): entry is { name: string; content: string } =>
+            typeof entry?.name === 'string' && typeof entry?.content === 'string',
+        );
+        if (incoming.length === 0) {
+          notify('That file contains no workspace files.');
+          return;
+        }
+
+        // Reject a hostile archive rather than writing its paths.
+        const accepted: VirtualFile[] = [];
+        for (const entry of incoming) {
+          if (validateFileName(entry.name, accepted) !== null) {
+            notify(`Rejected an unsafe file name: ${entry.name}`);
+            return;
+          }
+          accepted.push(createFile(entry.name, entry.content));
+        }
+
+        if (parsed.language && runtimes.some((runtime) => runtime.id === parsed.language)) {
+          setLanguage(parsed.language);
+        }
+        setFiles(accepted);
+        setActiveFileId(accepted[0]!.id);
+        notify(`Imported ${accepted.length} file(s).`);
+      } catch {
+        notify('That file is not a CodeCraft workspace.');
+      }
+    },
+    [runtimes, notify],
+  );
+
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -256,6 +459,16 @@ export function CodeCraftIDE() {
     editor.setPosition({ lineNumber: line, column: 1 });
     editor.focus();
   }, []);
+
+  const handleGoToSymbol = useCallback(
+    (symbol: WorkspaceSymbol) => {
+      const target = files.find((file) => file.name === symbol.file);
+      if (target && target.id !== activeFileId) setActiveFileId(target.id);
+      // Let the editor swap models before moving the caret.
+      window.setTimeout(() => handleJumpToLine(symbol.line), 60);
+    },
+    [files, activeFileId, handleJumpToLine],
+  );
 
   // Surface analyzer diagnostics as Monaco markers on the active file.
   useEffect(() => {
@@ -319,6 +532,161 @@ export function CodeCraftIDE() {
     [],
   );
 
+  const commands: Command[] = useMemo(
+    () => [
+      {
+        id: 'run.execute',
+        title: socket.isRunning ? 'Abort the running program' : 'Run the workspace',
+        category: 'Run',
+        shortcut: 'Ctrl+Enter',
+        run: () => (socket.isRunning ? socket.abort() : handleRun()),
+      },
+      {
+        id: 'view.files',
+        title: 'Go to file',
+        category: 'Navigate',
+        shortcut: 'Ctrl+P',
+        run: () => setPaletteMode('files'),
+      },
+      {
+        id: 'view.symbols',
+        title: 'Go to symbol',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Shift+O',
+        run: () => setPaletteMode('symbols'),
+      },
+      {
+        id: 'view.settings',
+        title: 'Open settings',
+        category: 'View',
+        shortcut: 'Ctrl+,',
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: 'view.zen',
+        title: preferences.zenMode ? 'Leave zen mode' : 'Enter zen mode',
+        category: 'View',
+        shortcut: 'Ctrl+K Z',
+        run: () => updatePreference('zenMode', !preferences.zenMode),
+      },
+      {
+        id: 'view.assistant',
+        title: 'Show the assistant',
+        category: 'View',
+        run: () => setBottomTab('assistant'),
+      },
+      {
+        id: 'view.analysis',
+        title: 'Show static analysis',
+        category: 'View',
+        run: () => setBottomTab('analysis'),
+      },
+      {
+        id: 'view.wrap',
+        title: preferences.wordWrap ? 'Disable word wrap' : 'Enable word wrap',
+        category: 'View',
+        shortcut: 'Alt+Z',
+        run: () => updatePreference('wordWrap', !preferences.wordWrap),
+      },
+      {
+        id: 'view.minimap',
+        title: preferences.minimap ? 'Hide the minimap' : 'Show the minimap',
+        category: 'View',
+        run: () => updatePreference('minimap', !preferences.minimap),
+      },
+      {
+        id: 'view.fontUp',
+        title: 'Increase font size',
+        category: 'View',
+        run: () => updatePreference('fontSize', Math.min(28, preferences.fontSize + 1)),
+      },
+      {
+        id: 'view.fontDown',
+        title: 'Decrease font size',
+        category: 'View',
+        run: () => updatePreference('fontSize', Math.max(9, preferences.fontSize - 1)),
+      },
+      ...THEMES.map((theme) => ({
+        id: `theme.${theme.id}`,
+        title: `Theme: ${theme.label}`,
+        category: 'Theme',
+        run: () => updatePreference('theme', theme.id),
+      })),
+      {
+        id: 'editor.format',
+        title: 'Format document',
+        category: 'Edit',
+        shortcut: 'Shift+Alt+F',
+        run: () => {
+          void editorRef.current?.getAction('editor.action.formatDocument')?.run();
+        },
+      },
+      {
+        id: 'editor.comment',
+        title: 'Toggle line comment',
+        category: 'Edit',
+        shortcut: 'Ctrl+/',
+        run: () => {
+          void editorRef.current?.getAction('editor.action.commentLine')?.run();
+        },
+      },
+      {
+        id: 'editor.find',
+        title: 'Find in this file',
+        category: 'Edit',
+        shortcut: 'Ctrl+F',
+        run: () => {
+          void editorRef.current?.getAction('actions.find')?.run();
+        },
+      },
+      {
+        id: 'editor.replace',
+        title: 'Replace in this file',
+        category: 'Edit',
+        shortcut: 'Ctrl+H',
+        run: () => {
+          void editorRef.current?.getAction('editor.action.startFindReplaceAction')?.run();
+        },
+      },
+      {
+        id: 'workspace.export',
+        title: 'Export workspace as JSON',
+        category: 'Workspace',
+        run: handleExport,
+      },
+      {
+        id: 'workspace.import',
+        title: 'Import workspace from JSON',
+        category: 'Workspace',
+        run: () => importRef.current?.click(),
+      },
+      {
+        id: 'workspace.newFile',
+        title: 'New file',
+        category: 'Workspace',
+        run: () => {
+          const name = window.prompt('File name');
+          if (!name) return;
+          const problem = validateFileName(name, files);
+          if (problem) {
+            notify(problem);
+            return;
+          }
+          const file = createFile(name.trim(), '');
+          setFiles((previous) => [...previous, file]);
+          setActiveFileId(file.id);
+        },
+      },
+      {
+        id: 'console.clear',
+        title: 'Clear the console',
+        category: 'Run',
+        run: () => terminalRef.current?.clear(),
+      },
+    ],
+    [socket, handleRun, preferences, updatePreference, handleExport, files, notify],
+  );
+
   const statusBadge = useMemo(() => {
     if (!lastRun) return null;
     const good = lastRun.code === 0 && !lastRun.aborted;
@@ -339,21 +707,65 @@ export function CodeCraftIDE() {
     return <BootError message={bootError} />;
   }
 
+  const zen = preferences.zenMode;
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-obsidian font-sans text-slate-200 antialiased selection:bg-indigo-500/30">
-      <TopBar
-        runtimes={runtimes}
-        language={language}
-        onLanguageChange={handleLanguageChange}
-        isRunning={socket.isRunning}
-        canRun={activeRuntime?.executable === true && activeRuntime.installed}
-        onRun={handleRun}
-        onAbort={socket.abort}
-        connection={socket.connection}
-        health={health}
+      <CommandPalette
+        mode={paletteMode}
+        commands={commands}
+        files={files}
+        symbols={symbols}
+        onClose={() => setPaletteMode(null)}
+        onOpenFile={setActiveFileId}
+        onGoToSymbol={handleGoToSymbol}
+      />
+      <SettingsPanel
+        open={settingsOpen}
+        preferences={preferences}
+        onChange={updatePreference}
+        onReset={() => {
+          setPreferences({ ...DEFAULT_PREFERENCES });
+          savePreferences({ ...DEFAULT_PREFERENCES });
+          notify('Settings reset to defaults.');
+        }}
+        onClose={() => setSettingsOpen(false)}
+      />
+      <input
+        ref={importRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        aria-hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void handleImportFile(file);
+          // Reset so importing the same file twice still fires a change event.
+          event.target.value = '';
+        }}
       />
 
+      {!zen && (
+        <TopBar
+          runtimes={runtimes}
+          language={language}
+          onLanguageChange={handleLanguageChange}
+          isRunning={socket.isRunning}
+          canRun={activeRuntime?.executable === true && activeRuntime.installed}
+          onRun={handleRun}
+          onAbort={socket.abort}
+          connection={socket.connection}
+          health={health}
+          onOpenPalette={() => setPaletteMode('commands')}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onExport={handleExport}
+          onImport={() => importRef.current?.click()}
+          onToggleZen={() => updatePreference('zenMode', true)}
+        />
+      )}
+
       <div className="flex min-h-0 flex-1">
+        {!zen && (
         <FileExplorer
           files={files}
           activeFileId={activeFile?.id ?? ''}
@@ -372,14 +784,21 @@ export function CodeCraftIDE() {
             });
           }}
         />
+        )}
 
         <main className="flex min-w-0 flex-1 flex-col border-r border-slate-800/80">
+          <EditorTabs
+            files={files}
+            activeFileId={activeFile?.id ?? ''}
+            entryName={activeRuntime?.entry ?? ''}
+            onSelect={setActiveFileId}
+          />
           {activeFile ? (
             <Editor
               key={activeFile.id}
               height="100%"
               language={activeFile.language}
-              theme="vs-dark"
+              theme={themeById(preferences.theme).monacoBase}
               value={activeFile.content}
               onChange={handleEditorChange}
               onMount={handleEditorMount}
@@ -389,19 +808,26 @@ export function CodeCraftIDE() {
                 </div>
               }
               options={{
-                fontSize: 13,
+                fontSize: preferences.fontSize,
                 fontFamily: '"Fira Code", "JetBrains Mono", monospace',
-                fontLigatures: true,
-                minimap: { enabled: true, scale: 1 },
+                fontLigatures: preferences.fontLigatures,
+                minimap: { enabled: preferences.minimap, scale: 1 },
+                lineNumbers: preferences.lineNumbers ? 'on' : 'off',
+                wordWrap: preferences.wordWrap ? 'on' : 'off',
+                tabSize: preferences.tabSize,
+                renderWhitespace: preferences.renderWhitespace ? 'all' : 'selection',
+                rulers: preferences.rulerColumn > 0 ? [preferences.rulerColumn] : [],
                 scrollBeyondLastLine: false,
                 automaticLayout: true,
                 padding: { top: 12, bottom: 12 },
                 smoothScrolling: true,
                 cursorBlinking: 'smooth',
                 cursorSmoothCaretAnimation: 'on',
-                renderWhitespace: 'selection',
-                tabSize: 4,
                 bracketPairColorization: { enabled: true },
+                stickyScroll: { enabled: true },
+                linkedEditing: true,
+                formatOnPaste: true,
+                suggestSelection: 'first',
               }}
             />
           ) : (
@@ -411,12 +837,23 @@ export function CodeCraftIDE() {
           )}
         </main>
 
-        <div className="flex w-[38%] min-w-[320px] flex-col">
+        <div className={`flex flex-col ${zen ? 'hidden' : 'w-[38%] min-w-[320px]'}`}>
+          <RunConfigPanel
+            stdin={stdin}
+            argsText={argsText}
+            onStdinChange={setStdin}
+            onArgsChange={setArgsText}
+          />
           <div className="min-h-0 flex-1">
             {isPreviewRuntime ? (
               <PreviewPane files={files} entryName={activeRuntime?.entry ?? 'index.html'} />
             ) : (
-              <TerminalPane ref={terminalRef} status={statusBadge} />
+              <TerminalPane
+                ref={terminalRef}
+                status={statusBadge}
+                palette={themeById(preferences.theme).terminal}
+                fontSize={preferences.fontSize}
+              />
             )}
           </div>
           <div className="flex h-[46%] min-h-0 flex-col border-t border-slate-800/80 bg-panel">
@@ -465,7 +902,143 @@ export function CodeCraftIDE() {
           </div>
         </div>
       </div>
+
+      <StatusBar
+        language={activeRuntime?.label ?? language}
+        toolchain={activeRuntime?.toolchain ?? null}
+        fileName={activeFile?.name ?? ''}
+        caret={caret}
+        tabSize={preferences.tabSize}
+        selectionLength={selection.length}
+        symbolCount={symbols.length}
+        diagnosticCount={analysis?.diagnostics.length ?? 0}
+        lastRun={lastRun}
+        note={statusNote}
+        zen={zen}
+        onLeaveZen={() => updatePreference('zenMode', false)}
+        onOpenPalette={() => setPaletteMode('commands')}
+      />
     </div>
+  );
+}
+
+/** Open files as a tab strip, so switching does not need the explorer. */
+function EditorTabs({
+  files,
+  activeFileId,
+  entryName,
+  onSelect,
+}: {
+  files: VirtualFile[];
+  activeFileId: string;
+  entryName: string;
+  onSelect: (id: string) => void;
+}) {
+  if (files.length <= 1) return null;
+
+  return (
+    <nav className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-slate-800/80 bg-charcoal">
+      {files.map((file) => {
+        const active = file.id === activeFileId;
+        return (
+          <button
+            key={file.id}
+            type="button"
+            onClick={() => onSelect(file.id)}
+            aria-current={active}
+            className={`flex shrink-0 items-center gap-1.5 border-r border-slate-800/80 px-3 font-mono text-[11px] transition-colors ${
+              active
+                ? 'border-b-2 border-b-accent bg-obsidian text-slate-100'
+                : 'text-slate-500 hover:bg-slate-800/40 hover:text-slate-300'
+            }`}
+          >
+            {file.name}
+            {file.name === entryName && (
+              <span className="text-[8px] uppercase text-run" title="Entry point">
+                entry
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function StatusBar({
+  language,
+  toolchain,
+  fileName,
+  caret,
+  tabSize,
+  selectionLength,
+  symbolCount,
+  diagnosticCount,
+  lastRun,
+  note,
+  zen,
+  onLeaveZen,
+  onOpenPalette,
+}: {
+  language: string;
+  toolchain: string | null;
+  fileName: string;
+  caret: { line: number; column: number };
+  tabSize: number;
+  selectionLength: number;
+  symbolCount: number;
+  diagnosticCount: number;
+  lastRun: RunOutcome | null;
+  note: string;
+  zen: boolean;
+  onLeaveZen: () => void;
+  onOpenPalette: () => void;
+}) {
+  return (
+    <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-slate-800/80 bg-charcoal px-3 font-mono text-[10px] text-slate-500">
+      <button
+        type="button"
+        onClick={onOpenPalette}
+        className="text-slate-400 transition-colors hover:text-indigo-300"
+        title="Command palette (Ctrl+Shift+P)"
+      >
+        ⌘ commands
+      </button>
+
+      {fileName && <span className="truncate text-slate-400">{fileName}</span>}
+      <span>
+        Ln {caret.line}, Col {caret.column}
+      </span>
+      {selectionLength > 0 && <span>{selectionLength} selected</span>}
+      <span>Spaces: {tabSize}</span>
+      <span className="truncate">
+        {language}
+        {toolchain ? ` · ${toolchain}` : ''}
+      </span>
+
+      <span className="ml-auto flex items-center gap-3">
+        {note && <span className="text-indigo-300">{note}</span>}
+        {symbolCount > 0 && <span>{symbolCount} symbols</span>}
+        <span className={diagnosticCount > 0 ? 'text-amber-400' : ''}>
+          {diagnosticCount} problem{diagnosticCount === 1 ? '' : 's'}
+        </span>
+        {lastRun && (
+          <span className={lastRun.code === 0 ? 'text-run' : 'text-halt'}>
+            exit {lastRun.code} · {lastRun.durationMs}ms
+          </span>
+        )}
+        {zen && (
+          <button
+            type="button"
+            onClick={onLeaveZen}
+            className="text-slate-400 hover:text-slate-100"
+            title="Leave zen mode (Esc)"
+          >
+            zen ✕
+          </button>
+        )}
+      </span>
+    </footer>
   );
 }
 
@@ -481,6 +1054,11 @@ interface TopBarProps {
   onAbort: () => void;
   connection: 'connecting' | 'open' | 'closed';
   health: HealthInfo | null;
+  onOpenPalette: () => void;
+  onOpenSettings: () => void;
+  onExport: () => void;
+  onImport: () => void;
+  onToggleZen: () => void;
 }
 
 function TopBar({
@@ -493,6 +1071,11 @@ function TopBar({
   onAbort,
   connection,
   health,
+  onOpenPalette,
+  onOpenSettings,
+  onExport,
+  onImport,
+  onToggleZen,
 }: TopBarProps) {
   const tier = health?.isolation_tier ?? 'unknown';
   const hardened = tier === 'nsjail' || tier === 'userns';
@@ -559,6 +1142,13 @@ function TopBar({
       </div>
 
       <div className="flex items-center gap-2 font-mono text-[10px] text-slate-400">
+        <div className="flex items-center gap-0.5">
+          <ToolbarButton icon={Search} label="Command palette (Ctrl+Shift+P)" onClick={onOpenPalette} />
+          <ToolbarButton icon={Download} label="Export workspace" onClick={onExport} />
+          <ToolbarButton icon={Upload} label="Import workspace" onClick={onImport} />
+          <ToolbarButton icon={Maximize2} label="Zen mode (F11)" onClick={onToggleZen} />
+          <ToolbarButton icon={SettingsIcon} label="Settings (Ctrl+,)" onClick={onOpenSettings} />
+        </div>
         <StatusChip
           icon={hardened ? ShieldCheck : ShieldAlert}
           tone={hardened ? 'good' : 'warn'}
@@ -577,6 +1167,28 @@ function TopBar({
         />
       </div>
     </header>
+  );
+}
+
+function ToolbarButton({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: typeof Download;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="rounded p-1.5 text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-200"
+    >
+      <Icon className="h-3.5 w-3.5" aria-hidden />
+    </button>
   );
 }
 

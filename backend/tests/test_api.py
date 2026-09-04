@@ -271,3 +271,60 @@ def test_analyze_reports_structural_errors(client) -> None:
 
     rules = {d["rule"] for d in response.json()["diagnostics"]}
     assert "unclosed-delimiter" in rules
+
+
+# ---------------------------------------------------------------------------
+# Program input and arguments
+# ---------------------------------------------------------------------------
+
+
+@requires_python
+def test_execute_passes_stdin_to_the_program(client) -> None:
+    response = client.post(
+        "/api/v1/execute",
+        json={
+            "language": "python",
+            "files": [
+                {
+                    "name": "main.py",
+                    "content": "import sys\nname = sys.stdin.readline().strip()\nprint(f'hello {name}')",
+                }
+            ],
+            "stdin": "Alexandru\n",
+        },
+    )
+    assert response.status_code == 200
+    assert "hello Alexandru" in response.json()["stdout"]
+
+
+@requires_python
+def test_execute_passes_arguments_verbatim(client) -> None:
+    """Arguments must survive spaces and shell metacharacters untouched."""
+    response = client.post(
+        "/api/v1/execute",
+        json={
+            "language": "python",
+            "files": [{"name": "main.py", "content": "import sys\nprint(sys.argv[1:])"}],
+            "args": ["--mode", "two words", "$(whoami)", "a;b"],
+        },
+    )
+    assert response.status_code == 200
+
+    stdout = response.json()["stdout"]
+    assert "--mode" in stdout
+    assert "two words" in stdout
+    # The shell must never have expanded this.
+    assert "$(whoami)" in stdout
+    assert "a;b" in stdout
+
+
+def test_execute_rejects_too_many_arguments(client) -> None:
+    response = client.post(
+        "/api/v1/execute",
+        json={
+            "language": "python",
+            "files": [{"name": "main.py", "content": "pass"}],
+            "args": [f"a{i}" for i in range(100)],
+        },
+    )
+    assert response.status_code == 422

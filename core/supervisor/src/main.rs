@@ -249,7 +249,7 @@ fn handle_connection(stream: UnixStream, shared: &Shared) -> std::io::Result<()>
                 protocol::frame_health(active, shared.max_jobs, &shared.tier, VERSION),
             )?;
         }
-        Request::Execute { id, language, entry, files, stdin, limits } => {
+        Request::Execute { id, language, entry, files, stdin, args, limits } => {
             let Some(_slot) = Slot::acquire(&shared.active, shared.max_jobs) else {
                 send(
                     &mut writer,
@@ -291,6 +291,7 @@ fn handle_connection(stream: UnixStream, shared: &Shared) -> std::io::Result<()>
                 entry.as_deref(),
                 &limits,
                 &stdin,
+                &args,
                 |stream, chunk| {
                     let frame = protocol::frame_output(stream.as_str(), chunk);
                     writer.write_all(frame.to_string().as_bytes())?;

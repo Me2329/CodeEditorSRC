@@ -170,6 +170,8 @@ class DirectExecutor:
             ]
             if request.entry:
                 argv += ["--entry", request.entry]
+            for argument in request.args:
+                argv += ["--arg", argument]
             if request.limits.allow_net and settings.allow_network_in_sandbox:
                 argv.append("--allow-net")
 
@@ -266,6 +268,7 @@ class SupervisorExecutor:
             "entry": request.entry,
             "files": [{"name": f.name, "content": f.content} for f in request.files],
             "stdin": request.stdin,
+            "args": list(request.args),
             "limits": {
                 "wall_seconds": request.limits.wall_seconds,
                 "cpu_seconds": request.limits.cpu_seconds,

@@ -50,6 +50,7 @@ pub fn execute<F>(
     entry: Option<&str>,
     limits: &Limits,
     stdin_data: &str,
+    args: &[String],
     mut emit: F,
 ) -> std::io::Result<Outcome>
 where
@@ -78,6 +79,9 @@ where
     }
     if limits.allow_net {
         command.arg("--allow-net");
+    }
+    for argument in args {
+        command.arg("--arg").arg(argument);
     }
 
     let started = Instant::now();

@@ -23,10 +23,18 @@ export interface TerminalHandle {
 interface Props {
   /** Rendered at the right of the header, e.g. the last run's duration. */
   status?: React.ReactNode;
+  /** Palette from the active editor theme, so both stay in step. */
+  palette: {
+    background: string;
+    foreground: string;
+    cursor: string;
+    selection: string;
+  };
+  fontSize: number;
 }
 
 export const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { status },
+  { status, palette, fontSize },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -39,21 +47,21 @@ export const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalP
 
     const terminal = new Terminal({
       theme: {
-        background: '#0b0e14',
-        foreground: '#e2e8f0',
-        cursor: '#a855f7',
-        selectionBackground: '#6366f166',
-        black: '#0b0e14',
+        background: palette.background,
+        foreground: palette.foreground,
+        cursor: palette.cursor,
+        selectionBackground: palette.selection,
+        black: palette.background,
         red: '#ef4444',
         green: '#10b981',
         yellow: '#f59e0b',
         blue: '#6366f1',
         magenta: '#a855f7',
         cyan: '#06b6d4',
-        white: '#e2e8f0',
+        white: palette.foreground,
       },
       fontFamily: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.35,
       cursorBlink: true,
       // The gateway forwards raw "\n" from program output; without this a
@@ -96,6 +104,45 @@ export const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalP
     };
   }, []);
 
+  // Applied to the live terminal rather than recreating it, so changing a
+  // preference does not discard the scrollback.
+  //
+  // The first run is skipped: the terminal was constructed with these values,
+  // and writing options into a terminal whose renderer has not painted yet
+  // makes xterm throw from inside its own animation frame, where a try/catch
+  // here cannot reach it.
+  const appliedOnceRef = useRef(false);
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    const host = hostRef.current;
+    if (!terminal || !host) return;
+
+    if (!appliedOnceRef.current) {
+      appliedOnceRef.current = true;
+      return;
+    }
+
+    terminal.options.theme = {
+      ...terminal.options.theme,
+      background: palette.background,
+      foreground: palette.foreground,
+      cursor: palette.cursor,
+      selectionBackground: palette.selection,
+    };
+    terminal.options.fontSize = fontSize;
+
+    // Re-measure on the next frame, once the new metrics have been applied.
+    const frame = window.requestAnimationFrame(() => {
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // Mid-layout; the resize observer settles it.
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [palette, fontSize]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -110,7 +157,7 @@ export const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalP
   );
 
   return (
-    <section className="flex min-h-0 flex-col bg-obsidian">
+    <section className="flex min-h-0 flex-col" style={{ background: palette.background }}>
       <header className="flex h-9 shrink-0 items-center justify-between border-b border-slate-800/80 bg-charcoal px-3">
         <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
           <TerminalIcon className="h-3.5 w-3.5 text-accent" aria-hidden />

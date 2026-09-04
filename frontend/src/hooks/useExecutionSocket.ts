@@ -36,6 +36,8 @@ export interface RunRequest {
   files: VirtualFile[];
   entry?: string;
   stdin?: string;
+  /** Passed to the program as argv, never through a shell. */
+  args?: string[];
   limits?: Partial<ExecutionLimits>;
 }
 
@@ -163,6 +165,7 @@ export function useExecutionSocket(handlers: Handlers) {
         language: request.language,
         entry: request.entry,
         stdin: request.stdin ?? '',
+        args: request.args ?? [],
         files: request.files.map((file) => ({ name: file.name, content: file.content })),
         ...(request.limits ? { limits: request.limits } : {}),
       }),
