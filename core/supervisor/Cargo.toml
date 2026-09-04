@@ -1,0 +1,22 @@
+[package]
+name = "codecraft-supervisor"
+version = "2.5.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Process supervisor daemon for the CodeCraft Studio execution sandbox"
+license = "MIT"
+
+[[bin]]
+name = "codecraft-supervisor"
+path = "src/main.rs"
+
+# No third-party crates. The supervisor is the component closest to untrusted
+# code, so its dependency surface is deliberately empty and it builds offline.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
