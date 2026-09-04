@@ -38,24 +38,68 @@ and `./scripts/provision_toolchains.sh --help` lists the rest.
 Haskell, D, Fortran, Nim, NASM), interpreted (Python, PyPy, Ruby, PHP, Perl, Lua,
 R, Julia, Racket, Erlang, AWK), managed VM (Java, C#, F#, Kotlin, Scala, Swift,
 Dart, Elixir, Clojure, Groovy) and web or scripting (Node, Deno, Bun, Bash, Zsh,
-PowerShell, SQL, jq, WebAssembly, HTML). The registry in
-`scripts/runtimes.json` is the single source of truth shared by all three
-layers, so they cannot drift apart. A runtime whose toolchain is missing is
-marked as such in the picker rather than failing when you press Run.
+PowerShell, SQL, jq, WebAssembly, HTML). Each runtime lists its toolchains in
+preference order, so Lua runs on `luajit`, `lua5.4` or `lua` and C# on `mcs`,
+`csc` or `dotnet`, whichever the host has. `scripts/runtimes.json` is the single
+source of truth shared by all three layers. A runtime whose toolchain is missing
+is marked in the picker rather than failing when you press Run.
 
 **Multi-file workspaces.** Files are created, deleted and switched in the
-explorer; all of them travel with the request, so imports across files work. The
-workspace survives a page refresh.
+explorer or the tab strip; all of them travel with the request, so imports across
+files work. The workspace survives a refresh, and exports and imports as JSON.
+
+**Programs that read input.** Standard input and command-line arguments both
+reach the program. Arguments are parsed with shell-style quoting but never given
+to a shell, so `$(whoami)` arrives as literal text.
 
 **Live output.** stdout and stderr stream to the terminal as they are produced,
 not after the process exits. Abort stops a running job in under two seconds.
+
+**An assistant with two engines.** Lookups are answered from a local workspace
+index in about 0.2ms with no network; anything needing reasoning streams from
+Claude Mythos 5.1. Every reply says which engine produced it. See below.
 
 **Static analysis** as you type: a scope tree, size and complexity metrics, and
 diagnostics for unbalanced delimiters and unterminated literals, mirrored into
 Monaco as inline markers.
 
+**The editor conveniences you expect**: command palette, quick open, go to
+symbol, find and replace, format, five themes, zen mode, a status bar, and
+persisted preferences. `docs/FEATURES.md` lists all 108 with what each one does,
+and states plainly what is *not* built.
+
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
 execution backend.
+
+## The assistant
+
+Two engines behind one chat panel, because fast and capable are different
+problems.
+
+The **local engine** is a Rust daemon that indexes the workspace and answers
+completions, outlines, go-to-definition and reference counts from that index.
+Measured at 0.19ms median round trip including the socket and JSON encoding. It
+needs no credential and works offline, and it is what makes completion feel
+instant.
+
+**Claude Mythos 5.1** handles the rest, streamed token by token. Rust has no
+official Anthropic SDK, so the daemon speaks the Messages API directly. Thinking
+is always on for this model class, so depth is controlled through effort rather
+than a token budget; reasoning summaries are requested so the panel is not
+silent while the model works; refusals are detected and reported rather than
+surfacing as an empty answer; and server-side fallbacks are enabled.
+
+```bash
+make assistant-daemon          # or: make dev, which starts everything
+export ANTHROPIC_API_KEY=...   # or run: ant auth login
+```
+
+Without a credential the local engine still runs and the panel says so. Claude
+Mythos 5.1 requires Project Glasswing access; set `CODECRAFT_ASSISTANT_MODEL` to
+another model, such as `claude-opus-5`, if your account cannot reach it. The
+model's live API has not been exercised in this repository's test environment,
+which has no credential; the client is covered by integration tests that replay
+real server-sent-event streams against a local mock.
 
 ## Security model
 
@@ -102,7 +146,8 @@ make test   # every suite
 | `make test-supervisor` | protocol parsing, path traversal, limit clamping, workspace lifecycle |
 | `make test-analyzer` | lexing, scope trees, diagnostics, JSON well-formedness |
 | `make test-backend` | REST and WebSocket surfaces against the real sandbox |
-| `make test-frontend` | typecheck plus virtual file system unit tests |
+| `make test-assistant` | symbol indexing, completion ranking, routing, the model client |
+| `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences |
 
 The sandbox suite asserts containment rather than mere execution: each test is
 written so an escape fails loudly instead of passing quietly. It skips checks a
@@ -160,6 +205,9 @@ development box.
 | `CODECRAFT_REDIS_URL` | `redis://localhost:6379/0` | shared rate limiter |
 | `CODECRAFT_CORS_ORIGINS` | `http://localhost:5173,…` | allowed browser origins |
 | `CC_FORCE_TIER` | `auto` | pin an isolation tier, for testing |
+| `CODECRAFT_ASSISTANT_SOCKET` | `/run/codecraft/assistant.sock` | assistant daemon socket |
+| `CODECRAFT_ASSISTANT_MODEL` | `claude-mythos-5-1` | model for remote assistant requests |
+| `ANTHROPIC_API_KEY` | unset | credential for the model; an `ant auth login` profile also works |
 
 Workspaces belong outside `/tmp`: the sandbox replaces `/tmp` with its own
 tmpfs, which would otherwise shadow a workspace mounted underneath it.
@@ -171,13 +219,15 @@ frontend/          React 19, Monaco, xterm.js, Tailwind
 backend/           FastAPI gateway, REST and WebSocket
 core/supervisor/   Rust daemon, no third-party crates
 core/analyzer/     C++17 lexer and analyzer, no dependencies
+core/assistant/    Rust daemon: local index engine and the Claude client
 scripts/           the isolation runner, registry, profiles, tests
 docs/              architecture and security notes
 ```
 
-Both core services are dependency-free on purpose: they sit closest to
+The supervisor and analyzer are dependency-free on purpose: they sit closest to
 untrusted code, so the small amount of JSON handling each one ships is worth an
-empty dependency surface, and both build offline.
+empty dependency surface, and both build offline. The assistant is not on that
+path, so it uses standard crates.
 
 ## Licence
 
