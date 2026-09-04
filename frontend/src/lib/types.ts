@@ -15,6 +15,11 @@ export interface RuntimeInfo {
   /** False for runtimes rendered in the browser, such as the HTML preview. */
   executable: boolean;
   notes?: string;
+  /**
+   * The toolchain binary this host resolved for the runtime, e.g. "lua5.4"
+   * where the preferred "luajit" is absent. Null when none is installed.
+   */
+  toolchain?: string | null;
 }
 
 export interface HealthInfo {

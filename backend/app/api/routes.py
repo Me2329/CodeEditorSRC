@@ -63,6 +63,7 @@ async def list_runtimes() -> list[RuntimeInfo]:
             installed=runtime.installed,
             executable=runtime.executable,
             notes=runtime.notes,
+            toolchain=runtime.resolved_toolchain,
         )
         for runtime in registry().all()
     ]

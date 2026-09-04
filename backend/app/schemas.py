@@ -100,6 +100,9 @@ class RuntimeInfo(BaseModel):
     installed: bool
     executable: bool
     notes: str = ""
+    # The toolchain binary this host would actually use, e.g. "lua5.4" where the
+    # preferred "luajit" is absent. None when nothing suitable is installed.
+    toolchain: str | None = None
 
 
 class TemplateResponse(BaseModel):

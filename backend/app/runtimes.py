@@ -28,13 +28,24 @@ class Runtime:
     notes: str
     template: str
     executable: bool  # False for client-only runtimes such as HTML preview
+    # Toolchains in preference order. Distributions disagree about names, so a
+    # runtime is available when any one of them is present.
+    candidate_probes: tuple[str, ...] = ()
+
+    @property
+    def resolved_toolchain(self) -> str | None:
+        """The toolchain binary this host would actually use, if any."""
+        if not self.executable:
+            return None
+        for probe in self.candidate_probes or ((self.probe,) if self.probe else ()):
+            if probe and shutil.which(probe) is not None:
+                return probe
+        return None
 
     @property
     def installed(self) -> bool:
         """Whether this host can actually run the runtime."""
-        if not self.executable or not self.probe:
-            return False
-        return shutil.which(self.probe) is not None
+        return self.resolved_toolchain is not None
 
 
 class RuntimeRegistry:
@@ -72,6 +83,11 @@ def _load(path: Path) -> RuntimeRegistry:
             template=entry.get("template", ""),
             # A runtime with no run command is rendered client-side only.
             executable=bool(entry.get("run")),
+            candidate_probes=tuple(
+                candidate["probe"]
+                for candidate in entry.get("candidates", [])
+                if candidate.get("probe")
+            ),
         )
     return RuntimeRegistry(runtimes)
 

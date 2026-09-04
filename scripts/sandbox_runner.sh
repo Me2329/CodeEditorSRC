@@ -111,18 +111,52 @@ if [[ "$(jq -r --arg id "$LANGUAGE" 'if .runtimes | has($id) then "yes" else "no
 fi
 
 ENTRY="${ENTRY_OVERRIDE:-$(rt_field entry)}"
-PROBE="$(rt_field probe)"
 AS_POLICY="$(rt_field as_limit)"
 LABEL="$(rt_field label)"
 
-mapfile -t COMPILE_ARGV < <(rt_argv compile)
-mapfile -t RUN_ARGV     < <(rt_argv run)
+# ---------------------------------------------------------------------------
+# Toolchain resolution.
+#
+# A runtime lists its toolchains in preference order. Distributions disagree
+# about names (luajit vs lua5.4, mcs vs csc, deno vs bun vs tsx), so pick the
+# first candidate whose probe binary is actually present instead of failing
+# because the canonical name is missing.
+# ---------------------------------------------------------------------------
+CANDIDATE_COUNT="$(jq -r --arg id "$LANGUAGE" '.runtimes[$id].candidates // [] | length' "$RUNTIMES_JSON")"
 
-if [[ ${#RUN_ARGV[@]} -eq 0 ]]; then
-    die "$EXIT_UNSUPPORTED_LANG" "Runtime '$LANGUAGE' ($LABEL) is client-side only and has no server execution path."
+PROBE=""
+CANDIDATE_INDEX=-1
+declare -a COMPILE_ARGV=()
+declare -a RUN_ARGV=()
+declare -a MISSING_PROBES=()
+
+for (( i = 0; i < CANDIDATE_COUNT; i++ )); do
+    candidate_probe="$(jq -r --arg id "$LANGUAGE" --argjson i "$i" \
+        '.runtimes[$id].candidates[$i].probe // empty' "$RUNTIMES_JSON")"
+    if [[ -n "$candidate_probe" ]] && ! cc_have "$candidate_probe"; then
+        MISSING_PROBES+=("$candidate_probe")
+        continue
+    fi
+    PROBE="$candidate_probe"
+    CANDIDATE_INDEX="$i"
+    mapfile -t COMPILE_ARGV < <(jq -r --arg id "$LANGUAGE" --argjson i "$i" \
+        '.runtimes[$id].candidates[$i].compile // [] | .[]' "$RUNTIMES_JSON")
+    mapfile -t RUN_ARGV < <(jq -r --arg id "$LANGUAGE" --argjson i "$i" \
+        '.runtimes[$id].candidates[$i].run // [] | .[]' "$RUNTIMES_JSON")
+    break
+done
+
+if [[ "$CANDIDATE_COUNT" -eq 0 || ${#RUN_ARGV[@]} -eq 0 ]] && [[ "$CANDIDATE_INDEX" -lt 0 ]]; then
+    if [[ ${#MISSING_PROBES[@]} -gt 0 ]]; then
+        die "$EXIT_TOOLCHAIN_MISSING" \
+            "No toolchain for $LABEL on this host. Tried: ${MISSING_PROBES[*]}."
+    fi
+    die "$EXIT_UNSUPPORTED_LANG" \
+        "Runtime '$LANGUAGE' ($LABEL) is client-side only and has no server execution path."
 fi
-if [[ -n "$PROBE" ]] && ! cc_have "$PROBE"; then
-    die "$EXIT_TOOLCHAIN_MISSING" "Toolchain '$PROBE' for $LABEL is not installed on this host."
+if [[ ${#RUN_ARGV[@]} -eq 0 ]]; then
+    die "$EXIT_UNSUPPORTED_LANG" \
+        "Runtime '$LANGUAGE' ($LABEL) is client-side only and has no server execution path."
 fi
 
 # ---------------------------------------------------------------------------
@@ -208,7 +242,7 @@ case "$TIER" in
 esac
 
 CGROUP_LEAF="$(cc_cgroup_create "run_$(basename "$WORKSPACE")" "$MEMORY_MB" "$MAX_PROCS")"
-cc_log "tier=$TIER lang=$LANGUAGE entry=$ENTRY drop_privileges=$DROP_PRIVILEGES cgroup=${CGROUP_LEAF:-none}"
+cc_log "tier=$TIER lang=$LANGUAGE toolchain=${PROBE:-builtin} entry=$ENTRY drop_privileges=$DROP_PRIVILEGES cgroup=${CGROUP_LEAF:-none}"
 
 # Toolchains routinely live outside the standard system directories
 # (/usr/local/go/bin, ~/.cargo/bin, ~/.bun/bin). The sandbox environment is
@@ -398,7 +432,7 @@ write_meta() {
     [[ -n "$META_FILE" ]] || return 0
     jq -n \
         --arg language "$LANGUAGE" --arg label "$LABEL" --arg tier "$TIER" \
-        --arg entry "$ENTRY" --arg status "$status" \
+        --arg entry "$ENTRY" --arg status "$status" --arg toolchain "${PROBE:-builtin}" \
         --argjson compiled "$([[ ${#COMPILE_ARGV[@]} -gt 0 ]] && echo true || echo false)" \
         --argjson compile_ms "$COMPILE_MS" --argjson compile_exit "$COMPILE_EXIT" \
         --argjson run_ms "$RUN_MS" --argjson exit_code "$run_exit" \
@@ -408,6 +442,7 @@ write_meta() {
         --argjson memory_mb "$MEMORY_MB" --argjson cpu_seconds "$CPU_SECONDS" \
         --argjson wall_seconds "$WALL_TIMEOUT" --argjson max_procs "$MAX_PROCS" \
         '{language: $language, label: $label, entry: $entry, status: $status,
+          toolchain: $toolchain,
           isolation: {tier: $tier, cgroup_v2: $cgroup, privileges_dropped: $dropped,
                       network: $network},
           limits: {memory_mb: $memory_mb, cpu_seconds: $cpu_seconds,

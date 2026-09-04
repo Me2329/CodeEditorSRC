@@ -195,22 +195,34 @@ fi
 if [[ "$QUICK" -eq 0 ]]; then
 printf '\n\033[1m Installed runtimes\033[0m\n'
     while read -r lang; do
-        probe="$(jq -r --arg l "$lang" '.runtimes[$l].probe // empty' "$RUNTIMES_JSON")"
-        if [[ -z "$probe" ]] || ! command -v "$probe" >/dev/null 2>&1; then
-            skip "$lang (toolchain '$probe' not installed)"
+        # A runtime is available when any of its candidate toolchains is present,
+        # so resolve the same way the runner does rather than checking only the
+        # preferred name.
+        resolved=""
+        while read -r probe; do
+            [[ -n "$probe" ]] || continue
+            if command -v "$probe" >/dev/null 2>&1; then
+                resolved="$probe"
+                break
+            fi
+        done < <(jq -r --arg l "$lang" '.runtimes[$l].candidates // [] | .[].probe // empty' "$RUNTIMES_JSON")
+
+        if [[ -z "$resolved" ]]; then
+            tried="$(jq -r --arg l "$lang" '[.runtimes[$l].candidates // [] | .[].probe // empty] | join(", ")' "$RUNTIMES_JSON")"
+            skip "$lang (no toolchain installed; tried: ${tried:-none})"
             continue
         fi
         template="$(jq -r --arg l "$lang" '.runtimes[$l].template' "$RUNTIMES_JSON")"
         run_code "$lang" "$template" --timeout 30 --compile-timeout 90
     out="$OUT"
         if [[ "$RC" -eq 0 && "$out" == *"Hello from"* ]]; then
-            ok "$lang"
+            ok "$lang  $(dim "($resolved)")"
         elif [[ "$RC" -eq 0 && "$lang" == "sql" ]]; then
-            ok "$lang"
+            ok "$lang  $(dim "($resolved)")"
         else
             bad "$lang" "exit $RC: ${out:0:160}"
         fi
-    done < <(jq -r '.runtimes | to_entries[] | select(.value.run != null) | .key' "$RUNTIMES_JSON")
+    done < <(jq -r '.runtimes | to_entries[] | select((.value.candidates // []) | length > 0) | .key' "$RUNTIMES_JSON")
 fi
 
 # ---------------------------------------------------------------------------

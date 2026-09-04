@@ -24,6 +24,40 @@
       ],
       "notes": "",
       "template": "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello from isolated C!\\n\");\n    return 0;\n}\n",
+      "candidates": [
+        {
+          "probe": "gcc",
+          "compile": [
+            "gcc",
+            "-O2",
+            "-std=c17",
+            "-Wall",
+            "main.c",
+            "-o",
+            "main_bin",
+            "-lm"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        },
+        {
+          "probe": "clang",
+          "compile": [
+            "clang",
+            "-O2",
+            "-std=c17",
+            "-Wall",
+            "main.c",
+            "-o",
+            "main_bin",
+            "-lm"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "cpp": {
@@ -48,6 +82,38 @@
       ],
       "notes": "",
       "template": "#include <iostream>\n\nint main() {\n    std::cout << \"Hello from isolated C++23!\" << std::endl;\n    return 0;\n}\n",
+      "candidates": [
+        {
+          "probe": "g++",
+          "compile": [
+            "g++",
+            "-O2",
+            "-std=c++2b",
+            "-Wall",
+            "main.cpp",
+            "-o",
+            "main_bin"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        },
+        {
+          "probe": "clang++",
+          "compile": [
+            "clang++",
+            "-O2",
+            "-std=c++2b",
+            "-Wall",
+            "main.cpp",
+            "-o",
+            "main_bin"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "rust": {
@@ -70,6 +136,21 @@
       ],
       "notes": "",
       "template": "fn main() {\n    println!(\"Hello from high-performance isolated Rust!\");\n}\n",
+      "candidates": [
+        {
+          "probe": "rustc",
+          "compile": [
+            "rustc",
+            "-O",
+            "main.rs",
+            "-o",
+            "main_bin"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "go": {
@@ -92,6 +173,21 @@
       ],
       "notes": "",
       "template": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello from isolated Go!\")\n}\n",
+      "candidates": [
+        {
+          "probe": "go",
+          "compile": [
+            "go",
+            "build",
+            "-o",
+            "main_bin",
+            "main.go"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "zig": {
@@ -116,6 +212,23 @@
       ],
       "notes": "",
       "template": "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"Hello from isolated Zig!\\n\", .{});\n}\n",
+      "candidates": [
+        {
+          "probe": "zig",
+          "compile": [
+            "zig",
+            "build-exe",
+            "-O",
+            "ReleaseSafe",
+            "--name",
+            "main_bin",
+            "main.zig"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "haskell": {
@@ -138,6 +251,21 @@
       ],
       "notes": "",
       "template": "main :: IO ()\nmain = putStrLn \"Hello from isolated Haskell!\"\n",
+      "candidates": [
+        {
+          "probe": "ghc",
+          "compile": [
+            "ghc",
+            "-O2",
+            "-o",
+            "main_bin",
+            "main.hs"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "d": {
@@ -159,6 +287,45 @@
       ],
       "notes": "",
       "template": "import std.stdio;\n\nvoid main() {\n    writeln(\"Hello from isolated D!\");\n}\n",
+      "candidates": [
+        {
+          "probe": "ldc2",
+          "compile": [
+            "ldc2",
+            "-O2",
+            "-of=main_bin",
+            "main.d"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        },
+        {
+          "probe": "dmd",
+          "compile": [
+            "dmd",
+            "-O",
+            "-of=main_bin",
+            "main.d"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        },
+        {
+          "probe": "gdc",
+          "compile": [
+            "gdc",
+            "-O2",
+            "-o",
+            "main_bin",
+            "main.d"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "fortran": {
@@ -181,6 +348,21 @@
       ],
       "notes": "",
       "template": "program hello\n    print *, \"Hello from isolated Fortran!\"\nend program hello\n",
+      "candidates": [
+        {
+          "probe": "gfortran",
+          "compile": [
+            "gfortran",
+            "-O2",
+            "-o",
+            "main_bin",
+            "main.f90"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "nim": {
@@ -204,6 +386,22 @@
       ],
       "notes": "",
       "template": "echo \"Hello from isolated Nim!\"\n",
+      "candidates": [
+        {
+          "probe": "nim",
+          "compile": [
+            "nim",
+            "c",
+            "-d:release",
+            "--nimcache:.nimcache",
+            "-o:main_bin",
+            "main.nim"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "assembly": {
@@ -224,6 +422,19 @@
       ],
       "notes": "",
       "template": "section .data\n    msg db \"Hello from isolated NASM!\", 10\n    len equ $ - msg\n\nsection .text\n    global _start\n\n_start:\n    mov rax, 1\n    mov rdi, 1\n    mov rsi, msg\n    mov rdx, len\n    syscall\n\n    mov rax, 60\n    xor rdi, rdi\n    syscall\n",
+      "candidates": [
+        {
+          "probe": "nasm",
+          "compile": [
+            "sh",
+            "-c",
+            "nasm -f elf64 main.asm -o main.o && ld main.o -o main_bin"
+          ],
+          "run": [
+            "./main_bin"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "python": {
@@ -242,6 +453,26 @@
       ],
       "notes": "",
       "template": "def main() -> None:\n    print(\"Hello from isolated Python!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "candidates": [
+        {
+          "probe": "python3",
+          "compile": null,
+          "run": [
+            "python3",
+            "-u",
+            "main.py"
+          ]
+        },
+        {
+          "probe": "python",
+          "compile": null,
+          "run": [
+            "python",
+            "-u",
+            "main.py"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "pypy": {
@@ -260,6 +491,17 @@
       ],
       "notes": "",
       "template": "print(\"Hello from isolated PyPy JIT!\")\n",
+      "candidates": [
+        {
+          "probe": "pypy3",
+          "compile": null,
+          "run": [
+            "pypy3",
+            "-u",
+            "main.py"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "ruby": {
@@ -277,6 +519,24 @@
       ],
       "notes": "",
       "template": "puts \"Hello from isolated Ruby!\"\n",
+      "candidates": [
+        {
+          "probe": "ruby",
+          "compile": null,
+          "run": [
+            "ruby",
+            "main.rb"
+          ]
+        },
+        {
+          "probe": "ruby3.3",
+          "compile": null,
+          "run": [
+            "ruby3.3",
+            "main.rb"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "php": {
@@ -294,6 +554,16 @@
       ],
       "notes": "",
       "template": "<?php\n\necho \"Hello from isolated PHP!\" . PHP_EOL;\n",
+      "candidates": [
+        {
+          "probe": "php",
+          "compile": null,
+          "run": [
+            "php",
+            "main.php"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "perl": {
@@ -311,6 +581,16 @@
       ],
       "notes": "",
       "template": "use strict;\nuse warnings;\n\nprint \"Hello from isolated Perl!\\n\";\n",
+      "candidates": [
+        {
+          "probe": "perl",
+          "compile": null,
+          "run": [
+            "perl",
+            "main.pl"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "lua": {
@@ -328,6 +608,40 @@
       ],
       "notes": "",
       "template": "print(\"Hello from isolated LuaJIT!\")\n",
+      "candidates": [
+        {
+          "probe": "luajit",
+          "compile": null,
+          "run": [
+            "luajit",
+            "main.lua"
+          ]
+        },
+        {
+          "probe": "lua5.4",
+          "compile": null,
+          "run": [
+            "lua5.4",
+            "main.lua"
+          ]
+        },
+        {
+          "probe": "lua5.3",
+          "compile": null,
+          "run": [
+            "lua5.3",
+            "main.lua"
+          ]
+        },
+        {
+          "probe": "lua",
+          "compile": null,
+          "run": [
+            "lua",
+            "main.lua"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "r": {
@@ -345,6 +659,27 @@
       ],
       "notes": "",
       "template": "cat(\"Hello from isolated R!\\n\")\n",
+      "candidates": [
+        {
+          "probe": "Rscript",
+          "compile": null,
+          "run": [
+            "Rscript",
+            "main.R"
+          ]
+        },
+        {
+          "probe": "R",
+          "compile": null,
+          "run": [
+            "R",
+            "--no-save",
+            "--quiet",
+            "-f",
+            "main.R"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "julia": {
@@ -362,6 +697,16 @@
       ],
       "notes": "",
       "template": "println(\"Hello from isolated Julia!\")\n",
+      "candidates": [
+        {
+          "probe": "julia",
+          "compile": null,
+          "run": [
+            "julia",
+            "main.jl"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "racket": {
@@ -379,6 +724,16 @@
       ],
       "notes": "",
       "template": "#lang racket\n\n(displayln \"Hello from isolated Racket!\")\n",
+      "candidates": [
+        {
+          "probe": "racket",
+          "compile": null,
+          "run": [
+            "racket",
+            "main.rkt"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "erlang": {
@@ -396,6 +751,33 @@
       ],
       "notes": "",
       "template": "main(_Args) ->\n    io:format(\"Hello from isolated Erlang!~n\").\n",
+      "candidates": [
+        {
+          "probe": "escript",
+          "compile": null,
+          "run": [
+            "escript",
+            "main.erl"
+          ]
+        },
+        {
+          "probe": "erl",
+          "compile": [
+            "erlc",
+            "main.erl"
+          ],
+          "run": [
+            "erl",
+            "-noshell",
+            "-s",
+            "main",
+            "main",
+            "-s",
+            "init",
+            "stop"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "awk": {
@@ -414,6 +796,17 @@
       ],
       "notes": "",
       "template": "BEGIN {\n    print \"Hello from isolated AWK!\"\n}\n",
+      "candidates": [
+        {
+          "probe": "awk",
+          "compile": null,
+          "run": [
+            "awk",
+            "-f",
+            "main.awk"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "java": {
@@ -431,6 +824,27 @@
       ],
       "notes": "Single-file source launch (JEP 330); no javac step required.",
       "template": "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello from isolated Java 21!\");\n    }\n}\n",
+      "candidates": [
+        {
+          "probe": "java",
+          "compile": null,
+          "run": [
+            "java",
+            "Main.java"
+          ]
+        },
+        {
+          "probe": "javac",
+          "compile": [
+            "javac",
+            "Main.java"
+          ],
+          "run": [
+            "java",
+            "Main"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "csharp": {
@@ -452,6 +866,40 @@
       ],
       "notes": "",
       "template": "using System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine(\"Hello from isolated C#!\");\n    }\n}\n",
+      "candidates": [
+        {
+          "probe": "mcs",
+          "compile": [
+            "mcs",
+            "-out:main.exe",
+            "main.cs"
+          ],
+          "run": [
+            "mono",
+            "main.exe"
+          ]
+        },
+        {
+          "probe": "csc",
+          "compile": [
+            "csc",
+            "-out:main.exe",
+            "main.cs"
+          ],
+          "run": [
+            "mono",
+            "main.exe"
+          ]
+        },
+        {
+          "probe": "dotnet-script",
+          "compile": null,
+          "run": [
+            "dotnet-script",
+            "main.cs"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "fsharp": {
@@ -471,6 +919,18 @@
       ],
       "notes": "",
       "template": "printfn \"Hello from isolated F#!\"\n",
+      "candidates": [
+        {
+          "probe": "dotnet",
+          "compile": null,
+          "run": [
+            "dotnet",
+            "fsi",
+            "--use:main.fsx",
+            "--exec"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "kotlin": {
@@ -495,6 +955,23 @@
       ],
       "notes": "",
       "template": "fun main() {\n    println(\"Hello from isolated Kotlin!\")\n}\n",
+      "candidates": [
+        {
+          "probe": "kotlinc",
+          "compile": [
+            "kotlinc",
+            "main.kt",
+            "-include-runtime",
+            "-d",
+            "main.jar"
+          ],
+          "run": [
+            "java",
+            "-jar",
+            "main.jar"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "scala": {
@@ -512,6 +989,16 @@
       ],
       "notes": "",
       "template": "@main def run(): Unit =\n  println(\"Hello from isolated Scala 3!\")\n",
+      "candidates": [
+        {
+          "probe": "scala",
+          "compile": null,
+          "run": [
+            "scala",
+            "main.scala"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "swift": {
@@ -529,6 +1016,16 @@
       ],
       "notes": "",
       "template": "print(\"Hello from isolated Swift!\")\n",
+      "candidates": [
+        {
+          "probe": "swift",
+          "compile": null,
+          "run": [
+            "swift",
+            "main.swift"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "dart": {
@@ -547,6 +1044,17 @@
       ],
       "notes": "",
       "template": "void main() {\n  print('Hello from isolated Dart!');\n}\n",
+      "candidates": [
+        {
+          "probe": "dart",
+          "compile": null,
+          "run": [
+            "dart",
+            "run",
+            "main.dart"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "elixir": {
@@ -564,6 +1072,16 @@
       ],
       "notes": "",
       "template": "IO.puts(\"Hello from isolated Elixir!\")\n",
+      "candidates": [
+        {
+          "probe": "elixir",
+          "compile": null,
+          "run": [
+            "elixir",
+            "main.exs"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "clojure": {
@@ -582,6 +1100,17 @@
       ],
       "notes": "",
       "template": "(println \"Hello from isolated Clojure!\")\n",
+      "candidates": [
+        {
+          "probe": "clojure",
+          "compile": null,
+          "run": [
+            "clojure",
+            "-M",
+            "main.clj"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "groovy": {
@@ -599,6 +1128,16 @@
       ],
       "notes": "",
       "template": "println \"Hello from isolated Groovy!\"\n",
+      "candidates": [
+        {
+          "probe": "groovy",
+          "compile": null,
+          "run": [
+            "groovy",
+            "main.groovy"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "javascript": {
@@ -617,6 +1156,34 @@
       ],
       "notes": "",
       "template": "console.log(\"Hello from isolated Node.js 22!\");\n",
+      "candidates": [
+        {
+          "probe": "node",
+          "compile": null,
+          "run": [
+            "node",
+            "--enable-source-maps",
+            "main.js"
+          ]
+        },
+        {
+          "probe": "bun",
+          "compile": null,
+          "run": [
+            "bun",
+            "run",
+            "main.js"
+          ]
+        },
+        {
+          "probe": "nodejs",
+          "compile": null,
+          "run": [
+            "nodejs",
+            "main.js"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "typescript": {
@@ -636,6 +1203,43 @@
       ],
       "notes": "",
       "template": "const greeting: string = \"Hello from isolated Deno TypeScript!\";\nconsole.log(greeting);\n",
+      "candidates": [
+        {
+          "probe": "deno",
+          "compile": null,
+          "run": [
+            "deno",
+            "run",
+            "--quiet",
+            "main.ts"
+          ]
+        },
+        {
+          "probe": "bun",
+          "compile": null,
+          "run": [
+            "bun",
+            "run",
+            "main.ts"
+          ]
+        },
+        {
+          "probe": "tsx",
+          "compile": null,
+          "run": [
+            "tsx",
+            "main.ts"
+          ]
+        },
+        {
+          "probe": "ts-node",
+          "compile": null,
+          "run": [
+            "ts-node",
+            "main.ts"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "bun": {
@@ -654,6 +1258,17 @@
       ],
       "notes": "",
       "template": "const greeting: string = \"Hello from isolated Bun!\";\nconsole.log(greeting);\n",
+      "candidates": [
+        {
+          "probe": "bun",
+          "compile": null,
+          "run": [
+            "bun",
+            "run",
+            "main.ts"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "bash": {
@@ -671,6 +1286,16 @@
       ],
       "notes": "",
       "template": "#!/usr/bin/env bash\nset -euo pipefail\n\necho \"Hello from isolated Bash!\"\n",
+      "candidates": [
+        {
+          "probe": "bash",
+          "compile": null,
+          "run": [
+            "bash",
+            "main.sh"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "zsh": {
@@ -688,6 +1313,16 @@
       ],
       "notes": "",
       "template": "echo \"Hello from isolated Zsh!\"\n",
+      "candidates": [
+        {
+          "probe": "zsh",
+          "compile": null,
+          "run": [
+            "zsh",
+            "main.zsh"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "powershell": {
@@ -707,6 +1342,18 @@
       ],
       "notes": "",
       "template": "Write-Output \"Hello from isolated PowerShell!\"\n",
+      "candidates": [
+        {
+          "probe": "pwsh",
+          "compile": null,
+          "run": [
+            "pwsh",
+            "-NoProfile",
+            "-File",
+            "main.ps1"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "sql": {
@@ -725,6 +1372,17 @@
       ],
       "notes": "",
       "template": "CREATE TABLE runs (id INTEGER PRIMARY KEY, engine TEXT, ok INTEGER);\n\nINSERT INTO runs (engine, ok) VALUES ('sqlite3', 1), ('codecraft', 1);\n\nSELECT id, engine, ok FROM runs;\n",
+      "candidates": [
+        {
+          "probe": "sqlite3",
+          "compile": null,
+          "run": [
+            "sh",
+            "-c",
+            "sqlite3 -batch -header -column sandbox.db < main.sql"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "jq": {
@@ -743,6 +1401,17 @@
       ],
       "notes": "",
       "template": "{ engine: .engine, message: \"Hello from isolated jq!\" }\n",
+      "candidates": [
+        {
+          "probe": "jq",
+          "compile": null,
+          "run": [
+            "sh",
+            "-c",
+            "echo '{\"engine\":\"codecraft\",\"tier\":\"sandboxed\"}' | jq -f main.jq"
+          ]
+        }
+      ],
       "as_limit": "strict"
     },
     "wasm": {
@@ -760,6 +1429,16 @@
       ],
       "notes": "",
       "template": "(module\n  (func (export \"_start\")))\n",
+      "candidates": [
+        {
+          "probe": "wasmtime",
+          "compile": null,
+          "run": [
+            "wasmtime",
+            "main.wat"
+          ]
+        }
+      ],
       "as_limit": "relaxed"
     },
     "html": {
@@ -774,6 +1453,7 @@
       "run": null,
       "notes": "Rendered client-side in a sandboxed iframe; never dispatched to the execution backend.",
       "template": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>CodeCraft Preview</title>\n    <style>\n      body { background: #0b0e14; color: #e2e8f0; font-family: system-ui, sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; }\n      h1 { background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); -webkit-background-clip: text; color: transparent; }\n    </style>\n  </head>\n  <body>\n    <h1>Hello from the live web preview!</h1>\n  </body>\n</html>\n",
+      "candidates": [],
       "as_limit": "strict"
     }
   }

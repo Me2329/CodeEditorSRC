@@ -2,23 +2,40 @@ import json, collections
 
 R = collections.OrderedDict()
 
-def add(rid, label, category, monaco, ext, entry, probe, compile_, run, template, notes=""):
+def add(rid, label, category, monaco, ext, entry, probe, compile_, run, template,
+        notes="", alternatives=()):
+    """Register a runtime.
+
+    `probe`/`compile`/`run` describe the preferred toolchain. `alternatives` adds
+    fallbacks as (probe, compile, run) triples: distributions disagree about what
+    a toolchain is called, so the runner picks the first candidate whose probe
+    binary actually exists rather than failing when the canonical name is absent.
+    """
+    candidates = []
+    if probe is not None or run is not None:
+        candidates.append({"probe": probe, "compile": compile_, "run": run})
+    for alt_probe, alt_compile, alt_run in alternatives:
+        candidates.append({"probe": alt_probe, "compile": alt_compile, "run": alt_run})
+
     R[rid] = {
         "id": rid, "label": label, "category": category, "monaco": monaco,
         "extension": ext, "entry": entry, "probe": probe,
         "compile": compile_, "run": run, "notes": notes, "template": template,
+        "candidates": candidates,
     }
 
 # ---------------------------------------------------------------- native compiled
 add("c", "C (GCC 13)", "native", "c", "c", "main.c", "gcc",
     ["gcc", "-O2", "-std=c17", "-Wall", "main.c", "-o", "main_bin", "-lm"],
     ["./main_bin"],
-    '#include <stdio.h>\n\nint main(void) {\n    printf("Hello from isolated C!\\n");\n    return 0;\n}\n')
+    '#include <stdio.h>\n\nint main(void) {\n    printf("Hello from isolated C!\\n");\n    return 0;\n}\n',
+    alternatives=[("clang", ["clang", "-O2", "-std=c17", "-Wall", "main.c", "-o", "main_bin", "-lm"], ["./main_bin"])])
 
 add("cpp", "C++23 (G++ 13)", "native", "cpp", "cpp", "main.cpp", "g++",
     ["g++", "-O2", "-std=c++2b", "-Wall", "main.cpp", "-o", "main_bin"],
     ["./main_bin"],
-    '#include <iostream>\n\nint main() {\n    std::cout << "Hello from isolated C++23!" << std::endl;\n    return 0;\n}\n')
+    '#include <iostream>\n\nint main() {\n    std::cout << "Hello from isolated C++23!" << std::endl;\n    return 0;\n}\n',
+    alternatives=[("clang++", ["clang++", "-O2", "-std=c++2b", "-Wall", "main.cpp", "-o", "main_bin"], ["./main_bin"])])
 
 add("rust", "Rust 1.78+", "native", "rust", "rs", "main.rs", "rustc",
     ["rustc", "-O", "main.rs", "-o", "main_bin"],
@@ -43,7 +60,9 @@ add("haskell", "Haskell (GHC 9.8)", "native", "haskell", "hs", "main.hs", "ghc",
 add("d", "D (LDC / DMD)", "native", "d", "d", "main.d", "ldc2",
     ["ldc2", "-O2", "-of=main_bin", "main.d"],
     ["./main_bin"],
-    'import std.stdio;\n\nvoid main() {\n    writeln("Hello from isolated D!");\n}\n')
+    'import std.stdio;\n\nvoid main() {\n    writeln("Hello from isolated D!");\n}\n',
+    alternatives=[("dmd", ["dmd", "-O", "-of=main_bin", "main.d"], ["./main_bin"]),
+                  ("gdc", ["gdc", "-O2", "-o", "main_bin", "main.d"], ["./main_bin"])])
 
 add("fortran", "Fortran (gfortran)", "native", "plaintext", "f90", "main.f90", "gfortran",
     ["gfortran", "-O2", "-o", "main_bin", "main.f90"],
@@ -63,7 +82,8 @@ add("assembly", "Assembly (NASM x86_64)", "native", "plaintext", "asm", "main.as
 # ---------------------------------------------------------------- interpreted
 add("python", "Python 3.12 (CPython)", "interpreted", "python", "py", "main.py", "python3",
     None, ["python3", "-u", "main.py"],
-    'def main() -> None:\n    print("Hello from isolated Python!")\n\n\nif __name__ == "__main__":\n    main()\n')
+    'def main() -> None:\n    print("Hello from isolated Python!")\n\n\nif __name__ == "__main__":\n    main()\n',
+    alternatives=[("python", None, ["python", "-u", "main.py"])])
 
 add("pypy", "PyPy3 7.3 (JIT)", "interpreted", "python", "py", "main.py", "pypy3",
     None, ["pypy3", "-u", "main.py"],
@@ -71,7 +91,8 @@ add("pypy", "PyPy3 7.3 (JIT)", "interpreted", "python", "py", "main.py", "pypy3"
 
 add("ruby", "Ruby 3.3", "interpreted", "ruby", "rb", "main.rb", "ruby",
     None, ["ruby", "main.rb"],
-    'puts "Hello from isolated Ruby!"\n')
+    'puts "Hello from isolated Ruby!"\n',
+    alternatives=[("ruby3.3", None, ["ruby3.3", "main.rb"])])
 
 add("php", "PHP 8.3 (JIT)", "interpreted", "php", "php", "main.php", "php",
     None, ["php", "main.php"],
@@ -83,11 +104,15 @@ add("perl", "Perl 5.38", "interpreted", "perl", "pl", "main.pl", "perl",
 
 add("lua", "LuaJIT 2.1", "interpreted", "lua", "lua", "main.lua", "luajit",
     None, ["luajit", "main.lua"],
-    'print("Hello from isolated LuaJIT!")\n')
+    'print("Hello from isolated LuaJIT!")\n',
+    alternatives=[("lua5.4", None, ["lua5.4", "main.lua"]),
+                  ("lua5.3", None, ["lua5.3", "main.lua"]),
+                  ("lua", None, ["lua", "main.lua"])])
 
 add("r", "R 4.4", "interpreted", "r", "R", "main.R", "Rscript",
     None, ["Rscript", "main.R"],
-    'cat("Hello from isolated R!\\n")\n')
+    'cat("Hello from isolated R!\\n")\n',
+    alternatives=[("R", None, ["R", "--no-save", "--quiet", "-f", "main.R"])])
 
 add("julia", "Julia 1.10", "interpreted", "julia", "jl", "main.jl", "julia",
     None, ["julia", "main.jl"],
@@ -99,7 +124,8 @@ add("racket", "Racket 8.12", "interpreted", "scheme", "rkt", "main.rkt", "racket
 
 add("erlang", "Erlang/OTP 26", "interpreted", "plaintext", "erl", "main.erl", "escript",
     None, ["escript", "main.erl"],
-    'main(_Args) ->\n    io:format("Hello from isolated Erlang!~n").\n')
+    'main(_Args) ->\n    io:format("Hello from isolated Erlang!~n").\n',
+    alternatives=[("erl", ["erlc", "main.erl"], ["erl", "-noshell", "-s", "main", "main", "-s", "init", "stop"])])
 
 add("awk", "AWK", "interpreted", "plaintext", "awk", "main.awk", "awk",
     None, ["awk", "-f", "main.awk"],
@@ -109,12 +135,15 @@ add("awk", "AWK", "interpreted", "plaintext", "awk", "main.awk", "awk",
 add("java", "Java 21 LTS (OpenJDK)", "managed", "java", "java", "Main.java", "java",
     None, ["java", "Main.java"],
     'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello from isolated Java 21!");\n    }\n}\n',
-    "Single-file source launch (JEP 330); no javac step required.")
+    "Single-file source launch (JEP 330); no javac step required.",
+    alternatives=[("javac", ["javac", "Main.java"], ["java", "Main"])])
 
 add("csharp", "C# 12 (.NET 8.0)", "managed", "csharp", "cs", "main.cs", "mcs",
     ["mcs", "-out:main.exe", "main.cs"],
     ["mono", "main.exe"],
-    'using System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine("Hello from isolated C#!");\n    }\n}\n')
+    'using System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine("Hello from isolated C#!");\n    }\n}\n',
+    alternatives=[("csc", ["csc", "-out:main.exe", "main.cs"], ["mono", "main.exe"]),
+                  ("dotnet-script", None, ["dotnet-script", "main.cs"])])
 
 add("fsharp", "F# 8.0", "managed", "fsharp", "fsx", "main.fsx", "dotnet",
     None, ["dotnet", "fsi", "--use:main.fsx", "--exec"],
@@ -152,11 +181,16 @@ add("groovy", "Groovy 4.0", "managed", "groovy", "groovy", "main.groovy", "groov
 # ---------------------------------------------------------------- web & scripting
 add("javascript", "JavaScript (Node 22 LTS)", "web", "javascript", "js", "main.js", "node",
     None, ["node", "--enable-source-maps", "main.js"],
-    'console.log("Hello from isolated Node.js 22!");\n')
+    'console.log("Hello from isolated Node.js 22!");\n',
+    alternatives=[("bun", None, ["bun", "run", "main.js"]),
+                  ("nodejs", None, ["nodejs", "main.js"])])
 
 add("typescript", "TypeScript 5.4 (Deno)", "web", "typescript", "ts", "main.ts", "deno",
     None, ["deno", "run", "--quiet", "main.ts"],
-    'const greeting: string = "Hello from isolated Deno TypeScript!";\nconsole.log(greeting);\n')
+    'const greeting: string = "Hello from isolated Deno TypeScript!";\nconsole.log(greeting);\n',
+    alternatives=[("bun", None, ["bun", "run", "main.ts"]),
+                  ("tsx", None, ["tsx", "main.ts"]),
+                  ("ts-node", None, ["ts-node", "main.ts"])])
 
 add("bun", "Bun 1.1", "web", "typescript", "ts", "main.ts", "bun",
     None, ["bun", "run", "main.ts"],
