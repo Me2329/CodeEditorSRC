@@ -19,6 +19,10 @@ services:
       CODECRAFT_MAX_JOBS: "8"
       CODECRAFT_WALL_SECONDS: "10"
       CODECRAFT_MEMORY_MB: "256"
+      # The assistant's local engine needs no credential. Set this to enable the
+      # model, or leave it unset and the chat panel will say the model is off.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      CODECRAFT_ASSISTANT_MODEL: "${CODECRAFT_ASSISTANT_MODEL:-claude-mythos-5-1}"
     # The sandbox needs to create namespaces. Without these the container still
     # runs, but the isolation tier degrades to rlimit and the health endpoint
     # reports it.

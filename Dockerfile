@@ -18,8 +18,10 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends g++ make \
     && rm -rf /var/lib/apt/lists/*
 COPY core/supervisor/ core/supervisor/
+COPY core/assistant/ core/assistant/
 COPY core/analyzer/ core/analyzer/
 RUN cd core/supervisor && cargo build --release
+RUN cd core/assistant && cargo build --release
 RUN make -C core/analyzer all
 
 # ----------------------------------------------------------------- runtime
@@ -48,6 +50,8 @@ COPY backend/ backend/
 COPY scripts/ scripts/
 COPY --from=services /build/core/supervisor/target/release/codecraft-supervisor \
      /usr/local/bin/codecraft-supervisor
+COPY --from=services /build/core/assistant/target/release/codecraft-assistant \
+     /usr/local/bin/codecraft-assistant
 COPY --from=services /build/core/analyzer/build/codecraft-analyzer \
      /app/core/analyzer/build/codecraft-analyzer
 COPY --from=frontend /build/dist/ /app/frontend/dist/
@@ -58,6 +62,8 @@ RUN chmod +x scripts/*.sh scripts/lib/*.sh \
 ENV CODECRAFT_WORKSPACE_ROOT=/var/tmp/codecraft \
     CODECRAFT_ANALYZER=/app/core/analyzer/build/codecraft-analyzer \
     CODECRAFT_SOCKET=/run/codecraft/supervisor.sock \
+    CODECRAFT_ASSISTANT_SOCKET=/run/codecraft/assistant.sock \
+    CODECRAFT_ASSISTANT_MODEL=claude-mythos-5-1 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
@@ -70,4 +76,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD python3 -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health').read()" || exit 1
 
-CMD ["python3", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The assistant daemon runs alongside the gateway. It is optional: without a
+# Claude credential its local engine still serves completions and symbols, and
+# the chat panel reports that the model is unavailable.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
