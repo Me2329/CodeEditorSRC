@@ -30,8 +30,23 @@ warn() {
 
 mount --make-rprivate /                                      2>/dev/null || warn "could not make mounts private"
 mount --bind "$workspace" "$workspace"                       2>/dev/null || warn "could not bind workspace"
-mount -t tmpfs -o "size=${CC_TMPFS_SIZE:-64m},mode=1777,nosuid,nodev" tmpfs /tmp \
+
+# A tmpfs on /tmp would shadow a workspace that lives underneath it, leaving the
+# sandbox with no working directory at all. Workspaces belong outside /tmp, but
+# an operator may point the workspace root anywhere, so detect the overlap and
+# keep the host's /tmp instead of breaking the run. The root filesystem is
+# sealed read-only below either way, and TMPDIR already points into the
+# workspace, so nothing user code writes escapes.
+case "$workspace" in
+    /tmp|/tmp/*)
+        warn "workspace lives under /tmp; skipping the ephemeral /tmp mount"
+        ;;
+    *)
+        mount -t tmpfs -o "size=${CC_TMPFS_SIZE:-64m},mode=1777,nosuid,nodev" tmpfs /tmp \
                                                              2>/dev/null || warn "could not mount ephemeral /tmp"
+        ;;
+esac
+
 mount -o remount,ro,bind /                                   2>/dev/null || warn "could not seal root read-only"
 mount -o remount,rw,bind "$workspace"                        2>/dev/null || warn "could not restore workspace writability"
 

@@ -103,12 +103,21 @@ where
         if remaining == 0 {
             truncated = true;
             let _ = child.kill();
-            emit(Stream::Stderr, "\r\n[codecraft] Output limit reached; execution stopped.\r\n")?;
+            let _ = emit(
+                Stream::Stderr,
+                "\r\n[codecraft] Output limit reached; execution stopped.\r\n",
+            );
             continue;
         }
         let slice = if chunk.len() > remaining { &chunk[..remaining] } else { &chunk[..] };
         emitted += slice.len();
-        emit(stream, &String::from_utf8_lossy(slice))?;
+        // A failed relay means the gateway hung up. Stop the job rather than
+        // letting it run on with nowhere to send its output.
+        if let Err(error) = emit(stream, &String::from_utf8_lossy(slice)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
     }
 
     let _ = stdout_handle.join();

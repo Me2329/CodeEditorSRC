@@ -28,3 +28,6 @@ core/supervisor/target/
 # Sandbox scratch space
 /var/tmp/codecraft/
 *.meta.json
+
+# Backend virtualenv
+backend/.venv/

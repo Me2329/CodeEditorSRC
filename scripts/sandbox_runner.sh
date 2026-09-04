@@ -168,6 +168,20 @@ kill_workspace_orphans() {
     return 0
 }
 
+# PID of the sandbox process currently being waited on, so a signal handler can
+# reach it. Empty between phases.
+CURRENT_CHILD=""
+
+# A caller that aborts sends SIGTERM. Bash defers a trap until the running
+# foreground command finishes, so each phase is started in the background and
+# waited on: that makes `wait` interruptible and the abort immediate.
+on_terminate() {
+    [[ -n "$CURRENT_CHILD" ]] && kill -TERM "$CURRENT_CHILD" 2>/dev/null
+    kill_workspace_orphans "$WORKSPACE"
+    cleanup
+    exit 143
+}
+
 cleanup() {
     kill_workspace_orphans "$WORKSPACE"
     cc_cgroup_destroy "$CGROUP_LEAF"
@@ -178,7 +192,8 @@ cleanup() {
         [[ "$OWN_WORKSPACE" == "1" ]] && rm -rf "$WORKSPACE"
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap on_terminate INT TERM
 
 # ---------------------------------------------------------------------------
 # Isolation tier selection
@@ -348,11 +363,17 @@ run_phase() {
         # Join the cgroup in the child, immediately before exec.
         ( echo $$ > "$CGROUP_LEAF/cgroup.procs" 2>/dev/null
           cd "$WORKSPACE" || exit 1
-          exec "${wrapper[@]}" "$@" ) < "$STDIN_FILE"
+          exec "${wrapper[@]}" "$@" ) < "$STDIN_FILE" &
     else
         ( cd "$WORKSPACE" || exit 1
-          exec "${wrapper[@]}" "$@" ) < "$STDIN_FILE"
+          exec "${wrapper[@]}" "$@" ) < "$STDIN_FILE" &
     fi
+
+    CURRENT_CHILD=$!
+    wait "$CURRENT_CHILD"
+    local status=$?
+    CURRENT_CHILD=""
+    return "$status"
 }
 
 # GNU timeout reports 124 when SIGTERM ends the run, but a process that ignores
