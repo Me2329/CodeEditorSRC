@@ -25,6 +25,9 @@ core/supervisor/target/
 .vscode/
 .idea/
 
+# Local supervisor socket
+run/
+
 # Sandbox scratch space
 /var/tmp/codecraft/
 *.meta.json
