@@ -1,0 +1,45 @@
+# CodeCraft Studio - local stack.
+#
+#   docker compose up --build
+#
+# The gateway is reachable on http://localhost:8000 and serves the built
+# frontend bundle. Redis is optional: the gateway falls back to an in-process
+# rate limiter when it is absent, so the stack works with `--scale redis=0`.
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      CODECRAFT_REDIS_URL: redis://redis:6379/0
+      CODECRAFT_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      CODECRAFT_MAX_JOBS: "8"
+      CODECRAFT_WALL_SECONDS: "10"
+      CODECRAFT_MEMORY_MB: "256"
+    # The sandbox needs to create namespaces. Without these the container still
+    # runs, but the isolation tier degrades to rlimit and the health endpoint
+    # reports it.
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    # Ephemeral workspaces are RAM-backed and never persist across a restart.
+    tmpfs:
+      - /var/tmp/codecraft:size=512m,mode=1777
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped

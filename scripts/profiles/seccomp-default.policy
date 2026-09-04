@@ -1,0 +1,82 @@
+// CodeCraft Studio - default seccomp-bpf policy for the nsjail tier.
+//
+// Written in nsjail's kafel policy language. The model is allow-by-default with
+// an explicit deny list, which is the right trade-off here: the sandbox must run
+// 40-odd toolchains whose syscall use varies widely, and a strict allow-list
+// would break compilers as they gain features. Confinement rests on the
+// namespaces, the read-only root, the dropped privileges and the resource
+// ceilings; this policy removes the syscalls that have no legitimate use inside
+// a code sandbox and that carry real escape or persistence value.
+//
+// Applied via --seccomp_policy; set CC_SECCOMP_POLICY to point at this file.
+
+POLICY codecraft_default {
+  KILL {
+    // Kernel module loading: a direct path to arbitrary kernel code.
+    init_module,
+    finit_module,
+    delete_module,
+
+    // Tracing and debugging other processes.
+    ptrace,
+    process_vm_readv,
+    process_vm_writev,
+
+    // Machine lifecycle and clock, which affect the host rather than the job.
+    reboot,
+    kexec_load,
+    kexec_file_load,
+    settimeofday,
+    clock_settime,
+    clock_adjtime,
+    adjtimex,
+
+    // Swap and filesystem topology.
+    swapon,
+    swapoff,
+    pivot_root,
+    chroot,
+
+    // Kernel logs and the audit subsystem.
+    syslog,
+
+    // BPF and perf: powerful introspection primitives with a history of
+    // privilege-escalation bugs.
+    bpf,
+    perf_event_open,
+
+    // Namespace escape helpers. The sandbox is already inside its namespaces;
+    // nothing legitimate re-enters or creates more.
+    setns,
+    unshare,
+
+    // Adding kernel keys, which outlive the ephemeral workspace.
+    add_key,
+    request_key,
+    keyctl,
+
+    // userfaultfd has been used repeatedly to win kernel race conditions.
+    userfaultfd,
+
+    // NUMA and scheduler tuning that reaches beyond this process.
+    move_pages,
+    migrate_pages,
+
+    // Mount management. nsjail has already built the filesystem view.
+    mount,
+    umount2,
+    fsopen,
+    fsconfig,
+    fsmount,
+    move_mount,
+    open_tree,
+
+    // Quota and superblock administration.
+    quotactl,
+    nfsservctl
+  }
+
+  DEFAULT ALLOW
+}
+
+USE codecraft_default DEFAULT KILL

@@ -153,7 +153,11 @@ cc_nsjail_args() {
         printf '%s\n' "--iface_no_lo"
     fi
 
-    local seccomp_policy="${CC_SECCOMP_POLICY:-}"
+    # Default to the shipped policy; an operator can point elsewhere or set an
+    # empty value to run nsjail without a syscall filter.
+    local default_policy
+    default_policy="$(dirname "${BASH_SOURCE[0]}")/../profiles/seccomp-default.policy"
+    local seccomp_policy="${CC_SECCOMP_POLICY-$default_policy}"
     if [[ -n "$seccomp_policy" && -f "$seccomp_policy" ]]; then
         printf '%s\n' "--seccomp_policy" "$seccomp_policy"
     fi
