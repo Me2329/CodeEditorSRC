@@ -1,0 +1,780 @@
+{
+  "version": 1,
+  "runtimes": {
+    "c": {
+      "id": "c",
+      "label": "C (GCC 13)",
+      "category": "native",
+      "monaco": "c",
+      "extension": "c",
+      "entry": "main.c",
+      "probe": "gcc",
+      "compile": [
+        "gcc",
+        "-O2",
+        "-std=c17",
+        "-Wall",
+        "main.c",
+        "-o",
+        "main_bin",
+        "-lm"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello from isolated C!\\n\");\n    return 0;\n}\n",
+      "as_limit": "strict"
+    },
+    "cpp": {
+      "id": "cpp",
+      "label": "C++23 (G++ 13)",
+      "category": "native",
+      "monaco": "cpp",
+      "extension": "cpp",
+      "entry": "main.cpp",
+      "probe": "g++",
+      "compile": [
+        "g++",
+        "-O2",
+        "-std=c++2b",
+        "-Wall",
+        "main.cpp",
+        "-o",
+        "main_bin"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "#include <iostream>\n\nint main() {\n    std::cout << \"Hello from isolated C++23!\" << std::endl;\n    return 0;\n}\n",
+      "as_limit": "strict"
+    },
+    "rust": {
+      "id": "rust",
+      "label": "Rust 1.78+",
+      "category": "native",
+      "monaco": "rust",
+      "extension": "rs",
+      "entry": "main.rs",
+      "probe": "rustc",
+      "compile": [
+        "rustc",
+        "-O",
+        "main.rs",
+        "-o",
+        "main_bin"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "fn main() {\n    println!(\"Hello from high-performance isolated Rust!\");\n}\n",
+      "as_limit": "strict"
+    },
+    "go": {
+      "id": "go",
+      "label": "Go 1.22",
+      "category": "native",
+      "monaco": "go",
+      "extension": "go",
+      "entry": "main.go",
+      "probe": "go",
+      "compile": [
+        "go",
+        "build",
+        "-o",
+        "main_bin",
+        "main.go"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello from isolated Go!\")\n}\n",
+      "as_limit": "relaxed"
+    },
+    "zig": {
+      "id": "zig",
+      "label": "Zig 0.12",
+      "category": "native",
+      "monaco": "zig",
+      "extension": "zig",
+      "entry": "main.zig",
+      "probe": "zig",
+      "compile": [
+        "zig",
+        "build-exe",
+        "-O",
+        "ReleaseSafe",
+        "--name",
+        "main_bin",
+        "main.zig"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"Hello from isolated Zig!\\n\", .{});\n}\n",
+      "as_limit": "strict"
+    },
+    "haskell": {
+      "id": "haskell",
+      "label": "Haskell (GHC 9.8)",
+      "category": "native",
+      "monaco": "haskell",
+      "extension": "hs",
+      "entry": "main.hs",
+      "probe": "ghc",
+      "compile": [
+        "ghc",
+        "-O2",
+        "-o",
+        "main_bin",
+        "main.hs"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "main :: IO ()\nmain = putStrLn \"Hello from isolated Haskell!\"\n",
+      "as_limit": "relaxed"
+    },
+    "d": {
+      "id": "d",
+      "label": "D (LDC / DMD)",
+      "category": "native",
+      "monaco": "d",
+      "extension": "d",
+      "entry": "main.d",
+      "probe": "ldc2",
+      "compile": [
+        "ldc2",
+        "-O2",
+        "-of=main_bin",
+        "main.d"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "import std.stdio;\n\nvoid main() {\n    writeln(\"Hello from isolated D!\");\n}\n",
+      "as_limit": "strict"
+    },
+    "fortran": {
+      "id": "fortran",
+      "label": "Fortran (gfortran)",
+      "category": "native",
+      "monaco": "plaintext",
+      "extension": "f90",
+      "entry": "main.f90",
+      "probe": "gfortran",
+      "compile": [
+        "gfortran",
+        "-O2",
+        "-o",
+        "main_bin",
+        "main.f90"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "program hello\n    print *, \"Hello from isolated Fortran!\"\nend program hello\n",
+      "as_limit": "strict"
+    },
+    "nim": {
+      "id": "nim",
+      "label": "Nim 2.0",
+      "category": "native",
+      "monaco": "plaintext",
+      "extension": "nim",
+      "entry": "main.nim",
+      "probe": "nim",
+      "compile": [
+        "nim",
+        "c",
+        "-d:release",
+        "--nimcache:.nimcache",
+        "-o:main_bin",
+        "main.nim"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "echo \"Hello from isolated Nim!\"\n",
+      "as_limit": "strict"
+    },
+    "assembly": {
+      "id": "assembly",
+      "label": "Assembly (NASM x86_64)",
+      "category": "native",
+      "monaco": "plaintext",
+      "extension": "asm",
+      "entry": "main.asm",
+      "probe": "nasm",
+      "compile": [
+        "sh",
+        "-c",
+        "nasm -f elf64 main.asm -o main.o && ld main.o -o main_bin"
+      ],
+      "run": [
+        "./main_bin"
+      ],
+      "notes": "",
+      "template": "section .data\n    msg db \"Hello from isolated NASM!\", 10\n    len equ $ - msg\n\nsection .text\n    global _start\n\n_start:\n    mov rax, 1\n    mov rdi, 1\n    mov rsi, msg\n    mov rdx, len\n    syscall\n\n    mov rax, 60\n    xor rdi, rdi\n    syscall\n",
+      "as_limit": "strict"
+    },
+    "python": {
+      "id": "python",
+      "label": "Python 3.12 (CPython)",
+      "category": "interpreted",
+      "monaco": "python",
+      "extension": "py",
+      "entry": "main.py",
+      "probe": "python3",
+      "compile": null,
+      "run": [
+        "python3",
+        "-u",
+        "main.py"
+      ],
+      "notes": "",
+      "template": "def main() -> None:\n    print(\"Hello from isolated Python!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "as_limit": "strict"
+    },
+    "pypy": {
+      "id": "pypy",
+      "label": "PyPy3 7.3 (JIT)",
+      "category": "interpreted",
+      "monaco": "python",
+      "extension": "py",
+      "entry": "main.py",
+      "probe": "pypy3",
+      "compile": null,
+      "run": [
+        "pypy3",
+        "-u",
+        "main.py"
+      ],
+      "notes": "",
+      "template": "print(\"Hello from isolated PyPy JIT!\")\n",
+      "as_limit": "strict"
+    },
+    "ruby": {
+      "id": "ruby",
+      "label": "Ruby 3.3",
+      "category": "interpreted",
+      "monaco": "ruby",
+      "extension": "rb",
+      "entry": "main.rb",
+      "probe": "ruby",
+      "compile": null,
+      "run": [
+        "ruby",
+        "main.rb"
+      ],
+      "notes": "",
+      "template": "puts \"Hello from isolated Ruby!\"\n",
+      "as_limit": "strict"
+    },
+    "php": {
+      "id": "php",
+      "label": "PHP 8.3 (JIT)",
+      "category": "interpreted",
+      "monaco": "php",
+      "extension": "php",
+      "entry": "main.php",
+      "probe": "php",
+      "compile": null,
+      "run": [
+        "php",
+        "main.php"
+      ],
+      "notes": "",
+      "template": "<?php\n\necho \"Hello from isolated PHP!\" . PHP_EOL;\n",
+      "as_limit": "strict"
+    },
+    "perl": {
+      "id": "perl",
+      "label": "Perl 5.38",
+      "category": "interpreted",
+      "monaco": "perl",
+      "extension": "pl",
+      "entry": "main.pl",
+      "probe": "perl",
+      "compile": null,
+      "run": [
+        "perl",
+        "main.pl"
+      ],
+      "notes": "",
+      "template": "use strict;\nuse warnings;\n\nprint \"Hello from isolated Perl!\\n\";\n",
+      "as_limit": "strict"
+    },
+    "lua": {
+      "id": "lua",
+      "label": "LuaJIT 2.1",
+      "category": "interpreted",
+      "monaco": "lua",
+      "extension": "lua",
+      "entry": "main.lua",
+      "probe": "luajit",
+      "compile": null,
+      "run": [
+        "luajit",
+        "main.lua"
+      ],
+      "notes": "",
+      "template": "print(\"Hello from isolated LuaJIT!\")\n",
+      "as_limit": "strict"
+    },
+    "r": {
+      "id": "r",
+      "label": "R 4.4",
+      "category": "interpreted",
+      "monaco": "r",
+      "extension": "R",
+      "entry": "main.R",
+      "probe": "Rscript",
+      "compile": null,
+      "run": [
+        "Rscript",
+        "main.R"
+      ],
+      "notes": "",
+      "template": "cat(\"Hello from isolated R!\\n\")\n",
+      "as_limit": "strict"
+    },
+    "julia": {
+      "id": "julia",
+      "label": "Julia 1.10",
+      "category": "interpreted",
+      "monaco": "julia",
+      "extension": "jl",
+      "entry": "main.jl",
+      "probe": "julia",
+      "compile": null,
+      "run": [
+        "julia",
+        "main.jl"
+      ],
+      "notes": "",
+      "template": "println(\"Hello from isolated Julia!\")\n",
+      "as_limit": "relaxed"
+    },
+    "racket": {
+      "id": "racket",
+      "label": "Racket 8.12",
+      "category": "interpreted",
+      "monaco": "scheme",
+      "extension": "rkt",
+      "entry": "main.rkt",
+      "probe": "racket",
+      "compile": null,
+      "run": [
+        "racket",
+        "main.rkt"
+      ],
+      "notes": "",
+      "template": "#lang racket\n\n(displayln \"Hello from isolated Racket!\")\n",
+      "as_limit": "relaxed"
+    },
+    "erlang": {
+      "id": "erlang",
+      "label": "Erlang/OTP 26",
+      "category": "interpreted",
+      "monaco": "plaintext",
+      "extension": "erl",
+      "entry": "main.erl",
+      "probe": "escript",
+      "compile": null,
+      "run": [
+        "escript",
+        "main.erl"
+      ],
+      "notes": "",
+      "template": "main(_Args) ->\n    io:format(\"Hello from isolated Erlang!~n\").\n",
+      "as_limit": "relaxed"
+    },
+    "awk": {
+      "id": "awk",
+      "label": "AWK",
+      "category": "interpreted",
+      "monaco": "plaintext",
+      "extension": "awk",
+      "entry": "main.awk",
+      "probe": "awk",
+      "compile": null,
+      "run": [
+        "awk",
+        "-f",
+        "main.awk"
+      ],
+      "notes": "",
+      "template": "BEGIN {\n    print \"Hello from isolated AWK!\"\n}\n",
+      "as_limit": "strict"
+    },
+    "java": {
+      "id": "java",
+      "label": "Java 21 LTS (OpenJDK)",
+      "category": "managed",
+      "monaco": "java",
+      "extension": "java",
+      "entry": "Main.java",
+      "probe": "java",
+      "compile": null,
+      "run": [
+        "java",
+        "Main.java"
+      ],
+      "notes": "Single-file source launch (JEP 330); no javac step required.",
+      "template": "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello from isolated Java 21!\");\n    }\n}\n",
+      "as_limit": "relaxed"
+    },
+    "csharp": {
+      "id": "csharp",
+      "label": "C# 12 (.NET 8.0)",
+      "category": "managed",
+      "monaco": "csharp",
+      "extension": "cs",
+      "entry": "main.cs",
+      "probe": "mcs",
+      "compile": [
+        "mcs",
+        "-out:main.exe",
+        "main.cs"
+      ],
+      "run": [
+        "mono",
+        "main.exe"
+      ],
+      "notes": "",
+      "template": "using System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine(\"Hello from isolated C#!\");\n    }\n}\n",
+      "as_limit": "relaxed"
+    },
+    "fsharp": {
+      "id": "fsharp",
+      "label": "F# 8.0",
+      "category": "managed",
+      "monaco": "fsharp",
+      "extension": "fsx",
+      "entry": "main.fsx",
+      "probe": "dotnet",
+      "compile": null,
+      "run": [
+        "dotnet",
+        "fsi",
+        "--use:main.fsx",
+        "--exec"
+      ],
+      "notes": "",
+      "template": "printfn \"Hello from isolated F#!\"\n",
+      "as_limit": "relaxed"
+    },
+    "kotlin": {
+      "id": "kotlin",
+      "label": "Kotlin 2.0",
+      "category": "managed",
+      "monaco": "kotlin",
+      "extension": "kt",
+      "entry": "main.kt",
+      "probe": "kotlinc",
+      "compile": [
+        "kotlinc",
+        "main.kt",
+        "-include-runtime",
+        "-d",
+        "main.jar"
+      ],
+      "run": [
+        "java",
+        "-jar",
+        "main.jar"
+      ],
+      "notes": "",
+      "template": "fun main() {\n    println(\"Hello from isolated Kotlin!\")\n}\n",
+      "as_limit": "relaxed"
+    },
+    "scala": {
+      "id": "scala",
+      "label": "Scala 3.4",
+      "category": "managed",
+      "monaco": "scala",
+      "extension": "scala",
+      "entry": "main.scala",
+      "probe": "scala",
+      "compile": null,
+      "run": [
+        "scala",
+        "main.scala"
+      ],
+      "notes": "",
+      "template": "@main def run(): Unit =\n  println(\"Hello from isolated Scala 3!\")\n",
+      "as_limit": "relaxed"
+    },
+    "swift": {
+      "id": "swift",
+      "label": "Swift 5.10",
+      "category": "managed",
+      "monaco": "swift",
+      "extension": "swift",
+      "entry": "main.swift",
+      "probe": "swift",
+      "compile": null,
+      "run": [
+        "swift",
+        "main.swift"
+      ],
+      "notes": "",
+      "template": "print(\"Hello from isolated Swift!\")\n",
+      "as_limit": "relaxed"
+    },
+    "dart": {
+      "id": "dart",
+      "label": "Dart 3.3",
+      "category": "managed",
+      "monaco": "dart",
+      "extension": "dart",
+      "entry": "main.dart",
+      "probe": "dart",
+      "compile": null,
+      "run": [
+        "dart",
+        "run",
+        "main.dart"
+      ],
+      "notes": "",
+      "template": "void main() {\n  print('Hello from isolated Dart!');\n}\n",
+      "as_limit": "relaxed"
+    },
+    "elixir": {
+      "id": "elixir",
+      "label": "Elixir 1.16 (BEAM)",
+      "category": "managed",
+      "monaco": "elixir",
+      "extension": "exs",
+      "entry": "main.exs",
+      "probe": "elixir",
+      "compile": null,
+      "run": [
+        "elixir",
+        "main.exs"
+      ],
+      "notes": "",
+      "template": "IO.puts(\"Hello from isolated Elixir!\")\n",
+      "as_limit": "relaxed"
+    },
+    "clojure": {
+      "id": "clojure",
+      "label": "Clojure 1.11",
+      "category": "managed",
+      "monaco": "clojure",
+      "extension": "clj",
+      "entry": "main.clj",
+      "probe": "clojure",
+      "compile": null,
+      "run": [
+        "clojure",
+        "-M",
+        "main.clj"
+      ],
+      "notes": "",
+      "template": "(println \"Hello from isolated Clojure!\")\n",
+      "as_limit": "relaxed"
+    },
+    "groovy": {
+      "id": "groovy",
+      "label": "Groovy 4.0",
+      "category": "managed",
+      "monaco": "groovy",
+      "extension": "groovy",
+      "entry": "main.groovy",
+      "probe": "groovy",
+      "compile": null,
+      "run": [
+        "groovy",
+        "main.groovy"
+      ],
+      "notes": "",
+      "template": "println \"Hello from isolated Groovy!\"\n",
+      "as_limit": "relaxed"
+    },
+    "javascript": {
+      "id": "javascript",
+      "label": "JavaScript (Node 22 LTS)",
+      "category": "web",
+      "monaco": "javascript",
+      "extension": "js",
+      "entry": "main.js",
+      "probe": "node",
+      "compile": null,
+      "run": [
+        "node",
+        "--enable-source-maps",
+        "main.js"
+      ],
+      "notes": "",
+      "template": "console.log(\"Hello from isolated Node.js 22!\");\n",
+      "as_limit": "relaxed"
+    },
+    "typescript": {
+      "id": "typescript",
+      "label": "TypeScript 5.4 (Deno)",
+      "category": "web",
+      "monaco": "typescript",
+      "extension": "ts",
+      "entry": "main.ts",
+      "probe": "deno",
+      "compile": null,
+      "run": [
+        "deno",
+        "run",
+        "--quiet",
+        "main.ts"
+      ],
+      "notes": "",
+      "template": "const greeting: string = \"Hello from isolated Deno TypeScript!\";\nconsole.log(greeting);\n",
+      "as_limit": "relaxed"
+    },
+    "bun": {
+      "id": "bun",
+      "label": "Bun 1.1",
+      "category": "web",
+      "monaco": "typescript",
+      "extension": "ts",
+      "entry": "main.ts",
+      "probe": "bun",
+      "compile": null,
+      "run": [
+        "bun",
+        "run",
+        "main.ts"
+      ],
+      "notes": "",
+      "template": "const greeting: string = \"Hello from isolated Bun!\";\nconsole.log(greeting);\n",
+      "as_limit": "relaxed"
+    },
+    "bash": {
+      "id": "bash",
+      "label": "Bash 5.2",
+      "category": "web",
+      "monaco": "shell",
+      "extension": "sh",
+      "entry": "main.sh",
+      "probe": "bash",
+      "compile": null,
+      "run": [
+        "bash",
+        "main.sh"
+      ],
+      "notes": "",
+      "template": "#!/usr/bin/env bash\nset -euo pipefail\n\necho \"Hello from isolated Bash!\"\n",
+      "as_limit": "strict"
+    },
+    "zsh": {
+      "id": "zsh",
+      "label": "Zsh 5.9",
+      "category": "web",
+      "monaco": "shell",
+      "extension": "zsh",
+      "entry": "main.zsh",
+      "probe": "zsh",
+      "compile": null,
+      "run": [
+        "zsh",
+        "main.zsh"
+      ],
+      "notes": "",
+      "template": "echo \"Hello from isolated Zsh!\"\n",
+      "as_limit": "strict"
+    },
+    "powershell": {
+      "id": "powershell",
+      "label": "PowerShell Core 7.4",
+      "category": "web",
+      "monaco": "powershell",
+      "extension": "ps1",
+      "entry": "main.ps1",
+      "probe": "pwsh",
+      "compile": null,
+      "run": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "main.ps1"
+      ],
+      "notes": "",
+      "template": "Write-Output \"Hello from isolated PowerShell!\"\n",
+      "as_limit": "strict"
+    },
+    "sql": {
+      "id": "sql",
+      "label": "SQL (SQLite 3)",
+      "category": "web",
+      "monaco": "sql",
+      "extension": "sql",
+      "entry": "main.sql",
+      "probe": "sqlite3",
+      "compile": null,
+      "run": [
+        "sh",
+        "-c",
+        "sqlite3 -batch -header -column sandbox.db < main.sql"
+      ],
+      "notes": "",
+      "template": "CREATE TABLE runs (id INTEGER PRIMARY KEY, engine TEXT, ok INTEGER);\n\nINSERT INTO runs (engine, ok) VALUES ('sqlite3', 1), ('codecraft', 1);\n\nSELECT id, engine, ok FROM runs;\n",
+      "as_limit": "strict"
+    },
+    "jq": {
+      "id": "jq",
+      "label": "jq (JSON processor)",
+      "category": "web",
+      "monaco": "plaintext",
+      "extension": "jq",
+      "entry": "main.jq",
+      "probe": "jq",
+      "compile": null,
+      "run": [
+        "sh",
+        "-c",
+        "echo '{\"engine\":\"codecraft\",\"tier\":\"sandboxed\"}' | jq -f main.jq"
+      ],
+      "notes": "",
+      "template": "{ engine: .engine, message: \"Hello from isolated jq!\" }\n",
+      "as_limit": "strict"
+    },
+    "wasm": {
+      "id": "wasm",
+      "label": "WebAssembly (Wasmtime)",
+      "category": "web",
+      "monaco": "plaintext",
+      "extension": "wat",
+      "entry": "main.wat",
+      "probe": "wasmtime",
+      "compile": null,
+      "run": [
+        "wasmtime",
+        "main.wat"
+      ],
+      "notes": "",
+      "template": "(module\n  (func (export \"_start\")))\n",
+      "as_limit": "relaxed"
+    },
+    "html": {
+      "id": "html",
+      "label": "HTML5 / CSS3 / JS (Live Preview)",
+      "category": "web",
+      "monaco": "html",
+      "extension": "html",
+      "entry": "index.html",
+      "probe": null,
+      "compile": null,
+      "run": null,
+      "notes": "Rendered client-side in a sandboxed iframe; never dispatched to the execution backend.",
+      "template": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>CodeCraft Preview</title>\n    <style>\n      body { background: #0b0e14; color: #e2e8f0; font-family: system-ui, sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; }\n      h1 { background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); -webkit-background-clip: text; color: transparent; }\n    </style>\n  </head>\n  <body>\n    <h1>Hello from the live web preview!</h1>\n  </body>\n</html>\n",
+      "as_limit": "strict"
+    }
+  }
+}

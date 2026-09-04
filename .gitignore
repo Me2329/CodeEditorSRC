@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+target/
+*.o
+*.so
+*.exe
+main_bin
+frontend/dist/
+core/analyzer/build/
+core/supervisor/target/
+
+# Environment and local state
+.env
+.env.local
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Sandbox scratch space
+/var/tmp/codecraft/
+*.meta.json
