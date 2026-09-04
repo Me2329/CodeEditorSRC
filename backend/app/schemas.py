@@ -132,3 +132,5 @@ class HealthResponse(BaseModel):
     analyzer: bool
     runtimes_total: int
     runtimes_installed: int
+    assistant: str
+    assistant_model: str = ""

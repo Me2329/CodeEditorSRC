@@ -67,6 +67,15 @@ class Settings:
     )
     max_concurrent_executions: int = field(default_factory=lambda: _env_int("CODECRAFT_MAX_JOBS", 8))
 
+    # --- assistant ---------------------------------------------------------
+    # The assistant daemon serves both the instant local engine and the model.
+    # When its socket is absent the editor still works; the chat panel says so.
+    assistant_socket: Path = field(
+        default_factory=lambda: Path(
+            os.getenv("CODECRAFT_ASSISTANT_SOCKET", "/run/codecraft/assistant.sock")
+        )
+    )
+
     # --- limits ------------------------------------------------------------
     default_wall_seconds: int = field(default_factory=lambda: _env_int("CODECRAFT_WALL_SECONDS", 10))
     default_cpu_seconds: int = field(default_factory=lambda: _env_int("CODECRAFT_CPU_SECONDS", 5))

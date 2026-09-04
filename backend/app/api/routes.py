@@ -6,7 +6,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from .. import analyzer
+from .. import analyzer, assistant
 from ..config import settings
 from ..executor import ExecutionError
 from ..runtimes import registry
@@ -30,6 +30,7 @@ async def health(request: Request) -> HealthResponse:
     limiter = request.app.state.rate_limiter
 
     supervisor_health = await service.supervisor.health()
+    assistant_health = await assistant.health()
     catalogue = registry().all()
 
     return HealthResponse(
@@ -46,6 +47,16 @@ async def health(request: Request) -> HealthResponse:
         analyzer=analyzer.available(),
         runtimes_total=len(catalogue),
         runtimes_installed=sum(1 for r in catalogue if r.installed),
+        assistant=(
+            (
+                "ready"
+                if assistant_health.get("remote_available")
+                else "local engine only (no Claude credential)"
+            )
+            if assistant_health
+            else "not running"
+        ),
+        assistant_model=(assistant_health or {}).get("model", ""),
     )
 
 

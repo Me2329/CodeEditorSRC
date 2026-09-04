@@ -11,6 +11,7 @@ SHELL := /bin/bash
 BACKEND      := backend
 FRONTEND     := frontend
 SUPERVISOR   := core/supervisor
+ASSISTANT    := core/assistant
 ANALYZER     := core/analyzer
 VENV         := $(BACKEND)/.venv
 PY           := $(VENV)/bin/python
@@ -28,7 +29,7 @@ help:
 
 # ---------------------------------------------------------------- setup
 .PHONY: setup
-setup: setup-backend setup-frontend analyzer supervisor ## Install dependencies and build the core services
+setup: setup-backend setup-frontend analyzer supervisor assistant ## Install dependencies and build the core services
 	@printf '\n\033[1;32mSetup complete.\033[0m Run "make doctor" to see this host'"'"'s capabilities.\n\n'
 
 .PHONY: setup-backend
@@ -55,8 +56,13 @@ supervisor: ## Build the Rust supervisor daemon
 	@cd $(SUPERVISOR) && cargo build --release --quiet
 	@printf 'Supervisor built: $(SUPERVISOR)/target/release/codecraft-supervisor\n'
 
+.PHONY: assistant
+assistant: ## Build the Rust assistant daemon
+	@cd $(ASSISTANT) && cargo build --release --quiet
+	@printf 'Assistant built: $(ASSISTANT)/target/release/codecraft-assistant\n'
+
 .PHONY: build
-build: analyzer supervisor ## Build the core services and the production frontend bundle
+build: analyzer supervisor assistant ## Build the core services and the production frontend bundle
 	@cd $(FRONTEND) && npm run build
 
 # ---------------------------------------------------------------- run
@@ -77,17 +83,26 @@ daemon: supervisor ## Run the supervisor daemon on a local socket
 		--socket $(PWD)/run/supervisor.sock \
 		--runner $(PWD)/scripts/sandbox_runner.sh
 
+.PHONY: assistant-daemon
+assistant-daemon: assistant ## Run the assistant daemon on a local socket
+	@mkdir -p run
+	@$(ASSISTANT)/target/release/codecraft-assistant --socket $(PWD)/run/assistant.sock
+
 .PHONY: dev
-dev: ## Run the gateway and the frontend together
+dev: ## Run the gateway, the assistant and the frontend together
+	@mkdir -p run
 	@trap 'kill 0' EXIT INT TERM; \
-	( cd $(BACKEND) && .venv/bin/python -m uvicorn app.main:app \
+	( $(ASSISTANT)/target/release/codecraft-assistant \
+		--socket $(PWD)/run/assistant.sock 2>&1 | sed 's/^/[assistant] /' ) & \
+	( cd $(BACKEND) && CODECRAFT_ASSISTANT_SOCKET=$(PWD)/run/assistant.sock \
+		.venv/bin/python -m uvicorn app.main:app \
 		--host $(GATEWAY_HOST) --port $(GATEWAY_PORT) --reload ) & \
 	( cd $(FRONTEND) && npm run dev ) & \
 	wait
 
 # ---------------------------------------------------------------- test
 .PHONY: test
-test: test-sandbox test-supervisor test-analyzer test-backend test-frontend ## Run every test suite
+test: test-sandbox test-supervisor test-assistant test-analyzer test-backend test-frontend ## Run every test suite
 	@printf '\n\033[1;32mAll suites passed.\033[0m\n\n'
 
 .PHONY: test-sandbox
@@ -95,8 +110,12 @@ test-sandbox: ## Run the sandbox conformance suite
 	@./scripts/selftest.sh
 
 .PHONY: test-supervisor
-test-supervisor: ## Run the Rust unit tests
+test-supervisor: ## Run the Rust supervisor tests
 	@cd $(SUPERVISOR) && cargo test --quiet
+
+.PHONY: test-assistant
+test-assistant: ## Run the Rust assistant tests
+	@cd $(ASSISTANT) && cargo test --quiet
 
 .PHONY: test-analyzer
 test-analyzer: ## Run the C++ analyzer tests
@@ -124,6 +143,7 @@ clean: ## Remove build artefacts
 	@rm -rf $(FRONTEND)/dist $(FRONTEND)/node_modules/.vite
 	@rm -rf $(ANALYZER)/build
 	@cd $(SUPERVISOR) && cargo clean --quiet 2>/dev/null || true
+	@cd $(ASSISTANT) && cargo clean --quiet 2>/dev/null || true
 	@find . -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 	@rm -rf /var/tmp/codecraft/run_* /var/tmp/codecraft/.stage 2>/dev/null || true
 	@printf 'Cleaned.\n'

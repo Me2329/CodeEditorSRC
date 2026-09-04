@@ -1,0 +1,28 @@
+[package]
+name = "codecraft-assistant"
+version = "2.5.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Code intelligence and chat assistant daemon for CodeCraft Studio"
+license = "MIT"
+
+[lib]
+name = "codecraft_assistant"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codecraft-assistant"
+path = "src/main.rs"
+
+[dependencies]
+# Unlike the supervisor, this service is not on the untrusted-code path, so it
+# uses standard crates rather than hand-rolling JSON and TLS.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", features = ["rustls"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

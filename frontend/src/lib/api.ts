@@ -6,7 +6,14 @@
  * so a relative base works for both HTTP and the WebSocket upgrade.
  */
 
-import type { AnalysisResult, HealthInfo, RuntimeInfo } from './types';
+import type {
+  AnalysisResult,
+  AssistantCompletion,
+  HealthInfo,
+  RuntimeInfo,
+  Symbol as WorkspaceSymbol,
+  WorkspaceContext,
+} from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
@@ -69,6 +76,20 @@ export const api = {
     request<AnalysisResult>('/api/v1/analyze', {
       method: 'POST',
       body: JSON.stringify({ language, source }),
+    }),
+
+  /** Completion candidates from the local engine. No model involved. */
+  complete: (workspace: WorkspaceContext, prefix: string, limit = 25) =>
+    request<{ items: AssistantCompletion[] }>('/api/v1/assistant/complete', {
+      method: 'POST',
+      body: JSON.stringify({ workspace, prefix, limit }),
+    }),
+
+  /** Every declaration in the workspace, for outline and go-to-symbol. */
+  symbols: (workspace: WorkspaceContext) =>
+    request<{ items: WorkspaceSymbol[] }>('/api/v1/assistant/symbols', {
+      method: 'POST',
+      body: JSON.stringify({ workspace }),
     }),
 };
 

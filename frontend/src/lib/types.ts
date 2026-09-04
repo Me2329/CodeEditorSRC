@@ -103,6 +103,14 @@ export interface Diagnostic {
   column: number;
 }
 
+export interface Symbol {
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+  detail: string;
+}
+
 export interface AnalysisResult {
   language: string;
   metrics: {
@@ -118,4 +126,51 @@ export interface AnalysisResult {
   };
   diagnostics: Diagnostic[];
   ast: AstNode | null;
+}
+
+// ---------------------------------------------------------------------------
+// Assistant
+// ---------------------------------------------------------------------------
+
+/** Where a chat request should be answered from. */
+export type AssistantRoute = 'auto' | 'local' | 'remote';
+
+/** How much effort the model should spend, mirroring output_config.effort. */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface WorkspaceContext {
+  language: string;
+  files: { name: string; content: string }[];
+  active_file: string;
+  line: number;
+  column: number;
+  selection: string;
+}
+
+export interface AssistantUsage {
+  input_tokens: number;
+  output_tokens: number;
+  /** Cost of the turn in US cents, from the model's published rates. */
+  cost_cents: number;
+}
+
+export type AssistantFrame =
+  | {
+      type: 'ready';
+      available: boolean;
+      model: string;
+      remote_available: boolean;
+      reason: string;
+    }
+  | { type: 'routed'; engine: 'local' | 'model'; model: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'delta'; text: string }
+  | { type: 'done'; usage?: AssistantUsage | null; elapsed_ms: number }
+  | { type: 'error'; message: string };
+
+export interface AssistantCompletion {
+  label: string;
+  kind: string;
+  detail: string;
+  score: number;
 }

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.assistant_routes import router as assistant_router
 from .api.routes import VERSION, router as rest_router
 from .api.ws import router as ws_router
 from .config import settings
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
 
     app.include_router(rest_router)
     app.include_router(ws_router)
+    app.include_router(assistant_router)
     return app
 
 

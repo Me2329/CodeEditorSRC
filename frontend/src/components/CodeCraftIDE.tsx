@@ -15,6 +15,7 @@ import {
   Play,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Square,
   Wifi,
   WifiOff,
@@ -26,6 +27,7 @@ import { ApiError, api } from '../lib/api';
 import type { AnalysisResult, HealthInfo, RuntimeInfo, VirtualFile } from '../lib/types';
 import { createFile, loadWorkspace, saveWorkspace } from '../lib/vfs';
 import { AnalysisPanel } from './AnalysisPanel';
+import { AssistantPanel } from './AssistantPanel';
 import { FileExplorer } from './FileExplorer';
 import { PreviewPane } from './PreviewPane';
 import { RuntimePicker } from './RuntimePicker';
@@ -56,6 +58,9 @@ export function CodeCraftIDE() {
   const [analysisPending, setAnalysisPending] = useState(false);
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
+  const [bottomTab, setBottomTab] = useState<'assistant' | 'analysis'>('assistant');
+  const [caret, setCaret] = useState({ line: 1, column: 1 });
+  const [selection, setSelection] = useState('');
 
   const terminalRef = useRef<TerminalHandle>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -283,8 +288,35 @@ export function CodeCraftIDE() {
       editorRef.current = editor;
       monacoRef.current = monaco;
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => handleRun());
+
+      // The assistant answers about where the caret is and what is selected,
+      // so both are tracked as they change.
+      editor.onDidChangeCursorPosition((event) => {
+        setCaret({ line: event.position.lineNumber, column: event.position.column });
+      });
+      editor.onDidChangeCursorSelection(() => {
+        const model = editor.getModel();
+        const range = editor.getSelection();
+        setSelection(model && range && !range.isEmpty() ? model.getValueInRange(range) : '');
+      });
     },
     [handleRun],
+  );
+
+  /** Replace the active file with code the assistant produced. */
+  const handleApplyCode = useCallback(
+    (code: string) => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      if (!editor || !model) return;
+      // Pushed as an edit operation rather than setValue, so a single Ctrl+Z
+      // takes it back.
+      editor.executeEdits('codecraft-assistant', [
+        { range: model.getFullModelRange(), text: code, forceMoveMarkers: true },
+      ]);
+      editor.focus();
+    },
+    [],
   );
 
   const statusBadge = useMemo(() => {
@@ -387,20 +419,49 @@ export function CodeCraftIDE() {
               <TerminalPane ref={terminalRef} status={statusBadge} />
             )}
           </div>
-          <div className="flex h-[38%] min-h-0 flex-col border-t border-slate-800/80 bg-panel">
-            <header className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-800/80 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              <Cpu className="h-3.5 w-3.5 text-caret" aria-hidden />
-              <span>Static analysis</span>
-              {analysisPending && (
-                <Loader2 className="ml-auto h-3 w-3 animate-spin text-slate-600" aria-hidden />
-              )}
-            </header>
-            <AnalysisPanel
-              analysis={analysis}
-              error={analysisError}
-              pending={analysisPending}
-              onJumpToLine={handleJumpToLine}
-            />
+          <div className="flex h-[46%] min-h-0 flex-col border-t border-slate-800/80 bg-panel">
+            {bottomTab === 'assistant' ? (
+              <AssistantPanel
+                language={language}
+                files={files}
+                activeFileName={activeFile?.name ?? ''}
+                selection={selection}
+                caret={caret}
+                onApplyCode={handleApplyCode}
+              />
+            ) : (
+              <>
+                <header className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-800/80 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <Cpu className="h-3.5 w-3.5 text-caret" aria-hidden />
+                  <span>Static analysis</span>
+                  {analysisPending && (
+                    <Loader2 className="ml-auto h-3 w-3 animate-spin text-slate-600" aria-hidden />
+                  )}
+                </header>
+                <AnalysisPanel
+                  analysis={analysis}
+                  error={analysisError}
+                  pending={analysisPending}
+                  onJumpToLine={handleJumpToLine}
+                />
+              </>
+            )}
+
+            <nav className="flex h-8 shrink-0 items-center gap-1 border-t border-slate-800/80 bg-charcoal px-2">
+              <PaneTab
+                active={bottomTab === 'assistant'}
+                onClick={() => setBottomTab('assistant')}
+                icon={Sparkles}
+                label="Assistant"
+              />
+              <PaneTab
+                active={bottomTab === 'analysis'}
+                onClick={() => setBottomTab('analysis')}
+                icon={Cpu}
+                label="Analysis"
+                badge={analysis?.diagnostics.length}
+              />
+            </nav>
           </div>
         </div>
       </div>
@@ -538,6 +599,39 @@ function StatusChip({
       <Icon className={`h-3 w-3 ${tone === 'good' ? 'text-run' : 'text-amber-400'}`} aria-hidden />
       <span>{label}</span>
     </span>
+  );
+}
+
+function PaneTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof Cpu;
+  label: string;
+  badge?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+        active
+          ? 'bg-indigo-950/60 text-indigo-200'
+          : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'
+      }`}
+    >
+      <Icon className="h-3 w-3" aria-hidden />
+      {label}
+      {badge !== undefined && badge > 0 && (
+        <span className="rounded-full bg-rose-950/70 px-1.5 text-[9px] text-halt">{badge}</span>
+      )}
+    </button>
   );
 }
 
