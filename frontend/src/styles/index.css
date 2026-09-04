@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: #0b0e14;
+    color: #e2e8f0;
+    font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Monaco and xterm both render their own scrollbars; this styles everything
+     else so panels match the editor rather than showing the OS default. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: #1e293b;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #334155;
+  }
+
+  /* Respect a user's reduced-motion preference: the interface animates a lot. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Ambient glow used behind the primary actions. */
+  .glow-accent {
+    box-shadow: 0 0 24px -6px rgb(99 102 241 / 45%);
+  }
+}
