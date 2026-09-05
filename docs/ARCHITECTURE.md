@@ -1,7 +1,8 @@
 # Architecture
 
-Five layers, each in the language that suits its job. This document explains
-what each one owns and why the seams fall where they do.
+Five layers on the execution path, each in the language that suits its job,
+plus two that sit beside it: the analyzer and the assistant with its model. This
+document explains what each one owns and why the seams fall where they do.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -36,6 +37,16 @@ what each one owns and why the seams fall where they do.
          │ ANALYZER   C++17 · no dependencies · pure analysis     │
          │   Lexer → scope tree → metrics → diagnostics → JSON    │
          └───────────────────────────────────────────────────────┘
+
+         ┌───────────────────────────────────────────────────────┐
+         │ ASSISTANT  Rust · workspace index + model client       │
+         │   0.19ms local answers · agent loop · seven tools      │
+         └───────────────────────┬───────────────────────────────┘
+                                 │  HTTP, Messages format
+         ┌───────────────────────┴───────────────────────────────┐
+         │ MODEL      Python · CodeCraft LM, trained here         │
+         │   Byte-level BPE · transformer · trainer · sampler     │
+         └───────────────────────────────────────────────────────┘
 ```
 
 ## Where the seams are, and why
@@ -61,6 +72,15 @@ Starting or stopping the daemon needs no configuration change.
 **Optional dependencies stay optional.** Redis backs rate limiting when
 reachable and an in-process limiter takes over when it is not. Falling back
 protects a single node; failing open would not.
+
+**The model is a separate layer, reachable over HTTP.** `core/model` trains and
+serves CodeCraft LM, our own transformer, in Python. It is not linked into the
+assistant daemon and the daemon knows nothing about it: the daemon speaks the
+Messages wire format, and the model server answers it. Pointing
+`ANTHROPIC_BASE_URL` at the model server substitutes one for the other without
+either side changing. Keeping the seam at HTTP is what lets the training stack
+live in Python, where the tooling is, while the serving path the editor uses
+stays in Rust.
 
 ## Execution flow
 
@@ -147,6 +167,13 @@ connection: a terminal can only show one stream.
 per connection. `{op: "health"}` reports capacity; `{op: "execute", …}` runs a
 job. The supervisor answers with `accepted`, output frames, and a terminal
 `exit` or `error` frame carrying the isolation metadata for that run.
+
+**Assistant daemon to model server**, the Messages request and its
+server-sent-event stream. `message_start`, `content_block_start`, a run of
+`content_block_delta` frames carrying `text_delta`, then `content_block_stop`,
+`message_delta` with the stop reason and usage, and `message_stop`. The local
+model server in `core/model` implements exactly this sequence, which is why the
+client works against either endpoint unchanged.
 
 ## Adding a runtime
 

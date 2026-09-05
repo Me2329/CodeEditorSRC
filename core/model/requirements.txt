@@ -1,0 +1,11 @@
+# CodeCraft LM - training and serving dependencies.
+#
+# Deliberately two lines. The tokenizer, the corpus builder, the training loop
+# and the HTTP server are written here; torch supplies tensors, autograd and the
+# attention kernel, and numpy supplies the memory-mapped token array.
+#
+# The gateway does not need either of these, which is why they are not in
+# backend/requirements.txt: a deployment that only runs code and never trains a
+# model should not carry a deep learning framework.
+torch>=2.2
+numpy>=1.26

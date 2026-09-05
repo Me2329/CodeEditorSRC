@@ -172,6 +172,42 @@ is named where one exists.
 | 122 | Health endpoint reporting real capability | tier, backends, assistant, runtime counts |
 | 123 | Optional Redis, optional supervisor, optional assistant | each degrades honestly |
 
+## Local language model
+
+Built from scratch in `core/model`: architecture, tokenizer, training loop,
+sampler and weights are all ours. No pretrained weights are downloaded and
+nothing here calls a hosted model.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 124 | Decoder-only transformer written from scratch | no model library, only tensor operations |
+| 125 | RMSNorm with pre-norm blocks | computed in float32 regardless of autocast |
+| 126 | Rotary position embeddings | tested for the relative-position property |
+| 127 | Grouped query attention | shrinks the cache that dominates generation memory |
+| 128 | SwiGLU feed-forward | gate, up and down projections |
+| 129 | Tied input and output embeddings | counted once by the optimiser and the parameter report |
+| 130 | Depth-scaled residual initialisation | the stream's variance does not grow with layers |
+| 131 | Key/value cache | one step per token instead of re-reading the prefix |
+| 132 | Six named sizes, 1.3M to 1.01B | counts derived from the architecture, asserted against real modules |
+| 133 | Byte-level BPE trained on our own corpus | no unknown token, indentation and emoji survive |
+| 134 | Pre-tokeniser proven to cover every character | a test asserts it reconstructs its input |
+| 135 | Corpus builder with file markers | the model learns where one file ends |
+| 136 | Memory-mapped token dataset | a corpus larger than RAM still trains |
+| 137 | Chunked encoding that matches whole-corpus encoding | boundaries never split a whitespace run |
+| 138 | AdamW with decay only on matrices | norm gains and biases excluded |
+| 139 | Cosine schedule with linear warmup | reaches the floor exactly on the final step |
+| 140 | Gradient accumulation and clipping | effective batch without the memory |
+| 141 | Periodic validation, best-only checkpointing | a worse later evaluation cannot overwrite |
+| 142 | Self-describing checkpoints | reload without being told the shape |
+| 143 | Reproducible runs from a seed | asserted by a test |
+| 144 | Training summary with the loss curve | `training.json` |
+| 145 | Temperature, top-k, top-p, repetition penalty | top-p always keeps at least one token |
+| 146 | Streaming generation through an incremental UTF-8 decoder | a character split across tokens arrives whole |
+| 147 | Messages-compatible HTTP endpoint | the assistant client works against it unchanged |
+| 148 | Native `/generate` endpoint | prompt in, tokens with ids out |
+| 149 | Serialised generation behind a lock | PyTorch releases the GIL; two requests would contend |
+| 150 | One make target per stage | sizes, prepare, train, sample, serve |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
@@ -187,3 +223,7 @@ Stated plainly so the list above can be trusted:
   per-language LSP.
 - Git integration.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
+- A locally trained model that is useful for real coding help. The pipeline is
+  real and the largest configuration is genuinely a billion parameters, but a
+  checkpoint trained on one repository for twenty minutes writes text that looks
+  like code and means very little. Capability follows corpus and compute.

@@ -13,12 +13,20 @@ FRONTEND     := frontend
 SUPERVISOR   := core/supervisor
 ASSISTANT    := core/assistant
 ANALYZER     := core/analyzer
+MODEL        := core/model
 VENV         := $(BACKEND)/.venv
 PY           := $(VENV)/bin/python
 PIP          := $(VENV)/bin/pip
 
 GATEWAY_HOST ?= 127.0.0.1
 GATEWAY_PORT ?= 8000
+
+# The model run directory: tokenizer, token stream, checkpoint and training log.
+MODEL_RUN    ?= core/model/runs/demo
+MODEL_SIZE   ?= micro
+MODEL_STEPS  ?= 4000
+MODEL_PORT   ?= 8940
+PROMPT       ?= def 
 
 .PHONY: help
 help:
@@ -40,6 +48,11 @@ setup-backend: $(VENV) ## Create the Python virtualenv and install gateway depen
 $(VENV):
 	@python3 -m venv $(VENV)
 	@$(PIP) install -q --upgrade pip
+
+.PHONY: setup-model
+setup-model: $(VENV) ## Install the model's training dependencies (torch, numpy)
+	@$(PIP) install -q -r $(MODEL)/requirements.txt
+	@printf 'Model dependencies installed.\n'
 
 .PHONY: setup-frontend
 setup-frontend: ## Install frontend dependencies
@@ -102,7 +115,7 @@ dev: ## Run the gateway, the assistant and the frontend together
 
 # ---------------------------------------------------------------- test
 .PHONY: test
-test: test-sandbox test-supervisor test-assistant test-analyzer test-backend test-frontend ## Run every test suite
+test: test-sandbox test-supervisor test-assistant test-analyzer test-backend test-model test-frontend ## Run every test suite
 	@printf '\n\033[1;32mAll suites passed.\033[0m\n\n'
 
 .PHONY: test-sandbox
@@ -125,9 +138,40 @@ test-analyzer: ## Run the C++ analyzer tests
 test-backend: ## Run the gateway test suite
 	@cd $(BACKEND) && .venv/bin/python -m pytest -q
 
+.PHONY: test-model
+test-model: ## Run the language model test suite
+	@cd $(MODEL) && ../../$(PY) -m pytest
+
 .PHONY: test-frontend
 test-frontend: ## Run the frontend unit tests and typecheck
 	@cd $(FRONTEND) && npm run typecheck && npx vitest run
+
+# ---------------------------------------------------------------- model
+.PHONY: model-sizes
+model-sizes: ## List the model sizes and their true parameter counts
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model sizes
+
+.PHONY: model-prepare
+model-prepare: ## Build a corpus and train a tokenizer from this repository
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model prepare \
+		--run ../../$(MODEL_RUN) --roots ../../backend ../../frontend/src ../../core ../../scripts \
+		--vocab 4096
+
+.PHONY: model-train
+model-train: ## Train a checkpoint (MODEL_SIZE, MODEL_STEPS)
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model train \
+		--run ../../$(MODEL_RUN) --size $(MODEL_SIZE) --steps $(MODEL_STEPS) \
+		--lr 8e-4 --warmup 200
+
+.PHONY: model-sample
+model-sample: ## Generate from the trained checkpoint
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model sample \
+		--run ../../$(MODEL_RUN) --prompt "$(PROMPT)"
+
+.PHONY: model-serve
+model-serve: ## Serve the trained model on MODEL_PORT
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model serve \
+		--run ../../$(MODEL_RUN) --port $(MODEL_PORT)
 
 # ---------------------------------------------------------------- ops
 .PHONY: doctor

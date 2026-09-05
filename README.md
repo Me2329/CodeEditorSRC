@@ -140,6 +140,38 @@ model's live API has not been exercised in this repository's test environment,
 which has no credential; the client is covered by integration tests that replay
 real server-sent-event streams against a local mock.
 
+## The model we trained ourselves
+
+`core/model` is a language model built here from nothing: the transformer, the
+byte-level BPE tokenizer, the training loop and the sampler are all written in
+this repository, and a checkpoint exists only because this code trained it.
+No pretrained weights are downloaded.
+
+```bash
+make model-sizes                       # six sizes, 1.3M to 1.01B parameters
+make model-prepare                     # corpus and tokenizer from this repo
+make model-train MODEL_SIZE=micro      # a real checkpoint, minutes on a CPU
+make model-sample PROMPT="def parse("
+make model-serve                       # HTTP on :8940
+```
+
+The parameter counts are derived from the architecture and asserted in the tests
+against what PyTorch allocates, so `xl` really is 1.01 billion parameters. It
+instantiates anywhere with the memory; training it usefully is a cluster job.
+
+Serving exposes a Messages-shaped endpoint, so the Rust assistant client talks
+to it with no code change:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8940
+export ANTHROPIC_API_KEY=local
+```
+
+What that buys you depends entirely on the corpus and the compute. A model
+trained for twenty minutes on one repository produces text shaped like code that
+means very little. The pipeline is real; the capability is whatever you feed it.
+Details in [core/model/README.md](core/model/README.md).
+
 ## Security model
 
 Untrusted code is the entire point, so isolation is the product, not a feature.
@@ -186,6 +218,7 @@ make test   # every suite
 | `make test-analyzer` | lexing, scope trees, diagnostics, JSON well-formedness |
 | `make test-backend` | REST and WebSocket surfaces against the real sandbox |
 | `make test-assistant` | symbol indexing, completion ranking, routing, the model client, the agent loop |
+| `make test-model` | parameter counts, tokenizer round trips, the KV cache, the training loop, the HTTP surfaces |
 | `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences |
 
 The sandbox suite asserts containment rather than mere execution: each test is

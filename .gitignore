@@ -34,3 +34,7 @@ run/
 
 # Backend virtualenv
 backend/.venv/
+
+# Model runs: tokenizers, token streams and checkpoints are reproducible with
+# "make model-prepare && make model-train", so the artefacts stay out of git.
+core/model/runs/
