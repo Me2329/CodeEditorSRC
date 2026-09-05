@@ -137,7 +137,7 @@ whatever the corpus and the compute you give it are worth.
 make test-model
 ```
 
-132 tests: parameter counts against real modules, tokenizer round trips over
+133 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, the training loop
 actually reducing loss on learnable data, the HTTP surfaces driven over a real

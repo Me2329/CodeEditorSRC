@@ -303,3 +303,21 @@ def test_concurrent_requests_are_serialised(base_url: str) -> None:
 
     assert len(results) == 3
     assert all(result["tokens"] > 0 for result in results)
+
+
+def test_a_client_that_disconnects_mid_stream_does_not_break_the_server(
+    base_url: str,
+) -> None:
+    """Closing early must not leave a traceback or a held lock behind."""
+    request = urllib.request.Request(
+        f"{base_url}/generate",
+        json.dumps({"prompt": "def ", "max_tokens": 400, "stream": True}).encode(),
+        {"Content-Type": "application/json"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    response = opener.open(request, timeout=60)
+    response.read(16)
+    response.close()
+
+    # The next request proves the server and the generation lock both survived.
+    assert get(f"{base_url}/health")["status"] == "ok"

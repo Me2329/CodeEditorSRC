@@ -282,12 +282,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error(404, "not_found_error", f"no route for GET {self.path}")
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
-        if self.path.rstrip("/") == "/v1/messages":
-            self._handle_messages()
-        elif self.path.rstrip("/") == "/generate":
-            self._handle_generate()
-        else:
-            self._send_error(404, "not_found_error", f"no route for POST {self.path}")
+        try:
+            if self.path.rstrip("/") == "/v1/messages":
+                self._handle_messages()
+            elif self.path.rstrip("/") == "/generate":
+                self._handle_generate()
+            else:
+                self._send_error(404, "not_found_error", f"no route for POST {self.path}")
+        except (BrokenPipeError, ConnectionResetError):
+            # The client went away mid-stream. Letting this escape would print a
+            # traceback for something entirely normal; raising out of the loop
+            # has already closed the generator and freed the lock.
+            self.close_connection = True
 
     # ------------------------------------------------------------- the routes
 
