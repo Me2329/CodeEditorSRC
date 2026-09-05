@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import sys
 import time
@@ -175,7 +176,10 @@ def command_sample(args: argparse.Namespace) -> int:
     tokens = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long)
     print(args.prompt, end="", flush=True)
 
-    pieces: list[int] = []
+    # An incremental decoder holds back the bytes of a character that spans
+    # several tokens, so nothing prints as a replacement that is about to
+    # become a real character.
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     for token in model.generate(
         tokens,
         max_new_tokens=args.tokens,
@@ -185,13 +189,12 @@ def command_sample(args: argparse.Namespace) -> int:
         repetition_penalty=args.repetition_penalty,
         stop_tokens={tokenizer.special_id("<|end|>")},
     ):
-        pieces.append(token)
-        # Decode the whole tail each time: a multi-byte character can span
-        # several tokens, and decoding one at a time would print replacements.
-        text = tokenizer.decode(pieces)
-        print(text[len(tokenizer.decode(pieces[:-1])) :], end="", flush=True)
+        piece = tokenizer.vocab.get(token)
+        if piece is not None:
+            print(decoder.decode(piece), end="", flush=True)
 
-    print("\n")
+    print(decoder.decode(b"", final=True))
+    print()
     return 0
 
 

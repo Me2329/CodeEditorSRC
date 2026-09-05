@@ -137,11 +137,12 @@ whatever the corpus and the compute you give it are worth.
 make test-model
 ```
 
-124 tests: parameter counts against real modules, tokenizer round trips over
+132 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, the training loop
-actually reducing loss on learnable data, and the HTTP surfaces driven over a
-real socket.
+actually reducing loss on learnable data, the HTTP surfaces driven over a real
+socket, and the whole command line run end to end from source files to
+generated text at a scale that fits in a test.
 
 Two of them exist because they caught real bugs. The pre-tokeniser once excluded
 underscores from its word class and matched them nowhere else, so every
