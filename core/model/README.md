@@ -126,10 +126,50 @@ The daemon sends fields this server does not implement (`thinking`,
 `output_config`, `context_management`); they are ignored rather than rejected.
 What comes back is the same event sequence the client already parses.
 
-Be honest about what that gets you. A model trained for twenty minutes on one
-repository writes text that looks like the language it read and means very
-little. The pipeline is real and the plumbing is real; the capability is
-whatever the corpus and the compute you give it are worth.
+`make model-verify` does the whole thing and checks it: it starts the model
+server, starts the daemon pointed at it, asks for a completion over the daemon's
+Unix socket, and fails if the daemon reports the model unreachable or the reply
+comes back empty.
+
+```
+daemon reports model 'codecraft-local', reachable: True
+65 tokens in 318ms, from local weights
+```
+
+## What a real run actually produced
+
+Numbers from `micro` trained on this repository, so the claims above can be
+checked rather than taken:
+
+| | |
+| --- | --- |
+| Corpus | 210,459 tokens from `backend`, `frontend/src`, `core`, `scripts` |
+| Compression | 3.65 characters per token, 4,096-token vocabulary |
+| Model | 1,311,872 parameters, 4 layers, context 256, dropout 0.15 |
+| Training | 3,000 steps, 12.3M tokens seen, 1,283s on 4 CPU cores |
+| Best validation loss | 4.968 at step 1,250, perplexity 143.8 |
+
+Prompted with `def parse(`, the checkpoint continues:
+
+```python
+def parse(tmp_path) -> None:
+    with client.websocket_connect("/api/v1/ws/ws/execute") as socket:
+        socket.receive_json()
+```
+
+Prompted with `#include <` it emits a run of include lines and then opens a
+namespace. It has learned which language it is in and what that language's
+lines look like. It has not learned to mean anything, and it repeats itself.
+
+Be honest about why. Validation loss bottomed out at step 1,250 and rose after,
+while training loss kept falling to 1.35: 12.3M tokens over a 200k-token corpus
+is sixty passes, and a model with anywhere to put them will memorise. The
+best-checkpoint rule is what stops the saved weights being the overfitted ones.
+Fixing it properly means more corpus, not more steps.
+
+So: the pipeline is real, the architecture is real, and the plumbing to the
+editor is real. The capability is whatever the corpus and the compute you give
+it are worth, and this corpus is one repository.
 
 ## Tests
 

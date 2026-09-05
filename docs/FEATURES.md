@@ -207,6 +207,7 @@ nothing here calls a hosted model.
 | 148 | Native `/generate` endpoint | prompt in, tokens with ids out |
 | 149 | Serialised generation behind a lock | PyTorch releases the GIL; two requests would contend |
 | 150 | One make target per stage | sizes, prepare, train, sample, serve |
+| 151 | End-to-end verification against the assistant daemon | `make model-verify`, fails on an unreachable or empty reply |
 
 ## Not implemented
 

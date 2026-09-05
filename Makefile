@@ -168,6 +168,10 @@ model-sample: ## Generate from the trained checkpoint
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model sample \
 		--run ../../$(MODEL_RUN) --prompt "$(PROMPT)"
 
+.PHONY: model-verify
+model-verify: assistant ## Prove the assistant daemon answers from our own weights
+	@cd $(MODEL) && ../../$(PY) verify_assistant.py --run ../../$(MODEL_RUN)
+
 .PHONY: model-serve
 model-serve: ## Serve the trained model on MODEL_PORT
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model serve \
