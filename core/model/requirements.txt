@@ -7,5 +7,13 @@
 # The gateway does not need either of these, which is why they are not in
 # backend/requirements.txt: a deployment that only runs code and never trains a
 # model should not carry a deep learning framework.
-torch>=2.2
+# A GPU needs a wheel built for its architecture. The default index gives a
+# CUDA build; a 50-series card (Blackwell, sm_120) needs CUDA 12.8 or newer:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# and a machine with no GPU should take the CPU build, which is roughly 200MB
+# instead of 4GB:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# `codecraft_model sizes` reports which architectures the installed wheel
+# actually covers, and says so before a run rather than after it fails.
+torch>=2.7
 numpy>=1.26

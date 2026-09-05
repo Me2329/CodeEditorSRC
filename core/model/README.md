@@ -46,7 +46,83 @@ one-billion-parameter configuration: it instantiates anywhere with the memory,
 but training it usefully is a cluster job and a corpus in the hundreds of
 billions of tokens, not a laptop and this repository.
 
-Sizes up to `small` train usefully on a CPU.
+Sizes up to `small` train usefully on a CPU. `make model-sizes` adds a "fits"
+column when it detects a GPU, comparing each size against that card's memory.
+
+## GPU
+
+Everything picks the best available device on its own. `--device` overrides it:
+`auto`, `cuda`, `cuda:1`, `cpu` or `mps`.
+
+```bash
+make model-train MODEL_SIZE=base        # uses the GPU if there is one
+python -m codecraft_model train --run runs/demo --size base --device cuda
+python -m codecraft_model train --run runs/demo --size base --device cpu   # to compare
+```
+
+**Precision.** On a card that supports it, training and generation run under
+bfloat16 autocast. bfloat16 keeps float32's exponent range and only sheds
+mantissa bits, so gradients cannot underflow and no loss scaling is needed;
+float32 accumulation still happens inside the matmul. Older cards fall back to
+float16, which does need a gradient scaler, and the loop uses one. `--precision`
+forces `bf16`, `fp16` or `fp32`.
+
+Weights, gradients and the optimiser's two moments stay in float32. Mixed
+precision narrows the matmuls, not the master copy, which is what stops small
+updates rounding away to nothing over thousands of steps. So it buys speed, not
+memory.
+
+**Also on by default on a GPU.** TF32 for the remaining float32 matmuls, cuDNN
+benchmarking, and batches staged in pinned memory and copied asynchronously so
+the transfer overlaps the previous step instead of stalling behind it.
+`--compile` adds `torch.compile`, which fuses the graph for a further gain and
+costs one slow first step. It is opt-in because a failed compile should not cost
+you a training run.
+
+### The trap on a 50-series card
+
+An RTX 5080 is Blackwell, compute capability `sm_120`. A PyTorch wheel built for
+an older CUDA installs perfectly cleanly on it and then fails on every single
+kernel launch:
+
+```
+CUDA error: no kernel image is available for execution on the device
+```
+
+Nothing warns you at install time. So the model checks the card's compute
+capability against the architectures the installed wheel was actually built for,
+and prints the wheel to install when they do not match, before doing any work.
+
+You need CUDA 12.8 or newer:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Confirm with `python -c "import torch; print(torch.cuda.get_arch_list())"`. The
+list has to contain `sm_120`.
+
+### What fits in 16 GB
+
+Training holds four float32 copies of every parameter: the weights, their
+gradients, and Adam's two moments. That is 16 bytes per parameter before a
+single activation.
+
+| size | parameters | fixed cost | on a 16 GB card |
+| --- | --- | --- | --- |
+| small | 32.0M | 0.5 GB | comfortable, large batches |
+| base | 100.7M | 1.6 GB | comfortable, the sensible target |
+| large | 673.3M | 10.8 GB | tight; needs a small batch and accumulation |
+| xl | 1.01B | 16.2 GB | does not fit for training |
+
+`xl` loads and generates on a 5080 without trouble, in bfloat16 it is about
+2 GB of weights. Training it is the problem, and the answer is not a bigger
+batch trick: it genuinely needs more memory than the card has. `large` is the
+ceiling for full fine-tuning on one 16 GB card, and only with a small batch and
+gradient accumulation making the effective batch back up.
+
+The real limit is not the card. A 100M-parameter model wants billions of tokens
+to be worth its size, and this repository has 210,459.
 
 ## Pipeline
 
@@ -177,12 +253,16 @@ it are worth, and this corpus is one repository.
 make test-model
 ```
 
-133 tests: parameter counts against real modules, tokenizer round trips over
+159 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, the training loop
 actually reducing loss on learnable data, the HTTP surfaces driven over a real
 socket, and the whole command line run end to end from source files to
 generated text at a scale that fits in a test.
+
+The CUDA paths are tested with stubs rather than skipped. The failure that
+matters most there is a wheel built without the card's architecture, and by
+definition it cannot be reproduced on a machine that has the right one.
 
 Two of them exist because they caught real bugs. The pre-tokeniser once excluded
 underscores from its word class and matched them nowhere else, so every

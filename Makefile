@@ -26,6 +26,8 @@ MODEL_RUN    ?= core/model/runs/demo
 MODEL_SIZE   ?= micro
 MODEL_STEPS  ?= 4000
 MODEL_PORT   ?= 8940
+# auto takes the GPU when there is one. Override with MODEL_DEVICE=cpu.
+MODEL_DEVICE ?= auto
 PROMPT       ?= def 
 
 .PHONY: help
@@ -149,7 +151,7 @@ test-frontend: ## Run the frontend unit tests and typecheck
 # ---------------------------------------------------------------- model
 .PHONY: model-sizes
 model-sizes: ## List the model sizes and their true parameter counts
-	@cd $(MODEL) && ../../$(PY) -m codecraft_model sizes
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model sizes --device $(MODEL_DEVICE)
 
 .PHONY: model-prepare
 model-prepare: ## Build a corpus and train a tokenizer from this repository
@@ -161,12 +163,12 @@ model-prepare: ## Build a corpus and train a tokenizer from this repository
 model-train: ## Train a checkpoint (MODEL_SIZE, MODEL_STEPS)
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model train \
 		--run ../../$(MODEL_RUN) --size $(MODEL_SIZE) --steps $(MODEL_STEPS) \
-		--lr 8e-4 --warmup 200
+		--lr 8e-4 --warmup 200 --device $(MODEL_DEVICE)
 
 .PHONY: model-sample
 model-sample: ## Generate from the trained checkpoint
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model sample \
-		--run ../../$(MODEL_RUN) --prompt "$(PROMPT)"
+		--run ../../$(MODEL_RUN) --prompt "$(PROMPT)" --device $(MODEL_DEVICE)
 
 .PHONY: model-verify
 model-verify: assistant ## Prove the assistant daemon answers from our own weights
@@ -175,7 +177,7 @@ model-verify: assistant ## Prove the assistant daemon answers from our own weigh
 .PHONY: model-serve
 model-serve: ## Serve the trained model on MODEL_PORT
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model serve \
-		--run ../../$(MODEL_RUN) --port $(MODEL_PORT)
+		--run ../../$(MODEL_RUN) --port $(MODEL_PORT) --device $(MODEL_DEVICE)
 
 # ---------------------------------------------------------------- ops
 .PHONY: doctor

@@ -19,6 +19,7 @@ from codecraft_model.train import (
     load_checkpoint,
     save_checkpoint,
     train,
+    uncompiled,
 )
 
 CONFIG = ModelConfig(
@@ -221,3 +222,74 @@ def test_only_the_best_checkpoint_is_kept(learnable_dataset) -> None:
 
     _, payload = load_checkpoint(output / "model.pt")
     assert payload["val_loss"] == pytest.approx(summary["best_val_loss"])
+
+
+# ------------------------------------------------------------------- device
+
+
+def test_the_summary_records_where_and_how_it_ran(learnable_dataset) -> None:
+    train_dataset, val_dataset, output = learnable_dataset
+    summary = train(
+        CodeCraftLM(CONFIG),
+        train_dataset,
+        val_dataset,
+        TrainConfig(steps=2, batch_size=2, block_size=16, warmup_steps=1, eval_every=2),
+        output_dir=output,
+        log=False,
+    )
+
+    assert "CPU" in summary["device"]
+    # No autocast on a CPU, so the run really was float32.
+    assert summary["precision"] == "fp32"
+    assert summary["peak_memory_gb"] is None
+
+
+def test_an_explicit_precision_is_carried_into_the_checkpoint(tmp_path) -> None:
+    """So a run can be reproduced exactly, not approximately."""
+    model = CodeCraftLM(CONFIG)
+    path = tmp_path / "model.pt"
+    save_checkpoint(path, model, None, 1, 1.0, TrainConfig(precision="bf16"))
+
+    assert torch.load(path, weights_only=False)["train_config"]["precision"] == "bf16"
+
+
+def test_uncompiled_returns_the_module_behind_a_wrapper() -> None:
+    """`torch.compile` prefixes every parameter name with `_orig_mod.`."""
+    model = CodeCraftLM(CONFIG)
+    assert uncompiled(model) is model
+
+    class Wrapper:
+        def __init__(self, module):
+            self._orig_mod = module
+
+    assert uncompiled(Wrapper(model)) is model
+
+
+def test_a_checkpoint_from_a_compiled_model_still_loads(tmp_path) -> None:
+    """A compiled run must not produce weights only a compiled run can read."""
+    model = CodeCraftLM(CONFIG)
+    path = tmp_path / "model.pt"
+    save_checkpoint(path, model, None, 1, 1.0, TrainConfig())
+
+    payload = torch.load(path, weights_only=False)
+    payload["model"] = {f"_orig_mod.{k}": v for k, v in payload["model"].items()}
+    torch.save(payload, path)
+
+    reloaded, _ = load_checkpoint(path)
+    assert reloaded.config == CONFIG
+
+
+def test_checkpoint_tensors_are_written_on_the_cpu(tmp_path) -> None:
+    """A checkpoint trained on a GPU has to load on a machine without one."""
+    save_checkpoint(tmp_path / "model.pt", CodeCraftLM(CONFIG), None, 1, 1.0, TrainConfig())
+
+    payload = torch.load(tmp_path / "model.pt", weights_only=False)
+    assert all(tensor.device.type == "cpu" for tensor in payload["model"].values())
+
+
+def test_batches_land_on_the_requested_device(learnable_dataset) -> None:
+    train_dataset, _, _ = learnable_dataset
+    inputs, targets = train_dataset.batch(
+        2, 16, np.random.default_rng(0), device=torch.device("cpu")
+    )
+    assert inputs.device.type == "cpu" and targets.device.type == "cpu"

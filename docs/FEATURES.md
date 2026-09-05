@@ -208,6 +208,17 @@ nothing here calls a hosted model.
 | 149 | Serialised generation behind a lock | PyTorch releases the GIL; two requests would contend |
 | 150 | One make target per stage | sizes, prepare, train, sample, serve |
 | 151 | End-to-end verification against the assistant daemon | `make model-verify`, fails on an unreachable or empty reply |
+| 152 | Automatic device selection | CUDA, then Apple Metal, then CPU; `--device` overrides |
+| 153 | Architecture mismatch detected before the run | a wheel missing the card's `sm_` fails every kernel with no install-time warning |
+| 154 | bfloat16 autocast on capable cards | no loss scaling needed; float32 master weights |
+| 155 | float16 with a gradient scaler on older cards | gradients unscaled before clipping |
+| 156 | TF32 and cuDNN benchmarking on a GPU | free speed for the remaining float32 matmuls |
+| 157 | Pinned, asynchronous batch transfers | the copy overlaps the previous step |
+| 158 | Optional `torch.compile` | opt-in, so a failed compile cannot cost a run |
+| 159 | Checkpoints always written on the CPU | a GPU-trained model loads on a machine without one |
+| 160 | Compiled-model checkpoints stay portable | the `_orig_mod.` prefix is stripped on both sides |
+| 161 | Peak VRAM reported per run | in the training summary |
+| 162 | Size table says what fits on the detected card | with headroom for activations |
 
 ## Not implemented
 

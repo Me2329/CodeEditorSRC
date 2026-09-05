@@ -31,6 +31,13 @@ from pathlib import Path
 import torch
 
 from .config import humanise
+from .device import (
+    architecture_warning,
+    autocast_dtype,
+    describe_device,
+    enable_fast_matmul,
+    resolve_device,
+)
 from .tokenizer import Tokenizer
 from .train import load_checkpoint
 
@@ -47,17 +54,27 @@ FLUSH_TOKEN = -1
 class Engine:
     """A loaded checkpoint, ready to answer requests."""
 
-    def __init__(self, run: Path, device: str = "cpu") -> None:
+    def __init__(self, run: Path, device: str | None = None) -> None:
         checkpoint = run / "model.pt"
         tokenizer_path = run / "tokenizer.json"
         for path in (checkpoint, tokenizer_path):
             if not path.exists():
                 raise FileNotFoundError(f"{path} is missing; run prepare and train first")
 
+        self.device = resolve_device(device)
+        warning = architecture_warning(self.device)
+        if warning:
+            print(f"warning: {warning}")
+        enable_fast_matmul(self.device)
+
+        # Generation is dominated by the output projection and the attention
+        # matmuls, both of which run at roughly twice the speed in bfloat16
+        # with no visible difference in what is sampled.
+        self.amp_dtype = autocast_dtype(self.device)
+
         self.run = run
         self.tokenizer = Tokenizer.load(tokenizer_path)
-        self.model, self.payload = load_checkpoint(checkpoint, device)
-        self.device = torch.device(device)
+        self.model, self.payload = load_checkpoint(checkpoint, self.device)
 
         # PyTorch releases the GIL inside kernels, so two concurrent generations
         # would genuinely run at once and thrash a machine sized for one.
@@ -70,6 +87,11 @@ class Engine:
         config = self.model.config
         return {
             "model": self.name,
+            "device": describe_device(self.device),
+            "precision": (
+                "fp32" if self.amp_dtype is None
+                else str(self.amp_dtype).removeprefix("torch.")
+            ),
             "parameters": self.model.parameter_count(),
             "parameters_human": humanise(self.model.parameter_count()),
             "vocab_size": config.vocab_size,
@@ -107,7 +129,11 @@ class Engine:
 
         tokens = torch.tensor([ids or [self.tokenizer.special_id("<|begin|>")]], dtype=torch.long)
 
-        with self.lock:
+        with self.lock, torch.autocast(
+            device_type=self.device.type,
+            dtype=self.amp_dtype,
+            enabled=self.amp_dtype is not None,
+        ):
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
             for token_id in self.model.generate(
@@ -462,18 +488,22 @@ class ModelServer(ThreadingHTTPServer):
         self.engine = engine
 
 
-def build_server(run: Path, host: str = "127.0.0.1", port: int = 8940) -> ModelServer:
+def build_server(
+    run: Path, host: str = "127.0.0.1", port: int = 8940, device: str | None = None
+) -> ModelServer:
     """Load the checkpoint and bind the socket, without serving yet.
 
     Split out from `serve` so tests can bind port 0 and drive the server on a
     thread of their own.
     """
-    return ModelServer((host, port), Engine(run))
+    return ModelServer((host, port), Engine(run, device))
 
 
-def serve(run: Path, *, host: str = "127.0.0.1", port: int = 8940) -> int:
+def serve(
+    run: Path, *, host: str = "127.0.0.1", port: int = 8940, device: str | None = None
+) -> int:
     try:
-        server = build_server(run, host, port)
+        server = build_server(run, host, port, device)
     except FileNotFoundError as error:
         print(f"error: {error}")
         return 1
@@ -483,6 +513,7 @@ def serve(run: Path, *, host: str = "127.0.0.1", port: int = 8940) -> int:
     print(
         f"CodeCraft LM  {described['parameters_human']} parameters  "
         f"context {described['context']}  val loss {described['val_loss']:.3f}\n"
+        f"running on {described['device']}, precision {described['precision']}\n"
         f"listening on http://{host}:{bound}\n"
         f"  POST /v1/messages   Messages-compatible, set ANTHROPIC_BASE_URL to this\n"
         f"  POST /generate      native prompt completion\n"

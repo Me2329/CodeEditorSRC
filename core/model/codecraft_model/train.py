@@ -4,6 +4,12 @@ AdamW with decoupled weight decay, a cosine schedule with linear warmup,
 gradient accumulation, gradient clipping, and periodic validation. Checkpoints
 carry the configuration alongside the weights, so a saved model can be loaded
 without being told what shape it is.
+
+On a GPU the forward and backward passes run under autocast, in bfloat16 where
+the card supports it. Weights, gradients and the optimiser's moments stay in
+float32: mixed precision means the matmuls are narrow, not the master copy, and
+keeping the master copy wide is what stops small updates rounding away to
+nothing over thousands of steps.
 """
 
 from __future__ import annotations
@@ -19,6 +25,16 @@ import torch
 
 from .config import ModelConfig, humanise
 from .data import TokenDataset
+from .device import (
+    architecture_warning,
+    autocast_dtype,
+    describe_device,
+    enable_fast_matmul,
+    peak_memory_bytes,
+    reset_peak_memory,
+    resolve_device,
+    synchronize,
+)
 from .model import CodeCraftLM
 
 
@@ -45,6 +61,14 @@ class TrainConfig:
     eval_batches: int = 20
     log_every: int = 20
     seed: int = 1337
+
+    # "auto" picks bfloat16 on a card that supports it, float16 on an older one,
+    # and float32 on a CPU. Recorded in the checkpoint so a run is reproducible.
+    precision: str = "auto"
+    # torch.compile fuses the graph, which is a solid speedup on a GPU and costs
+    # a slow first step. Off by default because compilation can fail on an
+    # unusual setup and a failed compile should not cost you a training run.
+    compile_model: bool = False
 
 
 def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Optimizer:
@@ -100,16 +124,36 @@ def evaluate(
     config: TrainConfig,
     generator: np.random.Generator,
     device: torch.device,
+    amp_dtype: torch.dtype | None = None,
 ) -> float:
-    """Mean loss over a fixed number of random validation windows."""
+    """Mean loss over a fixed number of random validation windows.
+
+    Run in the same precision as training, or the reported number describes a
+    model that is not the one being trained.
+    """
     model.eval()
     losses = []
     for _ in range(config.eval_batches):
-        inputs, targets = dataset.batch(config.batch_size, config.block_size, generator)
-        _, loss, _ = model(inputs.to(device), targets=targets.to(device))
+        inputs, targets = dataset.batch(
+            config.batch_size, config.block_size, generator, device=device
+        )
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+        ):
+            _, loss, _ = model(inputs, targets=targets)
         losses.append(loss.item())
     model.train()
     return float(np.mean(losses))
+
+
+def uncompiled(model: CodeCraftLM) -> CodeCraftLM:
+    """The original module behind a `torch.compile` wrapper.
+
+    Compiling prefixes every parameter name with `_orig_mod.`, so a checkpoint
+    written from the wrapper cannot be loaded by anything that did not also
+    compile. Saving the module underneath keeps checkpoints portable.
+    """
+    return getattr(model, "_orig_mod", model)
 
 
 def save_checkpoint(
@@ -122,10 +166,13 @@ def save_checkpoint(
 ) -> None:
     """Write weights plus everything needed to reconstruct or resume."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    model = uncompiled(model)
     payload = {
         "model_config": model.config.to_dict(),
         "train_config": asdict(train_config),
-        "model": model.state_dict(),
+        # Always on the CPU, so a checkpoint written on a GPU loads on a machine
+        # that has none.
+        "model": {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()},
         "step": step,
         "val_loss": val_loss,
     }
@@ -138,10 +185,17 @@ def load_checkpoint(
     path: Path, device: torch.device | str = "cpu"
 ) -> tuple[CodeCraftLM, dict]:
     """Rebuild a model from a checkpoint without being told its shape."""
-    payload = torch.load(path, map_location=device, weights_only=False)
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     config = ModelConfig.from_dict(payload["model_config"])
     model = CodeCraftLM(config)
-    model.load_state_dict(payload["model"])
+
+    # Tolerate a checkpoint written from a compiled model by an older version.
+    state = {
+        name.removeprefix("_orig_mod."): tensor
+        for name, tensor in payload["model"].items()
+    }
+    model.load_state_dict(state)
+
     model.to(device)
     model.eval()
     return model, payload
@@ -158,7 +212,19 @@ def train(
     log: bool = True,
 ) -> dict:
     """Run the training loop and return a record of it."""
-    device = device or torch.device("cpu")
+    device = device or resolve_device()
+
+    warning = architecture_warning(device)
+    if warning and log:
+        print(f"warning: {warning}\n")
+
+    enable_fast_matmul(device)
+    amp_dtype = autocast_dtype(device, config.precision)
+    # float16 has too little exponent range to hold gradients directly: without
+    # scaling, small ones flush to zero and the model silently stops learning.
+    # bfloat16 keeps float32's range, so it needs no scaler.
+    scaler = torch.amp.GradScaler(device.type, enabled=amp_dtype is torch.float16)
+
     model.to(device)
     model.train()
 
@@ -168,16 +234,26 @@ def train(
 
     optimizer = build_optimizer(model, config)
 
+    # The optimiser must be built from the real parameters, so compile after.
+    # It wraps the module, and `uncompiled` unwraps it again for checkpointing.
+    if config.compile_model:
+        if log:
+            print("compiling the model (the first step will be slow)")
+        model = torch.compile(model)
+
     history: list[dict] = []
     best_val = float("inf")
     tokens_per_step = config.batch_size * config.block_size * config.grad_accumulation
+    reset_peak_memory(device)
     started = time.time()
 
     if log:
+        precision_name = "fp32" if amp_dtype is None else str(amp_dtype).removeprefix("torch.")
         print(
-            f"training {humanise(model.parameter_count())} parameters on "
+            f"training {humanise(uncompiled(model).parameter_count())} parameters on "
             f"{len(train_dataset):,} tokens for {config.steps} steps "
-            f"({tokens_per_step:,} tokens/step)"
+            f"({tokens_per_step:,} tokens/step)\n"
+            f"  device: {describe_device(device)}, precision {precision_name}"
         )
 
     for step in range(config.steps):
@@ -190,17 +266,27 @@ def train(
         total_loss = 0.0
         for _ in range(config.grad_accumulation):
             inputs, targets = train_dataset.batch(
-                config.batch_size, config.block_size, generator
+                config.batch_size, config.block_size, generator, device=device
             )
-            _, loss, _ = model(inputs.to(device), targets=targets.to(device))
+            with torch.autocast(
+                device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+            ):
+                _, loss, _ = model(inputs, targets=targets)
             # Scale so accumulated gradients average rather than sum.
-            (loss / config.grad_accumulation).backward()
+            scaler.scale(loss / config.grad_accumulation).backward()
             total_loss += loss.item() / config.grad_accumulation
 
+        # Gradients have to come out of the scaler's units before they can be
+        # clipped, or the norm being compared to the threshold is the scaled one.
+        scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         if log and (step % config.log_every == 0 or step == config.steps - 1):
+            # CUDA queues work asynchronously, so timing without this measures
+            # how fast steps were submitted rather than how fast they ran.
+            synchronize(device)
             elapsed = time.time() - started
             throughput = tokens_per_step * (step + 1) / max(elapsed, 1e-6)
             print(
@@ -212,7 +298,9 @@ def train(
 
         is_last = step == config.steps - 1
         if (step + 1) % config.eval_every == 0 or is_last:
-            val_loss = evaluate(model, val_dataset, config, eval_generator, device)
+            val_loss = evaluate(
+                model, val_dataset, config, eval_generator, device, amp_dtype
+            )
             record = {
                 "step": step + 1,
                 "train_loss": total_loss,
@@ -235,9 +323,14 @@ def train(
                     output_dir / "model.pt", model, optimizer, step + 1, val_loss, config
                 )
 
+    synchronize(device)
     elapsed = time.time() - started
+    peak = peak_memory_bytes(device)
     summary = {
-        "parameters": model.parameter_count(),
+        "parameters": uncompiled(model).parameter_count(),
+        "device": describe_device(device),
+        "precision": "fp32" if amp_dtype is None else str(amp_dtype).removeprefix("torch."),
+        "peak_memory_gb": round(peak / 1e9, 2) if peak else None,
         "steps": config.steps,
         "tokens_seen": tokens_per_step * config.steps,
         "best_val_loss": best_val,
@@ -251,8 +344,9 @@ def train(
     )
 
     if log:
+        memory = f"  peak {summary['peak_memory_gb']}GB" if peak else ""
         print(
             f"\ndone in {elapsed:.1f}s  best val loss {best_val:.3f}  "
-            f"perplexity {summary['best_val_perplexity']:.1f}"
+            f"perplexity {summary['best_val_perplexity']:.1f}{memory}"
         )
     return summary

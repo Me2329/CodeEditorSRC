@@ -19,6 +19,7 @@ from pathlib import Path
 import torch
 
 from .config import SIZES, get_size, humanise
+from .device import describe_device, memory_total_bytes, resolve_device
 from .data import (
     TokenDataset,
     build_corpus,
@@ -31,28 +32,42 @@ from .tokenizer import Tokenizer
 from .train import TrainConfig, load_checkpoint, train
 
 
-def command_sizes(_: argparse.Namespace) -> int:
+def command_sizes(args: argparse.Namespace) -> int:
     """Print every named size with its true parameter count."""
+    device = resolve_device(getattr(args, "device", None))
+    budget = memory_total_bytes(device)
+    print(f"device: {describe_device(device)}\n")
+
     header = (
         f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
-        f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train RAM':>11}"
+        f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train mem':>11}"
+        + ("  fits" if memory_total_bytes(device) is not None else "")
     )
     print(header)
     print("-" * len(header))
 
     for name, config in SIZES.items():
-        memory = config.memory_estimate_bytes()["training"] / 1e9
+        needed = config.memory_estimate_bytes()["training"]
+        # Activations, the batch and allocator fragmentation all sit on top of
+        # the four fixed copies, and roughly a third again covers them.
+        fits = "" if budget is None else ("  yes" if needed * 1.35 < budget else "   no")
         print(
             f"{name:8}{humanise(config.parameter_count()):>12}{config.d_model:>9}"
             f"{config.n_layers:>8}{config.n_heads:>7}{config.n_kv_heads:>5}"
-            f"{config.d_ff:>7}{config.max_seq_len:>9}{memory:>10.1f}G"
+            f"{config.d_ff:>7}{config.max_seq_len:>9}{needed / 1e9:>10.1f}G{fits}"
         )
 
     print(
-        "\nTraining RAM is weights, gradients and two Adam moments at 4 bytes each,\n"
-        "before activations. Sizes up to 'small' train usefully on a CPU; the\n"
-        "larger ones need accelerators and a corpus to match."
+        "\nTraining memory is weights, gradients and two Adam moments at 4 bytes\n"
+        "each, before activations. Mixed precision narrows the matmuls, not those\n"
+        "four copies, so it buys speed rather than room."
     )
+    if budget is not None:
+        print(
+            "The last column allows about a third again for activations and the\n"
+            "batch. A size marked 'no' still trains with a smaller batch, gradient\n"
+            "accumulation to make the effective batch back up, and a shorter block."
+        )
     return 0
 
 
@@ -142,15 +157,23 @@ def command_train(args: argparse.Namespace) -> int:
         warmup_steps=args.warmup,
         eval_every=args.eval_every,
         seed=args.seed,
+        precision=args.precision,
+        compile_model=args.compile,
     )
 
-    torch.set_num_threads(args.threads)
+    device = resolve_device(args.device)
+    # Threads matter on a CPU run and are irrelevant on a GPU one, where the
+    # host thread only queues work.
+    if device.type == "cpu":
+        torch.set_num_threads(args.threads)
+
     summary = train(
         model,
         TokenDataset(run / "train.bin", metadata["dtype"]),
         TokenDataset(run / "val.bin", metadata["dtype"]),
         train_config,
         output_dir=run,
+        device=device,
     )
 
     print(f"\ncheckpoint written to {run / 'model.pt'}")
@@ -165,15 +188,17 @@ def command_sample(args: argparse.Namespace) -> int:
         print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
         return 1
 
+    device = resolve_device(args.device)
     tokenizer = Tokenizer.load(run / "tokenizer.json")
-    model, payload = load_checkpoint(checkpoint)
+    model, payload = load_checkpoint(checkpoint, device)
 
     print(
         f"# {humanise(model.parameter_count())} parameters, "
-        f"step {payload['step']}, val loss {payload['val_loss']:.3f}\n"
+        f"step {payload['step']}, val loss {payload['val_loss']:.3f}, "
+        f"on {describe_device(device)}\n"
     )
 
-    tokens = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long)
+    tokens = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long, device=device)
     print(args.prompt, end="", flush=True)
 
     # An incremental decoder holds back the bytes of a character that spans
@@ -201,7 +226,7 @@ def command_sample(args: argparse.Namespace) -> int:
 def command_serve(args: argparse.Namespace) -> int:
     from .serve import serve
 
-    return serve(Path(args.run), host=args.host, port=args.port)
+    return serve(Path(args.run), host=args.host, port=args.port, device=args.device)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -211,9 +236,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("sizes", help="list the named model sizes").set_defaults(
-        func=command_sizes
-    )
+    def add_device(parser_: argparse.ArgumentParser) -> None:
+        parser_.add_argument(
+            "--device",
+            default="auto",
+            help="auto, cuda, cuda:1, cpu or mps (auto takes the best available)",
+        )
+
+    sizes = subparsers.add_parser("sizes", help="list the named model sizes")
+    add_device(sizes)
+    sizes.set_defaults(func=command_sizes)
 
     prepare = subparsers.add_parser("prepare", help="build a corpus and tokenizer")
     prepare.add_argument("--run", required=True, help="directory for this run")
@@ -240,8 +272,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="dropout rate; worth setting on a corpus small enough to memorise",
     )
-    trainer.add_argument("--threads", type=int, default=4)
+    trainer.add_argument("--threads", type=int, default=4, help="CPU threads; ignored on a GPU")
     trainer.add_argument("--seed", type=int, default=1337)
+    add_device(trainer)
+    trainer.add_argument(
+        "--precision",
+        default="auto",
+        choices=["auto", "bf16", "fp16", "fp32"],
+        help="auto picks bf16 on a card that supports it",
+    )
+    trainer.add_argument(
+        "--compile",
+        action="store_true",
+        help="fuse the graph with torch.compile: faster steps, slow first step",
+    )
     trainer.set_defaults(func=command_train)
 
     sampler = subparsers.add_parser("sample", help="generate from a checkpoint")
@@ -252,16 +296,24 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--top-k", type=int, default=40)
     sampler.add_argument("--top-p", type=float, default=0.95)
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
+    add_device(sampler)
     sampler.set_defaults(func=command_sample)
 
     server = subparsers.add_parser("serve", help="serve the model over HTTP")
     server.add_argument("--run", required=True)
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8940)
+    add_device(server)
     server.set_defaults(func=command_serve)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RuntimeError as error:
+        # A device that cannot be used is a configuration problem with a known
+        # fix, not a crash. The message already names the fix.
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

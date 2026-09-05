@@ -159,6 +159,12 @@ The parameter counts are derived from the architecture and asserted in the tests
 against what PyTorch allocates, so `xl` really is 1.01 billion parameters. It
 instantiates anywhere with the memory; training it usefully is a cluster job.
 
+Training and generation take the GPU automatically when there is one, in
+bfloat16 with TF32, pinned asynchronous transfers and optional `torch.compile`.
+On a 50-series card, check that PyTorch was built for it: a wheel without
+`sm_120` installs cleanly and then fails on every kernel launch, so the model
+checks the card against the wheel and names the fix before doing any work.
+
 Serving exposes a Messages-shaped endpoint, so the Rust assistant client talks
 to it with no code change:
 

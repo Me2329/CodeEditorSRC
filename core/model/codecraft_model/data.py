@@ -177,11 +177,17 @@ class TokenDataset:
         batch_size: int,
         block_size: int,
         generator: np.random.Generator,
+        device=None,
     ):
         """One batch of (inputs, targets), each (batch_size, block_size).
 
         Targets are the inputs shifted by one: the model predicts the next token
         at every position, so a window of length n gives n training signals.
+
+        When `device` is a GPU the batch is staged in pinned memory and copied
+        asynchronously, so the transfer overlaps the previous step's compute
+        instead of stalling behind it. Pinned pages cannot be swapped out, which
+        is what lets the copy engine run without the CPU.
         """
         import torch
 
@@ -197,7 +203,16 @@ class TokenDataset:
         targets = np.stack([self.tokens[s + 1 : s + 1 + block_size] for s in starts])
 
         # astype(int64) because embedding lookups need long indices.
-        return (
-            torch.from_numpy(inputs.astype(np.int64)),
-            torch.from_numpy(targets.astype(np.int64)),
-        )
+        inputs = torch.from_numpy(inputs.astype(np.int64))
+        targets = torch.from_numpy(targets.astype(np.int64))
+
+        if device is None:
+            return inputs, targets
+
+        device = torch.device(device)
+        if device.type == "cuda":
+            return (
+                inputs.pin_memory().to(device, non_blocking=True),
+                targets.pin_memory().to(device, non_blocking=True),
+            )
+        return inputs.to(device), targets.to(device)
