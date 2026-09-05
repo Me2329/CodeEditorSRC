@@ -14,15 +14,16 @@
 //! Usage:
 //!   codecraft-assistant [--socket PATH] [--model ID]
 
-use codecraft_assistant::{index, local, protocol, remote};
+use codecraft_assistant::{agent, index, local, protocol, remote, tools};
 
 use index::Index;
-use protocol::{Frame, Request, Route};
+use protocol::{AgentEvent, Frame, Request, Route};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -281,6 +282,126 @@ fn handle(stream: UnixStream, client: &remote::Client) -> std::io::Result<()> {
             )?;
         }
 
+        Request::Agent {
+            messages,
+            workspace,
+            mode,
+            effort,
+            max_steps,
+        } => {
+            let Some(credential) = remote::resolve_credential() else {
+                send(
+                    &mut writer,
+                    Frame::Error {
+                        message: "The agent needs a Claude credential. Set ANTHROPIC_API_KEY \
+                                  or run `ant auth login`, then restart the assistant."
+                            .to_string(),
+                    },
+                )?;
+                let _ = writer.shutdown(Shutdown::Both);
+                return Ok(());
+            };
+
+            let mode = match mode.as_str() {
+                "plan" => tools::Mode::Plan,
+                _ => tools::Mode::Auto,
+            };
+
+            // The agent works in its own directory, so a failed task cannot
+            // leave the user's editor half-edited: changes reach the editor
+            // only through the file events this loop emits.
+            let scratch = match AgentWorkspace::create(&workspace) {
+                Ok(scratch) => scratch,
+                Err(e) => {
+                    send(&mut writer, Frame::Error { message: e })?;
+                    let _ = writer.shutdown(Shutdown::Both);
+                    return Ok(());
+                }
+            };
+
+            send(
+                &mut writer,
+                Frame::Routed {
+                    engine: "agent",
+                    model: client.model().to_string(),
+                },
+            )?;
+
+            // A second reader watches for a cancel frame while the loop runs.
+            let cancel = Arc::new(AtomicBool::new(false));
+            let watcher = spawn_cancel_watcher(reader, Arc::clone(&cancel));
+
+            let mut conversation: Vec<serde_json::Value> = messages
+                .iter()
+                .filter(|turn| turn.role == "user" || turn.role == "assistant")
+                .map(|turn| serde_json::json!({"role": turn.role, "content": turn.content}))
+                .collect();
+
+            let config = agent::AgentConfig {
+                mode,
+                effort,
+                max_steps: max_steps.clamp(1, 60),
+            };
+
+            let mut steps = 0usize;
+            let mut total_cost = 0.0f64;
+
+            let outcome = agent::run(
+                client,
+                &credential,
+                scratch.workspace(),
+                &mut conversation,
+                &config,
+                &cancel,
+                |event| {
+                    if let AgentEvent::Step { number, .. } = &event {
+                        steps = *number;
+                    }
+                    if let AgentEvent::TurnUsage { usage } = &event {
+                        total_cost += usage.cost_cents;
+                    }
+                    let encoded = serde_json::to_string(&event)
+                        .map_err(|e| format!("could not encode an agent event: {e}"))?;
+                    writer
+                        .write_all(encoded.as_bytes())
+                        .and_then(|_| writer.write_all(b"\n"))
+                        .and_then(|_| writer.flush())
+                        .map_err(|e| e.to_string())
+                },
+            );
+
+            cancel.store(true, Ordering::Relaxed);
+            drop(watcher);
+
+            let final_event = match outcome {
+                Ok(agent::Completion::Finished) => AgentEvent::Finished {
+                    reason: "finished".to_string(),
+                    steps,
+                    elapsed_ms: started.elapsed().as_millis(),
+                    total_cost_cents: total_cost,
+                },
+                Ok(agent::Completion::StepLimit) => AgentEvent::Finished {
+                    reason: "step_limit".to_string(),
+                    steps,
+                    elapsed_ms: started.elapsed().as_millis(),
+                    total_cost_cents: total_cost,
+                },
+                Ok(agent::Completion::Cancelled) => AgentEvent::Finished {
+                    reason: "cancelled".to_string(),
+                    steps,
+                    elapsed_ms: started.elapsed().as_millis(),
+                    total_cost_cents: total_cost,
+                },
+                Err(message) => AgentEvent::Failed { message },
+            };
+
+            if let Ok(encoded) = serde_json::to_string(&final_event) {
+                let _ = writer.write_all(encoded.as_bytes());
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+            }
+        }
+
         Request::Chat {
             messages,
             workspace,
@@ -376,6 +497,9 @@ fn handle(stream: UnixStream, client: &remote::Client) -> std::io::Result<()> {
                     remote::Event::Thinking(text) => {
                         send(&mut writer, Frame::Thinking { text }).map_err(|e| e.to_string())
                     }
+                    // The plain chat path offers no tools, so a tool request
+                    // here would be the model inventing one.
+                    remote::Event::ToolStarted { .. } | remote::Event::ToolReady { .. } => Ok(()),
                     remote::Event::Done { usage, stop_reason } => {
                         // A turn cut short at the output ceiling looks identical
                         // to a finished one unless it is called out.
@@ -414,6 +538,87 @@ fn handle(stream: UnixStream, client: &remote::Client) -> std::io::Result<()> {
 
     let _ = writer.shutdown(Shutdown::Both);
     Ok(())
+}
+
+/// Watch the connection for a cancel frame while the agent runs.
+///
+/// The reader is moved into the thread: once the agent has started, the only
+/// thing the client can send is a control frame.
+fn spawn_cancel_watcher(
+    reader: impl BufRead + Send + 'static,
+    cancel: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                if value.get("op").and_then(|v| v.as_str()) == Some("cancel") {
+                    cancel.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+    })
+}
+
+/// An agent's scratch workspace, removed when the task ends.
+struct AgentWorkspace {
+    workspace: tools::Workspace,
+}
+
+impl AgentWorkspace {
+    fn create(source: &protocol::Workspace) -> Result<Self, String> {
+        // Workspaces live outside /tmp: the sandbox replaces /tmp with its own
+        // tmpfs, which would shadow a workspace mounted underneath it.
+        let root = PathBuf::from(
+            std::env::var("CODECRAFT_WORKSPACE_ROOT")
+                .unwrap_or_else(|_| "/var/tmp/codecraft".to_string()),
+        )
+        .join(format!(
+            "agent_{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        std::fs::create_dir_all(&root)
+            .map_err(|e| format!("cannot create the agent workspace: {e}"))?;
+
+        let workspace = tools::Workspace::new(
+            root,
+            if source.language.is_empty() {
+                "python".to_string()
+            } else {
+                source.language.clone()
+            },
+            PathBuf::from(
+                std::env::var("CODECRAFT_RUNNER")
+                    .unwrap_or_else(|_| "scripts/sandbox_runner.sh".to_string()),
+            ),
+            PathBuf::from(std::env::var("CODECRAFT_ANALYZER").unwrap_or_else(|_| {
+                "core/analyzer/build/codecraft-analyzer".to_string()
+            })),
+        );
+
+        for file in &source.files {
+            workspace.write(&file.name, &file.content)?;
+        }
+        Ok(AgentWorkspace { workspace })
+    }
+
+    fn workspace(&self) -> &tools::Workspace {
+        &self.workspace
+    }
+}
+
+impl Drop for AgentWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.workspace.root());
+    }
 }
 
 /// The streaming closure borrows the writer mutably, so reporting a late error

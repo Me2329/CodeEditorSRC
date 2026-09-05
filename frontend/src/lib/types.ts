@@ -174,3 +174,37 @@ export interface AssistantCompletion {
   detail: string;
   score: number;
 }
+
+// ---------------------------------------------------------------------------
+// Agent
+// ---------------------------------------------------------------------------
+
+/** Plan investigates without changing anything; auto has the full tool set. */
+export type AgentMode = 'plan' | 'auto';
+
+export type AgentFrame =
+  | {
+      type: 'ready';
+      available: boolean;
+      model: string;
+      remote_available: boolean;
+      reason: string;
+    }
+  | { type: 'step'; number: number; of: number }
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool_started'; id: string; name: string }
+  | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; id: string; name: string; is_error: boolean; summary: string }
+  | { type: 'file_changed'; name: string; content: string }
+  | { type: 'turn_usage'; usage: AssistantUsage }
+  | {
+      type: 'finished';
+      reason: 'finished' | 'step_limit' | 'cancelled' | string;
+      steps: number;
+      elapsed_ms: number;
+      total_cost_cents: number;
+    }
+  | { type: 'failed'; message: string }
+  | { type: 'cancelling' }
+  | { type: 'idle' };

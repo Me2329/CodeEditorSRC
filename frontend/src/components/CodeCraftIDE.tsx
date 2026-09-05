@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Zap,
   Upload,
   Wifi,
   WifiOff,
@@ -47,6 +48,7 @@ import type {
   VirtualFile,
 } from '../lib/types';
 import { createFile, loadWorkspace, saveWorkspace, validateFileName } from '../lib/vfs';
+import { AgentPanel } from './AgentPanel';
 import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { CommandPalette, type PaletteMode } from './CommandPalette';
@@ -82,7 +84,7 @@ export function CodeCraftIDE() {
   const [analysisPending, setAnalysisPending] = useState(false);
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
-  const [bottomTab, setBottomTab] = useState<'assistant' | 'analysis'>('assistant');
+  const [bottomTab, setBottomTab] = useState<'agent' | 'assistant' | 'analysis'>('agent');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
 
@@ -95,6 +97,9 @@ export function CodeCraftIDE() {
   const [statusNote, setStatusNote] = useState('');
 
   const importRef = useRef<HTMLInputElement>(null);
+  // Read inside a stable callback, so applying an agent edit does not need to
+  // re-subscribe every time the active file changes.
+  const activeFileNameRef = useRef('');
 
   const terminalRef = useRef<TerminalHandle>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -181,6 +186,8 @@ export function CodeCraftIDE() {
     setFiles([file]);
     setActiveFileId(file.id);
   }, []);
+
+  activeFileNameRef.current = activeFile?.name ?? '';
 
   // Persist the workspace so a refresh does not discard work in progress.
   useEffect(() => {
@@ -516,6 +523,39 @@ export function CodeCraftIDE() {
     [handleRun],
   );
 
+  /**
+   * Apply a file the agent wrote.
+   *
+   * An existing file is edited through Monaco so a single undo takes the change
+   * back; a new one is added to the workspace.
+   */
+  const handleAgentFileChanged = useCallback(
+    (name: string, content: string) => {
+      setFiles((previous) => {
+        const existing = previous.find((file) => file.name === name);
+        if (!existing) {
+          const created = createFile(name, content);
+          setActiveFileId(created.id);
+          return [...previous, created];
+        }
+        return previous.map((file) =>
+          file.id === existing.id ? { ...file, content } : file,
+        );
+      });
+
+      // When the agent edits the file on screen, push it through the editor so
+      // the change lands in its undo stack rather than replacing the model.
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      if (editor && model && name === activeFileNameRef.current && model.getValue() !== content) {
+        editor.executeEdits('codecraft-agent', [
+          { range: model.getFullModelRange(), text: content, forceMoveMarkers: true },
+        ]);
+      }
+    },
+    [],
+  );
+
   /** Replace the active file with code the assistant produced. */
   const handleApplyCode = useCallback(
     (code: string) => {
@@ -837,14 +877,29 @@ export function CodeCraftIDE() {
           )}
         </main>
 
-        <div className={`flex flex-col ${zen ? 'hidden' : 'w-[38%] min-w-[320px]'}`}>
+        {/*
+          min-h-0 lets the flex children shrink below their content height. The
+          terminal reports an intrinsic height from its rendered rows, and
+          without this it pushes past the column and paints over the panel
+          below, swallowing clicks meant for that panel's header.
+        */}
+        <div
+          className={`flex min-h-0 flex-col overflow-hidden ${
+            zen ? 'hidden' : 'w-[38%] min-w-[320px]'
+          }`}
+        >
           <RunConfigPanel
             stdin={stdin}
             argsText={argsText}
             onStdinChange={setStdin}
             onArgsChange={setArgsText}
           />
-          <div className="min-h-0 flex-1">
+          {/*
+            A flex container, not a block: the terminal sizes itself to its
+            rendered rows, and inside a block wrapper it grows past the
+            available height and paints over the panel below it.
+          */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {isPreviewRuntime ? (
               <PreviewPane files={files} entryName={activeRuntime?.entry ?? 'index.html'} />
             ) : (
@@ -857,7 +912,14 @@ export function CodeCraftIDE() {
             )}
           </div>
           <div className="flex h-[46%] min-h-0 flex-col border-t border-slate-800/80 bg-panel">
-            {bottomTab === 'assistant' ? (
+            {bottomTab === 'agent' ? (
+              <AgentPanel
+                language={language}
+                files={files}
+                activeFileName={activeFile?.name ?? ''}
+                onFileChanged={handleAgentFileChanged}
+              />
+            ) : bottomTab === 'assistant' ? (
               <AssistantPanel
                 language={language}
                 files={files}
@@ -885,6 +947,12 @@ export function CodeCraftIDE() {
             )}
 
             <nav className="flex h-8 shrink-0 items-center gap-1 border-t border-slate-800/80 bg-charcoal px-2">
+              <PaneTab
+                active={bottomTab === 'agent'}
+                onClick={() => setBottomTab('agent')}
+                icon={Zap}
+                label="Agent"
+              />
               <PaneTab
                 active={bottomTab === 'assistant'}
                 onClick={() => setBottomTab('assistant')}

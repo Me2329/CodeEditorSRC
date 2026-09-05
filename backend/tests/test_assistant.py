@@ -186,3 +186,96 @@ def test_completion_endpoint_reports_a_missing_daemon_clearly(client, tmp_path) 
 
     assert response.status_code == 503
     assert "not running" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
+
+
+def test_agent_socket_announces_the_daemon(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        ready = socket.receive_json()
+
+    assert ready["type"] == "ready"
+    assert "available" in ready
+    assert "remote_available" in ready
+
+
+def test_agent_socket_rejects_an_empty_task(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "run", "messages": [], "workspace": {"language": "python"}})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Describe the task" in frame["message"]
+
+
+def test_agent_socket_rejects_an_unknown_action(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "explode"})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Unknown action" in frame["message"]
+
+
+def test_agent_cancel_with_nothing_running_is_harmless(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "cancel"})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "idle"
+
+
+def test_agent_socket_rejects_a_hostile_workspace(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json(
+            {
+                "action": "run",
+                "messages": [{"role": "user", "content": "go"}],
+                "workspace": {
+                    "language": "python",
+                    "files": [{"name": "../../etc/cron.d/pwn", "content": "x"}],
+                },
+            }
+        )
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Invalid workspace" in frame["message"]
+
+
+async def test_agent_run_without_a_credential_fails_honestly(daemon) -> None:
+    """The daemon must say a credential is missing rather than doing nothing."""
+    from app import assistant as assistant_module
+
+    session = await assistant_module.start_agent(
+        {
+            "op": "agent",
+            "messages": [{"role": "user", "content": "add a docstring"}],
+            "workspace": {
+                "language": "python",
+                "files": [{"name": "main.py", "content": "def f(): pass\n"}],
+            },
+            "mode": "auto",
+            "effort": "high",
+            "max_steps": 4,
+        }
+    )
+    try:
+        frames = [frame async for frame in session.events(timeout=30.0)]
+    finally:
+        await session.close()
+
+    # Either it ran (a credential exists here) or it said why it could not.
+    kinds = {frame.get("type") for frame in frames}
+    if "error" in kinds:
+        message = next(f["message"] for f in frames if f.get("type") == "error")
+        assert "credential" in message.lower()
+    else:
+        assert kinds & {"step", "failed", "finished"}

@@ -124,10 +124,76 @@ pub enum Request {
         #[serde(default)]
         workspace: Workspace,
     },
+    /// Run an agent task against the workspace.
+    Agent {
+        /// The instruction, plus any earlier turns of this conversation.
+        #[serde(default)]
+        messages: Vec<ChatTurn>,
+        #[serde(default)]
+        workspace: Workspace,
+        /// "plan" for read-only, "auto" for the full tool surface.
+        #[serde(default = "default_agent_mode")]
+        mode: String,
+        #[serde(default)]
+        effort: Effort,
+        #[serde(default = "default_max_steps")]
+        max_steps: usize,
+    },
+}
+
+fn default_agent_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_max_steps() -> usize {
+    24
 }
 
 fn default_limit() -> usize {
     25
+}
+
+/// Events the agent loop reports as it works.
+///
+/// Separate from `Frame` because an agent turn is a sequence of steps rather
+/// than a single answer, and the interface renders them differently.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// A new model turn is starting.
+    Step { number: usize, of: usize },
+    /// A chunk of the agent's visible narration.
+    Text { text: String },
+    /// A summarised reasoning step.
+    Thinking { text: String },
+    /// The agent has begun requesting a tool; arguments are still streaming.
+    ToolStarted { id: String, name: String },
+    /// A tool request with its arguments, shortened for display.
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// What the tool returned.
+    ToolResult {
+        id: String,
+        name: String,
+        is_error: bool,
+        summary: String,
+    },
+    /// A file the agent changed, so the editor can update live.
+    FileChanged { name: String, content: String },
+    /// Token usage and cost for one model turn.
+    TurnUsage { usage: Usage },
+    /// The task ended.
+    Finished {
+        reason: String,
+        steps: usize,
+        elapsed_ms: u128,
+        total_cost_cents: f64,
+    },
+    /// The task failed.
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]

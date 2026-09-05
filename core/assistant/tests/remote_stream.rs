@@ -73,19 +73,35 @@ fn serve(mut stream: TcpStream, status: u16, body: &str) -> String {
     captured
 }
 
-/// A successful turn: thinking summary, two text chunks, usage and a clean stop.
+/// A successful turn: a signed thinking block then text, with the block
+/// lifecycle the real API sends.
 const SUCCESS_STREAM: &str = concat!(
     "event: message_start\n",
     r#"data: {"type":"message_start","message":{"usage":{"input_tokens":1200}}}"#,
     "\n\n",
-    "event: content_block_delta\n",
-    r#"data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Checking the loop bounds."}}"#,
+    "event: content_block_start\n",
+    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
     "\n\n",
     "event: content_block_delta\n",
-    r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"The loop "}}"#,
+    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Checking the loop bounds."}}"#,
     "\n\n",
     "event: content_block_delta\n",
-    r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"is off by one."}}"#,
+    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}"#,
+    "\n\n",
+    "event: content_block_stop\n",
+    r#"data: {"type":"content_block_stop","index":0}"#,
+    "\n\n",
+    "event: content_block_start\n",
+    r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+    "\n\n",
+    "event: content_block_delta\n",
+    r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The loop "}}"#,
+    "\n\n",
+    "event: content_block_delta\n",
+    r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"is off by one."}}"#,
+    "\n\n",
+    "event: content_block_stop\n",
+    r#"data: {"type":"content_block_stop","index":1}"#,
     "\n\n",
     "event: ping\n",
     r#"data: {"type":"ping"}"#,
@@ -95,6 +111,44 @@ const SUCCESS_STREAM: &str = concat!(
     "\n\n",
     "event: message_stop\n",
     r#"data: {"type":"message_stop"}"#,
+    "\n\n",
+);
+
+/// A turn that requests two tools at once, one with streamed JSON arguments and
+/// one with none at all.
+const TOOL_STREAM: &str = concat!(
+    "event: message_start\n",
+    r#"data: {"type":"message_start","message":{"usage":{"input_tokens":900}}}"#,
+    "\n\n",
+    "event: content_block_start\n",
+    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+    "\n\n",
+    "event: content_block_delta\n",
+    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-xyz"}}"#,
+    "\n\n",
+    "event: content_block_stop\n",
+    r#"data: {"type":"content_block_stop","index":0}"#,
+    "\n\n",
+    "event: content_block_start\n",
+    r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}"#,
+    "\n\n",
+    "event: content_block_delta\n",
+    r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#,
+    "\n\n",
+    "event: content_block_delta\n",
+    r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"main.py\"}"}}"#,
+    "\n\n",
+    "event: content_block_stop\n",
+    r#"data: {"type":"content_block_stop","index":1}"#,
+    "\n\n",
+    "event: content_block_start\n",
+    r#"data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"list_files","input":{}}}"#,
+    "\n\n",
+    "event: content_block_stop\n",
+    r#"data: {"type":"content_block_stop","index":2}"#,
+    "\n\n",
+    "event: message_delta\n",
+    r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":120}}"#,
     "\n\n",
 );
 
@@ -145,6 +199,7 @@ fn streams_text_and_thinking_then_reports_usage_and_cost() {
                     Event::Text(chunk) => text.push_str(&chunk),
                     Event::Thinking(chunk) => thinking.push_str(&chunk),
                     Event::Done { usage: u, .. } => usage = Some(u),
+                    _ => {}
                 }
                 Ok(())
             },
@@ -299,4 +354,157 @@ fn a_conversation_with_no_user_turn_is_rejected_before_any_request() {
         .expect_err("an empty conversation must be rejected");
 
     assert!(error.contains("no user message"), "got: {error}");
+}
+
+
+// ---------------------------------------------------------------------------
+// Tool use
+// ---------------------------------------------------------------------------
+
+fn tool_schema(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "description": "test tool",
+        "strict": true,
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+#[test]
+fn assembles_streamed_tool_calls_including_one_with_no_arguments() {
+    let (url, _requests) = mock_api(200, TOOL_STREAM);
+    let client = client_for(url);
+
+    let mut started = Vec::new();
+    let mut ready = Vec::new();
+
+    let turn = client
+        .stream_turn(
+            &Credential::ApiKey("k".into()),
+            "sys",
+            &[serde_json::json!({"role": "user", "content": "read main.py"})],
+            &[tool_schema("read_file"), tool_schema("list_files")],
+            Effort::High,
+            |event| {
+                match event {
+                    Event::ToolStarted { name, .. } => started.push(name),
+                    Event::ToolReady { name, input, .. } => ready.push((name, input)),
+                    _ => {}
+                }
+                Ok(())
+            },
+        )
+        .expect("stream should succeed");
+
+    assert_eq!(started, vec!["read_file", "list_files"]);
+    assert_eq!(turn.stop_reason, "tool_use");
+    assert_eq!(turn.tool_calls.len(), 2);
+
+    // Arguments streamed as JSON fragments must reassemble exactly.
+    assert_eq!(turn.tool_calls[0].name, "read_file");
+    assert_eq!(turn.tool_calls[0].input["path"], "main.py");
+    assert_eq!(turn.tool_calls[0].id, "toolu_1");
+
+    // A tool with no arguments is an empty object, not a parse failure.
+    assert_eq!(turn.tool_calls[1].name, "list_files");
+    assert_eq!(turn.tool_calls[1].input, serde_json::json!({}));
+
+    assert_eq!(ready.len(), 2);
+}
+
+#[test]
+fn thinking_blocks_come_back_whole_for_replay() {
+    // A thinking block's signature binds it to the conversation prefix, so the
+    // turn must be replayable byte for byte in the next request.
+    let (url, _requests) = mock_api(200, TOOL_STREAM);
+    let client = client_for(url);
+
+    let turn = client
+        .stream_turn(
+            &Credential::ApiKey("k".into()),
+            "sys",
+            &[serde_json::json!({"role": "user", "content": "go"})],
+            &[tool_schema("read_file")],
+            Effort::High,
+            |_| Ok(()),
+        )
+        .expect("stream should succeed");
+
+    let thinking = turn
+        .content
+        .iter()
+        .find(|block| block["type"] == "thinking")
+        .expect("the turn carries a thinking block");
+    assert_eq!(thinking["signature"], "sig-xyz");
+
+    // Blocks stay in the order the model produced them.
+    let kinds: Vec<&str> = turn
+        .content
+        .iter()
+        .map(|block| block["type"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(kinds, vec!["thinking", "tool_use", "tool_use"]);
+}
+
+#[test]
+fn a_tool_request_never_forces_tool_choice() {
+    // Forced tool choice is rejected on this model class, so the request must
+    // offer the tools and leave the decision to the model.
+    let (url, requests) = mock_api(200, TOOL_STREAM);
+    let client = client_for(url);
+
+    client
+        .stream_turn(
+            &Credential::ApiKey("k".into()),
+            "sys",
+            &[serde_json::json!({"role": "user", "content": "go"})],
+            &[tool_schema("read_file")],
+            Effort::High,
+            |_| Ok(()),
+        )
+        .expect("stream should succeed");
+
+    let request = requests.recv().expect("captured request");
+    let body: serde_json::Value =
+        serde_json::from_str(&request[request.find("{\"").expect("json body")..])
+            .expect("valid json body");
+
+    assert_eq!(body["tool_choice"]["type"], "auto");
+    assert_eq!(body["tools"][0]["strict"], true);
+    assert_eq!(body["tools"][0]["input_schema"]["additionalProperties"], false);
+    // Stale tool output is cleared rather than the transcript being edited.
+    assert_eq!(
+        body["context_management"]["edits"][0]["type"],
+        "clear_tool_uses_20250919"
+    );
+    assert!(request.contains("context-management-2025-06-27"));
+}
+
+#[test]
+fn a_plain_chat_request_offers_no_tools() {
+    let (url, requests) = mock_api(200, SUCCESS_STREAM);
+    let client = client_for(url);
+
+    client
+        .stream_chat(
+            &Credential::ApiKey("k".into()),
+            "sys",
+            &user_turn("hello"),
+            Effort::High,
+            |_| Ok(()),
+        )
+        .expect("stream should succeed");
+
+    let request = requests.recv().expect("captured request");
+    let body: serde_json::Value =
+        serde_json::from_str(&request[request.find("{\"").expect("json body")..])
+            .expect("valid json body");
+
+    assert!(body.get("tools").is_none());
+    assert!(body.get("tool_choice").is_none());
 }

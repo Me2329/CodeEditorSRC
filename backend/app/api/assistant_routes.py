@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -188,5 +189,155 @@ async def assistant_socket(websocket: WebSocket) -> None:
     except Exception:  # pragma: no cover - defensive
         logger.exception("Assistant socket handler failed")
     finally:
+        if websocket.client_state is WebSocketState.CONNECTED:
+            await websocket.close()
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
+
+
+@router.websocket("/api/v1/ws/agent")
+async def agent_socket(websocket: WebSocket) -> None:
+    """Run an agent task, streaming every step.
+
+    Client sends {action: "run", messages, workspace, mode, effort, max_steps},
+    and may send {action: "cancel"} at any time while a task is running.
+
+    The server relays the daemon's own event stream: step, text, thinking,
+    tool_started, tool_call, tool_result, file_changed, turn_usage, and one
+    terminal finished or failed.
+    """
+    await websocket.accept()
+
+    daemon = await assistant.health()
+    await websocket.send_json(
+        {
+            "type": "ready",
+            "available": daemon is not None,
+            "model": (daemon or {}).get("model", ""),
+            "remote_available": (daemon or {}).get("remote_available", False),
+            "reason": (daemon or {}).get(
+                "remote_reason", "" if daemon else "The assistant daemon is not running."
+            ),
+        }
+    )
+
+    session: assistant.AgentSession | None = None
+    task: asyncio.Task | None = None
+
+    async def pump(active: assistant.AgentSession) -> None:
+        """Relay the daemon's events until the run ends."""
+        try:
+            async for frame in active.events(assistant.AGENT_TIMEOUT_SECONDS):
+                if websocket.client_state is not WebSocketState.CONNECTED:
+                    break
+                await websocket.send_json(frame)
+        except Exception:
+            logger.exception("Agent stream failed")
+            if websocket.client_state is WebSocketState.CONNECTED:
+                await websocket.send_json(
+                    {"type": "failed", "message": "The agent backend failed."}
+                )
+        finally:
+            await active.close()
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            if len(raw) > MAX_FRAME_BYTES:
+                await websocket.send_json(
+                    {"type": "failed", "message": "Request frame is too large."}
+                )
+                continue
+
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json(
+                    {"type": "failed", "message": "Request is not valid JSON."}
+                )
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json(
+                    {"type": "failed", "message": "Request must be a JSON object."}
+                )
+                continue
+
+            action = message.get("action", "run")
+
+            if action == "cancel":
+                if session is not None and task is not None and not task.done():
+                    await session.cancel()
+                    await websocket.send_json({"type": "cancelling"})
+                else:
+                    await websocket.send_json({"type": "idle"})
+                continue
+
+            if action != "run":
+                await websocket.send_json(
+                    {"type": "failed", "message": f"Unknown action '{action}'."}
+                )
+                continue
+
+            if task is not None and not task.done():
+                await websocket.send_json(
+                    {"type": "failed", "message": "A task is already running."}
+                )
+                continue
+
+            try:
+                context = WorkspaceContext.model_validate(message.get("workspace", {}))
+            except Exception as exc:
+                await websocket.send_json(
+                    {"type": "failed", "message": f"Invalid workspace: {exc}"}
+                )
+                continue
+
+            history = message.get("messages", [])
+            if not isinstance(history, list) or not history:
+                await websocket.send_json(
+                    {"type": "failed", "message": "Describe the task first."}
+                )
+                continue
+
+            request = {
+                "op": "agent",
+                "messages": [
+                    {
+                        "role": str(turn.get("role", "user")),
+                        "content": str(turn.get("content", "")),
+                    }
+                    for turn in history[-MAX_HISTORY_TURNS:]
+                    if isinstance(turn, dict)
+                ],
+                "workspace": context.payload(),
+                "mode": message.get("mode", "auto"),
+                "effort": message.get("effort", "high"),
+                "max_steps": int(message.get("max_steps", 24)),
+            }
+
+            try:
+                session = await assistant.start_agent(request)
+            except assistant.AssistantUnavailable as exc:
+                await websocket.send_json({"type": "failed", "message": str(exc)})
+                continue
+
+            task = asyncio.create_task(pump(session))
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("Agent socket handler failed")
+    finally:
+        # A closed tab must not leave an agent editing files forever.
+        if session is not None:
+            await session.cancel()
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(task, timeout=15.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                task.cancel()
         if websocket.client_state is WebSocketState.CONNECTED:
             await websocket.close()

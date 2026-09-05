@@ -19,6 +19,8 @@ CONNECT_TIMEOUT_SECONDS = 5.0
 LOCAL_TIMEOUT_SECONDS = 15.0
 # A long-horizon model turn can legitimately run for minutes.
 CHAT_TIMEOUT_SECONDS = 600.0
+# An agent task runs many model turns, each of which can itself be slow.
+AGENT_TIMEOUT_SECONDS = 1800.0
 # One frame per line; a model answer can carry a long line of code.
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 
@@ -84,6 +86,66 @@ async def stream(request: dict[str, Any], timeout: float) -> AsyncIterator[dict[
             await writer.wait_closed()
         except OSError:
             pass
+
+
+class AgentSession:
+    """One agent run.
+
+    Unlike the other operations the connection stays open after the request, so
+    a cancel can be delivered while the loop is working.
+    """
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def events(self, timeout: float) -> AsyncIterator[dict[str, Any]]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                yield {"type": "failed", "message": "The agent exceeded its time limit."}
+                return
+            try:
+                line = await asyncio.wait_for(self._reader.readline(), timeout=remaining)
+            except asyncio.TimeoutError:
+                yield {"type": "failed", "message": "The agent exceeded its time limit."}
+                return
+            except ValueError:
+                yield {"type": "failed", "message": "The agent sent an oversized frame."}
+                return
+
+            if not line:
+                return
+            try:
+                yield json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+
+    async def cancel(self) -> None:
+        """Ask the daemon to stop after the current step."""
+        try:
+            self._writer.write(b'{"op":"cancel"}\n')
+            await self._writer.drain()
+        except (OSError, ConnectionError):
+            # The daemon already closed; the run is over either way.
+            pass
+
+    async def close(self) -> None:
+        self._writer.close()
+        try:
+            await self._writer.wait_closed()
+        except OSError:
+            pass
+
+
+async def start_agent(request: dict[str, Any]) -> AgentSession:
+    """Send an agent request and return the live session."""
+    reader, writer = await _connect()
+    writer.write((json.dumps(request) + "\n").encode("utf-8"))
+    await writer.drain()
+    # Deliberately no write_eof: the socket stays writable for a cancel.
+    return AgentSession(reader, writer)
 
 
 async def collect(request: dict[str, Any], timeout: float = LOCAL_TIMEOUT_SECONDS) -> list[dict]:

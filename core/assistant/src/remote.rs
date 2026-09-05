@@ -25,6 +25,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
+const CONTEXT_EDITING_BETA: &str = "context-management-2025-06-27";
 
 /// Published rates in US dollars per million tokens, used to report what a
 /// conversation cost. Unknown models report zero rather than a wrong number.
@@ -92,8 +93,38 @@ pub enum Event {
     Text(String),
     /// A summarised reasoning step.
     Thinking(String),
+    /// The model has started requesting a tool; its arguments are still
+    /// streaming. Emitted early so the interface can show the call at once.
+    ToolStarted { id: String, name: String },
+    /// A tool request whose arguments are complete and parsed.
+    ToolReady {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// The turn finished.
     Done { usage: Usage, stop_reason: String },
+}
+
+/// Everything one assistant turn produced.
+pub struct Turn {
+    /// The assistant's content blocks exactly as the server sent them.
+    ///
+    /// Replayed verbatim in the next request. Thinking blocks carry a signature
+    /// binding them to the conversation prefix that produced them, so stripping
+    /// or rewriting any of this invalidates every later thinking block.
+    pub content: Vec<serde_json::Value>,
+    pub stop_reason: String,
+    pub usage: Usage,
+    /// Tool requests from this turn, in the order the model made them.
+    pub tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
 }
 
 /// Hostname of a URL, lowercased and without port or credentials.
@@ -191,15 +222,18 @@ impl Client {
         &self.model
     }
 
-    /// Send one turn and stream the reply. `on_event` is called as data arrives;
-    /// returning an error from it aborts the stream.
+    /// Send one turn and stream the reply. `on_event` is called as data
+    /// arrives; returning an error from it aborts the stream.
+    ///
+    /// This is the plain conversational path. The agent uses `stream_turn`,
+    /// which takes pre-built messages and a tool set.
     pub fn stream_chat<F>(
         &self,
         credential: &Credential,
         system: &str,
         history: &[ChatTurn],
         effort: Effort,
-        mut on_event: F,
+        on_event: F,
     ) -> Result<(), String>
     where
         F: FnMut(Event) -> Result<(), String>,
@@ -212,11 +246,31 @@ impl Client {
             .map(|turn| serde_json::json!({"role": turn.role, "content": turn.content}))
             .collect();
 
+        self.stream_turn(credential, system, &messages, &[], effort, on_event)
+            .map(|_| ())
+    }
+
+    /// Run one assistant turn against a prepared message array and tool set.
+    ///
+    /// Returns the turn's content blocks so the caller can append them to the
+    /// conversation unchanged, which is what keeps an agent loop append-only.
+    pub fn stream_turn<F>(
+        &self,
+        credential: &Credential,
+        system: &str,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        effort: Effort,
+        mut on_event: F,
+    ) -> Result<Turn, String>
+    where
+        F: FnMut(Event) -> Result<(), String>,
+    {
         if messages.is_empty() {
             return Err("conversation contains no user message".to_string());
         }
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             // Streaming is required at this output size, and it is what lets the
             // panel show the first tokens immediately.
@@ -232,6 +286,24 @@ impl Client {
             "fallbacks": "default",
         });
 
+        if !tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(tools.to_vec());
+            // Forced tool choice is rejected on this model class, so the tool
+            // set is offered and the system prompt states the expectation.
+            // `strict` on each tool keeps the schema-valid-arguments guarantee.
+            body["tool_choice"] = serde_json::json!({"type": "auto"});
+        }
+
+        let mut betas = vec![FALLBACK_BETA.to_string()];
+        if !tools.is_empty() {
+            // Long agent runs accumulate stale tool output; clearing it keeps
+            // the transcript lean without editing history, which would
+            // invalidate the thinking blocks.
+            body["context_management"] =
+                serde_json::json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+            betas.push(CONTEXT_EDITING_BETA.to_string());
+        }
+
         let mut request = self
             .agent
             .post(format!("{}/v1/messages", self.base_url))
@@ -242,11 +314,14 @@ impl Client {
         request = match credential {
             Credential::ApiKey(key) => request
                 .header("x-api-key", key.as_str())
-                .header("anthropic-beta", FALLBACK_BETA),
+                .header("anthropic-beta", &betas.join(",")),
             // OAuth tokens go on Authorization, and need their own beta flag.
-            Credential::OAuth(token) => request
-                .header("authorization", &format!("Bearer {token}"))
-                .header("anthropic-beta", &format!("{OAUTH_BETA},{FALLBACK_BETA}")),
+            Credential::OAuth(token) => {
+                betas.insert(0, OAUTH_BETA.to_string());
+                request
+                    .header("authorization", &format!("Bearer {token}"))
+                    .header("anthropic-beta", &betas.join(","))
+            }
         };
 
         let response = request
@@ -265,11 +340,18 @@ impl Client {
         self.consume_stream(response, &mut on_event)
     }
 
+    /// Reassemble the turn from its server-sent events.
+    ///
+    /// Each content block is rebuilt from the object the server opened it with,
+    /// then filled in from its deltas. Starting from the server's own object
+    /// rather than constructing one means a block keeps every field it arrived
+    /// with, including a thinking block's signature, which the next request has
+    /// to echo back unchanged.
     fn consume_stream<F>(
         &self,
         response: ureq::http::Response<ureq::Body>,
         on_event: &mut F,
-    ) -> Result<(), String>
+    ) -> Result<Turn, String>
     where
         F: FnMut(Event) -> Result<(), String>,
     {
@@ -277,6 +359,9 @@ impl Client {
         let mut usage = Usage::default();
         let mut stop_reason = String::new();
         let mut refusal_detail: Option<String> = None;
+
+        // Blocks under construction, keyed by their index in the response.
+        let mut blocks: Vec<(usize, serde_json::Value, String)> = Vec::new();
 
         for line in reader.lines() {
             let line = line.map_err(|e| format!("stream ended unexpectedly: {e}"))?;
@@ -290,33 +375,104 @@ impl Client {
                 continue;
             };
 
+            let index = event.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
             match event.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "content_block_start" => {
+                    let Some(block) = event.get("content_block") else { continue };
+                    let kind = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                    if kind == "tool_use" {
+                        let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        on_event(Event::ToolStarted {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                        })?;
+                    }
+
+                    blocks.push((index, block.clone(), String::new()));
+                }
+
                 "content_block_delta" => {
-                    let delta = event.get("delta");
-                    let kind = delta
-                        .and_then(|d| d.get("type"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let Some(delta) = event.get("delta") else { continue };
+                    let kind = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                    // A delta should always follow a content_block_start. If one
+                    // goes missing, open the block from the delta's own type
+                    // rather than dropping the content on the floor.
+                    if !blocks.iter().any(|(i, _, _)| *i == index) {
+                        let inferred = match kind {
+                            "thinking_delta" | "signature_delta" => "thinking",
+                            "input_json_delta" => "tool_use",
+                            _ => "text",
+                        };
+                        blocks.push((index, serde_json::json!({"type": inferred}), String::new()));
+                    }
+
+                    let Some(slot) = blocks.iter_mut().find(|(i, _, _)| *i == index) else {
+                        continue;
+                    };
+
                     match kind {
                         "text_delta" => {
-                            if let Some(text) =
-                                delta.and_then(|d| d.get("text")).and_then(|v| v.as_str())
-                            {
+                            if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                append_field(&mut slot.1, "text", text);
                                 on_event(Event::Text(text.to_string()))?;
                             }
                         }
                         "thinking_delta" => {
-                            if let Some(text) =
-                                delta.and_then(|d| d.get("thinking")).and_then(|v| v.as_str())
-                            {
+                            if let Some(text) = delta.get("thinking").and_then(|v| v.as_str()) {
+                                append_field(&mut slot.1, "thinking", text);
                                 if !text.is_empty() {
                                     on_event(Event::Thinking(text.to_string()))?;
                                 }
                             }
                         }
+                        "signature_delta" => {
+                            // The signature binds the block to this conversation
+                            // and must survive into the replayed history.
+                            if let Some(text) = delta.get("signature").and_then(|v| v.as_str()) {
+                                append_field(&mut slot.1, "signature", text);
+                            }
+                        }
+                        "input_json_delta" => {
+                            // Tool arguments arrive as JSON fragments and are
+                            // only valid once the block closes.
+                            if let Some(fragment) =
+                                delta.get("partial_json").and_then(|v| v.as_str())
+                            {
+                                slot.2.push_str(fragment);
+                            }
+                        }
                         _ => {}
                     }
                 }
+
+                "content_block_stop" => {
+                    let Some(slot) = blocks.iter_mut().find(|(i, _, _)| *i == index) else {
+                        continue;
+                    };
+                    if slot.1.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                        // An empty argument stream means a tool with no
+                        // parameters, which is an empty object, not a parse error.
+                        let parsed: serde_json::Value = if slot.2.trim().is_empty() {
+                            serde_json::json!({})
+                        } else {
+                            serde_json::from_str(&slot.2).map_err(|e| {
+                                format!("the model sent malformed tool arguments: {e}")
+                            })?
+                        };
+                        slot.1["input"] = parsed.clone();
+
+                        on_event(Event::ToolReady {
+                            id: slot.1["id"].as_str().unwrap_or("").to_string(),
+                            name: slot.1["name"].as_str().unwrap_or("").to_string(),
+                            input: parsed,
+                        })?;
+                    }
+                }
+
                 "message_start" => {
                     if let Some(input) = event
                         .pointer("/message/usage/input_tokens")
@@ -325,6 +481,7 @@ impl Client {
                         usage.input_tokens = input;
                     }
                 }
+
                 "message_delta" => {
                     if let Some(output) = event
                         .pointer("/usage/output_tokens")
@@ -332,9 +489,7 @@ impl Client {
                     {
                         usage.output_tokens = output;
                     }
-                    if let Some(reason) = event
-                        .pointer("/delta/stop_reason")
-                        .and_then(|v| v.as_str())
+                    if let Some(reason) = event.pointer("/delta/stop_reason").and_then(|v| v.as_str())
                     {
                         stop_reason = reason.to_string();
                     }
@@ -356,6 +511,7 @@ impl Client {
                         });
                     }
                 }
+
                 "error" => {
                     let message = event
                         .pointer("/error/message")
@@ -363,6 +519,7 @@ impl Client {
                         .unwrap_or("the API reported an error mid-stream");
                     return Err(message.to_string());
                 }
+
                 _ => {}
             }
         }
@@ -381,7 +538,39 @@ impl Client {
             / 1_000_000.0
             * 100.0;
 
-        on_event(Event::Done { usage, stop_reason })
+        blocks.sort_by_key(|(index, _, _)| *index);
+        let content: Vec<serde_json::Value> =
+            blocks.iter().map(|(_, block, _)| block.clone()).collect();
+
+        let tool_calls = content
+            .iter()
+            .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
+            .map(|block| ToolCall {
+                id: block["id"].as_str().unwrap_or("").to_string(),
+                name: block["name"].as_str().unwrap_or("").to_string(),
+                input: block.get("input").cloned().unwrap_or(serde_json::json!({})),
+            })
+            .collect();
+
+        on_event(Event::Done {
+            usage: usage.clone(),
+            stop_reason: stop_reason.clone(),
+        })?;
+
+        Ok(Turn {
+            content,
+            stop_reason,
+            usage,
+            tool_calls,
+        })
+    }
+}
+
+/// Append streamed text onto a string field, creating it when absent.
+fn append_field(block: &mut serde_json::Value, field: &str, text: &str) {
+    match block.get_mut(field).and_then(|v| v.as_str()).map(str::to_string) {
+        Some(existing) => block[field] = serde_json::Value::String(existing + text),
+        None => block[field] = serde_json::Value::String(text.to_string()),
     }
 }
 
