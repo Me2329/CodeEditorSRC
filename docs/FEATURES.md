@@ -69,6 +69,26 @@ is named where one exists.
 | 49 | Copy a code block | |
 | 50 | Honest degradation with no credential | says so rather than inventing an answer |
 
+## Agent
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 109 | Autonomous task loop | read, change, run, fix, report |
+| 110 | Seven sandboxed tools | read, list, search, analyze, write, edit, run |
+| 111 | `run_code` through the real sandbox | same isolation, limits and airgap as Run |
+| 112 | Plan mode | write and run tools withheld by the daemon, not the interface |
+| 113 | Step budget | a run that is going nowhere stops and says so |
+| 114 | Cancel mid-run | still answers the pending call, so the transcript stays resumable |
+| 115 | Live step timeline | tool, arguments and result for every step |
+| 116 | Expandable tool detail | full arguments and output on demand |
+| 117 | File changes applied as undoable edits | one Ctrl+Z takes any of them back |
+| 118 | Append-only transcript | required by signed thinking blocks |
+| 119 | Strict, closed tool schemas | replaces the removed forced-tool-choice guarantee |
+| 120 | Parallel tool results batched into one message | keeps parallel calls working |
+| 121 | Errors reported as errors | an ambiguous edit changes nothing |
+| 122 | Server-side context editing | stale tool output cleared without editing history |
+| 123 | Per-run cost and step accounting | in cents, from published rates |
+
 ## Editing
 
 | # | Feature | Notes |
@@ -158,6 +178,8 @@ Stated plainly so the list above can be trusted:
 
 - Real-time collaborative editing. The architecture notes describe it; no
   CRDT or presence layer exists.
+- Per-tool approval prompts. The agent's safety boundary is plan mode plus the
+  sandbox, not a confirmation on each write.
 - A debugger. No breakpoints, stepping or variable inspection.
 - Package installation inside a run. The sandbox is airgapped, so a program
   cannot fetch dependencies.

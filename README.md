@@ -55,9 +55,13 @@ to a shell, so `$(whoami)` arrives as literal text.
 **Live output.** stdout and stderr stream to the terminal as they are produced,
 not after the process exits. Abort stops a running job in under two seconds.
 
+**An agent that does the work.** Describe a task and it reads your files,
+edits them, runs the result in the sandbox, reads the output and fixes what
+broke. Every step is shown as it happens. See below.
+
 **An assistant with two engines.** Lookups are answered from a local workspace
 index in about 0.2ms with no network; anything needing reasoning streams from
-Claude Mythos 5.1. Every reply says which engine produced it. See below.
+Claude Mythos 5.1. Every reply says which engine produced it.
 
 **Static analysis** as you type: a scope tree, size and complexity metrics, and
 diagnostics for unbalanced delimiters and unterminated literals, mirrored into
@@ -70,6 +74,41 @@ and states plainly what is *not* built.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
 execution backend.
+
+## The agent
+
+Describe a task. The agent reads the code, changes it, runs it in the isolated
+sandbox, reads the output, and fixes what broke, then tells you what it did.
+
+It has seven tools, all confined to one ephemeral workspace: read a file, list
+files, search, run the static analyzer, write a file, edit an exact snippet, and
+run the workspace. `run_code` goes through the same runner the Run button uses,
+so the agent inherits the same isolation, the same limits and the same airgap.
+It cannot reach your filesystem, open a socket, or run a command of its own
+choosing.
+
+**Plan mode** is the safe default for unfamiliar work: the agent investigates
+and proposes, and the write and run tools are withheld by the daemon rather than
+merely hidden in the interface. **Auto mode** lets it change files and run them.
+Either way its edits arrive in the editor as undoable changes, and a step budget
+stops a run that is going nowhere.
+
+Every step appears as it happens - the tool, its arguments, and what came back -
+so you can audit a run rather than discovering afterwards what it did.
+
+Getting the loop right on this model class takes more than calling the API in a
+loop, and the details are unforgiving:
+
+- A thinking block is signed against the exact conversation prefix that produced
+  it, so the transcript is strictly append-only and every turn is replayed
+  unchanged. Trimming history in the client would invalidate it; that job is
+  left to server-side context editing.
+- Forced tool choice is rejected here, so tools are offered with `auto` and each
+  schema is strict and closed, which is what replaces the guarantee.
+- All results from one turn go back in a single message, or the model learns to
+  stop calling tools in parallel.
+- A failing tool returns an error rather than a fabricated success, and an edit
+  whose snippet is missing or ambiguous changes nothing at all.
 
 ## The assistant
 
@@ -146,7 +185,7 @@ make test   # every suite
 | `make test-supervisor` | protocol parsing, path traversal, limit clamping, workspace lifecycle |
 | `make test-analyzer` | lexing, scope trees, diagnostics, JSON well-formedness |
 | `make test-backend` | REST and WebSocket surfaces against the real sandbox |
-| `make test-assistant` | symbol indexing, completion ranking, routing, the model client |
+| `make test-assistant` | symbol indexing, completion ranking, routing, the model client, the agent loop |
 | `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences |
 
 The sandbox suite asserts containment rather than mere execution: each test is
