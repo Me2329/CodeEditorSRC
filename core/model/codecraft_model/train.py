@@ -70,6 +70,10 @@ class TrainConfig:
     # unusual setup and a failed compile should not cost you a training run.
     compile_model: bool = False
 
+    # Stop after this many hours regardless of step count. A long run on a
+    # machine someone also uses needs an end it can be relied on to reach.
+    max_hours: float | None = None
+
 
 def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Optimizer:
     """AdamW with weight decay applied only where it belongs.
@@ -210,6 +214,7 @@ def train(
     output_dir: Path,
     device: torch.device | None = None,
     log: bool = True,
+    resume_from: Path | None = None,
 ) -> dict:
     """Run the training loop and return a record of it."""
     device = device or resolve_device()
@@ -234,6 +239,26 @@ def train(
 
     optimizer = build_optimizer(model, config)
 
+    start_step = 0
+    if resume_from is not None and resume_from.exists():
+        payload = torch.load(resume_from, map_location="cpu", weights_only=False)
+        state = {
+            name.removeprefix("_orig_mod."): tensor
+            for name, tensor in payload["model"].items()
+        }
+        model.load_state_dict(state)
+        model.to(device)
+        if "optimizer" in payload:
+            # Without the moments the first steps after a resume are effectively
+            # unwarmed, and the loss visibly jumps.
+            optimizer.load_state_dict(payload["optimizer"])
+        start_step = int(payload.get("step", 0))
+        best_val_seen = float(payload.get("val_loss", float("inf")))
+        if log:
+            print(f"resuming from step {start_step}, val loss {best_val_seen:.3f}")
+    else:
+        best_val_seen = float("inf")
+
     # The optimiser must be built from the real parameters, so compile after.
     # It wraps the module, and `uncompiled` unwraps it again for checkpointing.
     if config.compile_model:
@@ -242,7 +267,7 @@ def train(
         model = torch.compile(model)
 
     history: list[dict] = []
-    best_val = float("inf")
+    best_val = best_val_seen
     tokens_per_step = config.batch_size * config.block_size * config.grad_accumulation
     reset_peak_memory(device)
     started = time.time()
@@ -256,7 +281,17 @@ def train(
             f"  device: {describe_device(device)}, precision {precision_name}"
         )
 
-    for step in range(config.steps):
+    deadline = started + config.max_hours * 3600 if config.max_hours else None
+    stopped_early = False
+    last_step = start_step - 1
+
+    for step in range(start_step, config.steps):
+        # Checked at the top but acted on at the bottom, so the step in progress
+        # finishes and is evaluated and checkpointed before the loop exits.
+        # Breaking here instead would throw away everything since the last eval.
+        out_of_time = deadline is not None and time.time() > deadline
+
+        last_step = step
         learning_rate = learning_rate_at(step, config)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate
@@ -296,7 +331,7 @@ def train(
                 flush=True,
             )
 
-        is_last = step == config.steps - 1
+        is_last = step == config.steps - 1 or out_of_time
         if (step + 1) % config.eval_every == 0 or is_last:
             val_loss = evaluate(
                 model, val_dataset, config, eval_generator, device, amp_dtype
@@ -323,11 +358,27 @@ def train(
                     output_dir / "model.pt", model, optimizer, step + 1, val_loss, config
                 )
 
+            # A separate file that always holds the latest state, so a run that
+            # is stopped and resumed continues from where it was rather than
+            # from whichever step happened to score best.
+            save_checkpoint(
+                output_dir / "latest.pt", model, optimizer, step + 1, val_loss, config
+            )
+
+        if out_of_time:
+            if log:
+                print(f"\nreached the {config.max_hours}h budget at step {step + 1}")
+            stopped_early = True
+            break
+
     synchronize(device)
     elapsed = time.time() - started
     peak = peak_memory_bytes(device)
     summary = {
         "parameters": uncompiled(model).parameter_count(),
+        "started_at_step": start_step,
+        "steps_run": last_step + 1 - start_step,
+        "stopped_early": stopped_early,
         "device": describe_device(device),
         "precision": "fp32" if amp_dtype is None else str(amp_dtype).removeprefix("torch."),
         "peak_memory_gb": round(peak / 1e9, 2) if peak else None,

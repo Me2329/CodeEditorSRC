@@ -24,6 +24,9 @@ GATEWAY_PORT ?= 8000
 # The model run directory: tokenizer, token stream, checkpoint and training log.
 MODEL_RUN    ?= core/model/runs/demo
 MODEL_SIZE   ?= micro
+# Directories normally skipped that a large corpus deliberately wants.
+MODEL_ALLOW  ?= site-packages node_modules
+MODEL_VOCAB  ?= 4096
 MODEL_STEPS  ?= 4000
 MODEL_PORT   ?= 8940
 # auto takes the GPU when there is one. Override with MODEL_DEVICE=cpu.
@@ -157,7 +160,7 @@ model-sizes: ## List the model sizes and their true parameter counts
 model-prepare: ## Build a corpus and train a tokenizer from this repository
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model prepare \
 		--run ../../$(MODEL_RUN) --roots ../../backend ../../frontend/src ../../core ../../scripts \
-		--vocab 4096
+		--vocab $(MODEL_VOCAB) --allow-dir $(MODEL_ALLOW)
 
 .PHONY: model-train
 model-train: ## Train a checkpoint (MODEL_SIZE, MODEL_STEPS)

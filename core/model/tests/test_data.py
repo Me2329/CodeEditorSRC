@@ -8,12 +8,16 @@ import numpy as np
 import pytest
 
 from codecraft_model.data import (
+    FILE_MARKER,
     MAX_FILE_BYTES,
     MIN_FILE_BYTES,
     TokenDataset,
     build_corpus,
     collect_sources,
     encode_corpus,
+    iter_sources,
+    sample_corpus,
+    stream_dataset,
     write_dataset,
 )
 from codecraft_model.tokenizer import Tokenizer
@@ -135,3 +139,86 @@ def test_a_dataset_too_short_for_the_block_says_so(tmp_path) -> None:
     write_dataset(np.arange(20, dtype=np.uint16), tmp_path)
     with pytest.raises(ValueError, match="too few"):
         TokenDataset(tmp_path / "train.bin").batch(2, 64, np.random.default_rng(0))
+
+
+# ------------------------------------------------------------------ streaming
+
+
+def test_iteration_yields_the_same_files_as_collection(tree) -> None:
+    assert list(iter_sources([tree])) == collect_sources([tree])
+
+
+def test_iteration_does_not_read_the_whole_tree_first(tree) -> None:
+    """A generator, so a corpus larger than memory can be streamed."""
+    stream = iter_sources([tree])
+    first = next(stream)
+    assert isinstance(first, tuple) and len(first) == 2
+
+
+def test_allowed_directories_are_no_longer_skipped(tree) -> None:
+    """`node_modules` is noise inside a project and the point of the exercise
+    when the goal is a large corpus of library code."""
+    default = {path for path, _ in collect_sources([tree])}
+    widened = {path for path, _ in collect_sources([tree], allow=frozenset({"node_modules"}))}
+
+    assert not any("node_modules" in path for path in default)
+    assert any("node_modules" in path for path in widened)
+    assert default < widened
+
+
+def test_allowing_one_directory_does_not_allow_the_others(tree) -> None:
+    paths = {p for p, _ in collect_sources([tree], allow=frozenset({"node_modules"}))}
+    assert not any("__pycache__" in path for path in paths)
+
+
+def test_the_tokenizer_sample_is_capped(tree) -> None:
+    """Training a vocabulary on a whole large corpus is wasted work."""
+    assert len(sample_corpus([tree], max_bytes=500)) < 2000
+
+
+def test_the_sample_carries_file_markers(tree) -> None:
+    assert FILE_MARKER in sample_corpus([tree], max_bytes=100_000)
+
+
+def test_a_stride_spreads_the_sample_across_the_tree(tree) -> None:
+    """Taking the first n files would sample whichever directory sorts first."""
+    every = sample_corpus([tree], max_bytes=10_000_000, stride=1)
+    every_other = sample_corpus([tree], max_bytes=10_000_000, stride=2)
+    assert len(every_other) < len(every)
+
+
+def test_streaming_a_dataset_writes_the_same_files_as_the_batch_path(tree) -> None:
+    tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
+    directory = tree / "run"
+
+    metadata = stream_dataset([tree], tokenizer, directory)
+
+    assert (directory / "train.bin").exists() and (directory / "val.bin").exists()
+    assert metadata["train_tokens"] + metadata["val_tokens"] == metadata["total_tokens"]
+    assert metadata["files"] == 2
+    assert metadata["characters_per_token"] > 1
+
+
+def test_streaming_leaves_no_intermediate_file_behind(tree) -> None:
+    """The combined stream exists only until the split point is known."""
+    tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
+    directory = tree / "run"
+    stream_dataset([tree], tokenizer, directory)
+
+    assert not (directory / "tokens.bin").exists()
+
+
+def test_streamed_tokens_are_readable_as_a_dataset(tree) -> None:
+    tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
+    directory = tree / "run"
+    metadata = stream_dataset([tree], tokenizer, directory)
+
+    dataset = TokenDataset(directory / "train.bin", metadata["dtype"])
+    assert len(dataset) == metadata["train_tokens"]
+    assert max(dataset.tokens[:1000]) < tokenizer.vocab_size
+
+
+def test_streaming_an_empty_tree_says_so(tmp_path) -> None:
+    tokenizer = Tokenizer([])
+    with pytest.raises(ValueError, match="no source files"):
+        stream_dataset([tmp_path / "nothing"], tokenizer, tmp_path / "run")

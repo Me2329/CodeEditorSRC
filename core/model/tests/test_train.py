@@ -293,3 +293,90 @@ def test_batches_land_on_the_requested_device(learnable_dataset) -> None:
         2, 16, np.random.default_rng(0), device=torch.device("cpu")
     )
     assert inputs.device.type == "cpu" and targets.device.type == "cpu"
+
+
+# --------------------------------------------------------- resume and budget
+
+
+def test_a_resumed_run_continues_from_where_it_stopped(learnable_dataset) -> None:
+    train_dataset, val_dataset, output = learnable_dataset
+    config = TrainConfig(steps=20, batch_size=4, block_size=16, warmup_steps=2, eval_every=10)
+
+    train(CodeCraftLM(CONFIG), train_dataset, val_dataset, config, output_dir=output, log=False)
+    assert (output / "latest.pt").exists()
+
+    resumed = train(
+        CodeCraftLM(CONFIG),
+        train_dataset,
+        val_dataset,
+        TrainConfig(steps=30, batch_size=4, block_size=16, warmup_steps=2, eval_every=10),
+        output_dir=output,
+        log=False,
+        resume_from=output / "latest.pt",
+    )
+
+    assert resumed["started_at_step"] == 20
+    # Only the remaining ten steps ran, not the whole schedule again.
+    assert resumed["tokens_seen"] == 30 * 4 * 16
+
+
+def test_resuming_restores_the_optimiser_moments(learnable_dataset) -> None:
+    """Without them the first steps after a resume are effectively unwarmed."""
+    train_dataset, val_dataset, output = learnable_dataset
+    config = TrainConfig(steps=10, batch_size=4, block_size=16, warmup_steps=2, eval_every=10)
+    train(CodeCraftLM(CONFIG), train_dataset, val_dataset, config, output_dir=output, log=False)
+
+    payload = torch.load(output / "latest.pt", weights_only=False)
+    assert payload["optimizer"]["state"]
+
+
+def test_latest_is_written_even_when_it_is_not_the_best(learnable_dataset) -> None:
+    """Resuming has to continue from where the run was, not from its best score."""
+    train_dataset, val_dataset, output = learnable_dataset
+    train(
+        CodeCraftLM(CONFIG),
+        train_dataset,
+        val_dataset,
+        TrainConfig(steps=30, batch_size=8, block_size=32, warmup_steps=3, eval_every=10),
+        output_dir=output,
+        log=False,
+    )
+
+    best = torch.load(output / "model.pt", weights_only=False)
+    latest = torch.load(output / "latest.pt", weights_only=False)
+    assert latest["step"] >= best["step"]
+
+
+def test_a_run_with_no_time_left_still_checkpoints(learnable_dataset) -> None:
+    """Stopping on the budget must not throw away work since the last eval."""
+    train_dataset, val_dataset, output = learnable_dataset
+    summary = train(
+        CodeCraftLM(CONFIG),
+        train_dataset,
+        val_dataset,
+        TrainConfig(
+            steps=10_000, batch_size=4, block_size=16, warmup_steps=2,
+            eval_every=10_000, max_hours=1e-9,
+        ),
+        output_dir=output,
+        log=False,
+    )
+
+    assert summary["stopped_early"]
+    assert summary["steps_run"] < 10_000
+    assert (output / "latest.pt").exists()
+    assert summary["history"], "the final step must have been evaluated"
+
+
+def test_a_run_inside_its_budget_is_not_marked_early(learnable_dataset) -> None:
+    train_dataset, val_dataset, output = learnable_dataset
+    summary = train(
+        CodeCraftLM(CONFIG),
+        train_dataset,
+        val_dataset,
+        TrainConfig(steps=4, batch_size=4, block_size=16, warmup_steps=1, eval_every=2,
+                    max_hours=1.0),
+        output_dir=output,
+        log=False,
+    )
+    assert not summary["stopped_early"]

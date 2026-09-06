@@ -219,6 +219,14 @@ nothing here calls a hosted model.
 | 160 | Compiled-model checkpoints stay portable | the `_orig_mod.` prefix is stripped on both sides |
 | 161 | Peak VRAM reported per run | in the training summary |
 | 162 | Size table says what fits on the detected card | with headroom for activations |
+| 163 | Incremental BPE training | pair-to-words index and a lazy heap; ~40x faster, flat in vocabulary size |
+| 164 | Streaming corpus builder | one file at a time to disk, so a corpus can exceed memory |
+| 165 | Capped tokenizer sample with a stride | a representative sample, spanning the tree |
+| 166 | Vendored directories includable on request | `--allow-dir site-packages node_modules` |
+| 167 | Wall-clock training budget | `--max-hours`, checkpointing the step in progress first |
+| 168 | Resume with optimiser state | `--resume`; without the moments the loss jumps |
+| 169 | Best and latest checkpoints kept separately | serve the best, resume from the latest |
+| 170 | Corpus statistics recorded | files, characters, characters per token |
 
 ## Not implemented
 

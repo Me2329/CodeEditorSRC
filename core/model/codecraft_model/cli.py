@@ -20,13 +20,7 @@ import torch
 
 from .config import SIZES, get_size, humanise
 from .device import describe_device, memory_total_bytes, resolve_device
-from .data import (
-    TokenDataset,
-    build_corpus,
-    collect_sources,
-    encode_corpus,
-    write_dataset,
-)
+from .data import TokenDataset, sample_corpus, stream_dataset
 from .model import CodeCraftLM
 from .tokenizer import Tokenizer
 from .train import TrainConfig, load_checkpoint, train
@@ -77,34 +71,49 @@ def command_prepare(args: argparse.Namespace) -> int:
     run.mkdir(parents=True, exist_ok=True)
 
     roots = [Path(root).resolve() for root in args.roots]
+    allow = frozenset(args.allow_dir or ())
     print(f"scanning {', '.join(str(root) for root in roots)}")
+    if allow:
+        print(f"  including normally-skipped directories: {', '.join(sorted(allow))}")
 
-    sources = collect_sources(roots, limit=args.max_files)
-    if not sources:
+    print(f"sampling up to {args.sample_mb}MB to train the tokenizer")
+    started = time.time()
+    sample = sample_corpus(
+        roots,
+        max_bytes=args.sample_mb * 1_000_000,
+        allow=allow,
+        stride=args.sample_stride,
+    )
+    if not sample:
         print("no source files found", file=sys.stderr)
         return 1
-
-    corpus = build_corpus(sources)
-    characters = len(corpus)
-    print(f"  {len(sources):,} files, {characters:,} characters")
+    print(f"  {len(sample) / 1e6:.1f}MB sampled in {time.time() - started:.1f}s")
 
     print(f"training a {args.vocab}-token byte-level BPE vocabulary")
     started = time.time()
-    tokenizer = Tokenizer.train(corpus, args.vocab, progress=True)
+    tokenizer = Tokenizer.train(sample, args.vocab, progress=True)
     tokenizer.save(run / "tokenizer.json")
-    print(
-        f"  {tokenizer.vocab_size} tokens learned in {time.time() - started:.1f}s"
-    )
+    print(f"  {tokenizer.vocab_size} tokens learned in {time.time() - started:.1f}s")
+
+    # The sample can be large, and encoding the full corpus needs the memory.
+    del sample
 
     print("encoding the corpus")
-    tokens = encode_corpus(corpus, tokenizer, progress=True)
-    metadata = write_dataset(tokens, run, validation_fraction=args.val_fraction)
-
-    ratio = characters / max(len(tokens), 1)
+    started = time.time()
+    metadata = stream_dataset(
+        roots,
+        tokenizer,
+        run,
+        validation_fraction=args.val_fraction,
+        allow=allow,
+        progress=True,
+    )
     print(
+        f"  {metadata['files']:,} files, {metadata['characters'] / 1e6:.1f}MB\n"
         f"  {metadata['total_tokens']:,} tokens "
         f"({metadata['train_tokens']:,} train / {metadata['val_tokens']:,} val)\n"
-        f"  {ratio:.2f} characters per token"
+        f"  {metadata['characters_per_token']} characters per token, "
+        f"{time.time() - started:.1f}s"
     )
     return 0
 
@@ -159,6 +168,7 @@ def command_train(args: argparse.Namespace) -> int:
         seed=args.seed,
         precision=args.precision,
         compile_model=args.compile,
+        max_hours=args.max_hours,
     )
 
     device = resolve_device(args.device)
@@ -174,10 +184,13 @@ def command_train(args: argparse.Namespace) -> int:
         train_config,
         output_dir=run,
         device=device,
+        resume_from=run / "latest.pt" if args.resume else None,
     )
 
     print(f"\ncheckpoint written to {run / 'model.pt'}")
     print(f"  best validation loss {summary['best_val_loss']:.3f}")
+    if summary["stopped_early"]:
+        print("  stopped on the time budget; rerun with --resume to continue")
     return 0
 
 
@@ -251,8 +264,26 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--run", required=True, help="directory for this run")
     prepare.add_argument("--roots", nargs="+", default=["."], help="directories to scan")
     prepare.add_argument("--vocab", type=int, default=4096, help="tokenizer vocabulary size")
-    prepare.add_argument("--max-files", type=int, default=None)
     prepare.add_argument("--val-fraction", type=float, default=0.05)
+    prepare.add_argument(
+        "--sample-mb",
+        type=int,
+        default=32,
+        help="how much text to train the tokenizer on; the corpus itself is unbounded",
+    )
+    prepare.add_argument(
+        "--sample-stride",
+        type=int,
+        default=1,
+        help="take every nth file for the sample, so it spans the whole tree",
+    )
+    prepare.add_argument(
+        "--allow-dir",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help="include directories normally skipped, e.g. site-packages node_modules",
+    )
     prepare.set_defaults(func=command_prepare)
 
     trainer = subparsers.add_parser("train", help="train a model")
@@ -285,6 +316,17 @@ def main(argv: list[str] | None = None) -> int:
         "--compile",
         action="store_true",
         help="fuse the graph with torch.compile: faster steps, slow first step",
+    )
+    trainer.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="stop after this long, checkpointing first; resume with --resume",
+    )
+    trainer.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from latest.pt, restoring the optimiser state too",
     )
     trainer.set_defaults(func=command_train)
 

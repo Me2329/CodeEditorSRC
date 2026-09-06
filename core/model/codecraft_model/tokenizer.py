@@ -14,9 +14,10 @@ stream, is what makes training tractable in pure Python.
 
 from __future__ import annotations
 
+import heapq
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 # Pre-tokenisation pattern.
@@ -123,29 +124,88 @@ class Tokenizer:
             words.append([BYTE_OFFSET + b for b in word.encode("utf-8")])
             frequencies.append(frequency)
 
+        # Counting every pair afresh on every merge is what makes the naive
+        # trainer unusable past a few megabytes: it is O(corpus) per merge, so
+        # the work grows with the product of corpus size and vocabulary size.
+        #
+        # Instead the counts are kept incrementally. `where` maps a pair to the
+        # words containing it, so a merge only has to revisit those words, and
+        # each one contributes the difference between its pairs before and
+        # after. The heap finds the most frequent pair without a scan; entries
+        # go stale as counts change, and a stale entry is recognised on pop by
+        # disagreeing with the live count, so it is discarded rather than
+        # repaired. That is cheaper than keeping the heap exact.
+        pair_counts: Counter[tuple[int, int]] = Counter()
+        where: dict[tuple[int, int], set[int]] = defaultdict(set)
+        for index, (symbols, frequency) in enumerate(zip(words, frequencies)):
+            for pair in zip(symbols, symbols[1:]):
+                pair_counts[pair] += frequency
+            for pair in set(zip(symbols, symbols[1:])):
+                where[pair].add(index)
+
+        heap = [(-count, pair) for pair, count in pair_counts.items()]
+        heapq.heapify(heap)
+
         merges: list[tuple[int, int]] = []
         next_id = BYTE_OFFSET + 256
 
         for step in range(target_merges):
-            pair_counts: Counter[tuple[int, int]] = Counter()
-            for symbols, frequency in zip(words, frequencies):
-                for left, right in zip(symbols, symbols[1:]):
-                    pair_counts[(left, right)] += frequency
-
-            if not pair_counts:
+            best: tuple[int, int] | None = None
+            best_count = 0
+            while heap:
+                negative_count, candidate = heapq.heappop(heap)
+                live = pair_counts.get(candidate, 0)
+                if live != -negative_count:
+                    continue
+                if live < min_frequency:
+                    # The heap is ordered, so nothing below this is worth it.
+                    heap.clear()
+                    break
+                best, best_count = candidate, live
                 break
-            best, best_count = pair_counts.most_common(1)[0]
-            if best_count < min_frequency:
+
+            if best is None:
                 break
 
             merges.append(best)
-            words = [_merge_pair(symbols, best, next_id) for symbols in words]
+
+            for index in list(where[best]):
+                symbols = words[index]
+                frequency = frequencies[index]
+
+                before = set(zip(symbols, symbols[1:]))
+                for pair in zip(symbols, symbols[1:]):
+                    pair_counts[pair] -= frequency
+                    if pair_counts[pair] <= 0:
+                        del pair_counts[pair]
+
+                merged = _merge_pair(symbols, best, next_id)
+                words[index] = merged
+
+                after = set(zip(merged, merged[1:]))
+                for pair in zip(merged, merged[1:]):
+                    pair_counts[pair] += frequency
+
+                for pair in before - after:
+                    where[pair].discard(index)
+                for pair in after - before:
+                    where[pair].add(index)
+
+                # Both directions have to be pushed. A pair whose count only
+                # went down would otherwise be left in the heap at its old
+                # value, be discarded as stale, and never be reconsidered.
+                for pair in before | after:
+                    if pair in pair_counts:
+                        heapq.heappush(heap, (-pair_counts[pair], pair))
+
+            where.pop(best, None)
+            pair_counts.pop(best, None)
             next_id += 1
 
-            if progress and (step + 1) % 200 == 0:
+            if progress and (step + 1) % 500 == 0:
                 print(
                     f"  merge {step + 1}/{target_merges}  "
-                    f"pair {best} seen {best_count} times",
+                    f"pair seen {best_count} times",
                     flush=True,
                 )
 

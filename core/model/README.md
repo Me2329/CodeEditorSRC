@@ -121,8 +121,100 @@ batch trick: it genuinely needs more memory than the card has. `large` is the
 ceiling for full fine-tuning on one 16 GB card, and only with a small batch and
 gradient accumulation making the effective batch back up.
 
-The real limit is not the card. A 100M-parameter model wants billions of tokens
-to be worth its size, and this repository has 210,459.
+The real limit is the corpus, not the card. A 100M-parameter model wants
+billions of tokens to be worth its size.
+
+## Building a large corpus
+
+`prepare` streams: it reads one file at a time and writes tokens straight to
+disk, so the corpus can be far larger than memory. Two flags matter at scale.
+
+`--allow-dir` includes directories that are deliberately skipped when scanning a
+project. Inside your own repository `site-packages` and `node_modules` are noise;
+when the goal is a large corpus of real library code they are most of the point.
+
+`--sample-mb` caps how much text the tokenizer is trained on. A vocabulary
+learned from a representative sample is essentially the one learned from the
+whole corpus, because the merges that matter are the frequent ones and those
+appear early. `--sample-stride` takes every nth file so the sample spans the
+tree rather than whichever directory sorts first.
+
+```bash
+python -m codecraft_model prepare --run runs/big \
+  --vocab 16384 --sample-mb 24 --sample-stride 3 \
+  --allow-dir site-packages node_modules \
+  --roots /usr/lib/python3.11 /usr/include ~/.cargo/registry ../..
+```
+
+That produced 19.1M tokens from 6,545 files and 67 MB of source, in 89 seconds
+end to end. For comparison, scanning only this repository gives 210k tokens.
+
+Point it at more and it keeps going. Cloned repositories, a language's standard
+library, a package cache: anything on disk with a source extension.
+
+### The tokenizer had to be rewritten for this
+
+The first BPE trainer recounted every adjacent pair across the whole corpus on
+every merge. That is O(corpus) per merge, so the work grows with corpus size
+times vocabulary size, and it becomes unusable somewhere around a few megabytes:
+
+| corpus | merges | before | after |
+| --- | --- | --- | --- |
+| 3.3 MB | 500 | 22.9s | 3.0s |
+| 3.3 MB | 1,000 | 43.8s | 3.2s |
+| 3.3 MB | 4,000 | ~176s (extrapolated) | 4.2s |
+
+Counts are now maintained incrementally. A pair-to-words index means a merge
+only revisits the words containing that pair, each contributing the difference
+between its pairs before and after, and a lazy heap finds the most frequent pair
+without a scan. Entries go stale as counts change and are recognised on pop by
+disagreeing with the live count, which is cheaper than keeping the heap exact.
+
+The result is roughly flat in vocabulary size rather than linear in it. Training
+16,384 merges on 24 MB now takes 52 seconds.
+
+## Long runs
+
+A real run is measured in hours, so it has to survive being interrupted.
+
+```bash
+python -m codecraft_model train --run runs/big --size base \
+  --steps 60000 --batch 24 --block 1024 --lr 3e-4 --warmup 2000 \
+  --compile --max-hours 8
+python -m codecraft_model train --run runs/big --size base --steps 60000 --resume
+```
+
+`--max-hours` stops on a wall-clock budget, but only after finishing the step in
+progress and evaluating and checkpointing it, so nothing since the last
+evaluation is lost. `--resume` continues from `latest.pt`, restoring the
+optimiser's moments as well as the weights: without them the first steps after a
+resume are effectively unwarmed and the loss visibly jumps.
+
+Two checkpoints are kept. `model.pt` is the best validation score seen, which is
+what you serve. `latest.pt` is wherever the run actually is, which is what you
+resume from. They are different files because the best model is usually not the
+most recent one.
+
+### A recipe for a 16 GB card
+
+`base` is the size worth your time: 100M parameters, 2048 context, 1.6 GB of
+fixed cost leaving plenty of room for a real batch.
+
+```bash
+make model-prepare MODEL_RUN=runs/big     # point --roots at everything you have
+make model-train MODEL_SIZE=base MODEL_STEPS=60000 MODEL_RUN=runs/big
+```
+
+Ballpark on a 5080, at roughly 60k tokens per second in bfloat16 with
+`--compile`: 24 x 1024 is about 25k tokens per step, so 60k steps is about 1.5B
+tokens in seven to eight hours. That is around 15 tokens per parameter, close to
+the ratio a model that size actually wants. Getting there needs a corpus of a
+billion tokens or more, which means cloning a lot of repositories, not scanning
+one.
+
+If you have less corpus than that, train a smaller model rather than doing more
+passes over the same text. More epochs on a small corpus buys memorisation, not
+capability, and the validation curve says so plainly.
 
 ## Pipeline
 
@@ -253,7 +345,7 @@ it are worth, and this corpus is one repository.
 make test-model
 ```
 
-159 tests: parameter counts against real modules, tokenizer round trips over
+175 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, the training loop
 actually reducing loss on learnable data, the HTTP surfaces driven over a real
