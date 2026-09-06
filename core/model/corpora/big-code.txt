@@ -1,0 +1,67 @@
+# A billion-token code corpus.
+#
+# Each repository is cloned shallow, read once and deleted, so peak disk is the
+# growing token stream plus whichever repository is being read. The list is
+# ordered largest first: if a token budget cuts the run short, the corpus is
+# still broad rather than being whatever sorted first alphabetically.
+#
+# Weighted towards systems languages because that is what the editor compiles.
+
+# --- C and C++, the bulk of it
+llvm/llvm-project
+torvalds/linux
+chromium/chromium-src-mirror
+apple/swift
+mysql/mysql-server
+openssl/openssl
+ffmpeg/FFmpeg
+qemu/qemu
+git/git
+postgres/postgres
+redis/redis
+curl/curl
+nlohmann/json
+opencv/opencv
+
+# --- Rust
+rust-lang/rust
+rust-lang/cargo
+tokio-rs/tokio
+BurntSushi/ripgrep
+serde-rs/serde
+clap-rs/clap
+rust-lang/rustlings
+
+# --- Python
+python/cpython
+django/django
+pallets/flask
+psf/requests
+numpy/numpy
+scipy/scipy
+pandas-dev/pandas
+encode/httpx
+tiangolo/fastapi
+pytest-dev/pytest
+scikit-learn/scikit-learn
+
+# --- Go
+golang/go
+kubernetes/kubernetes
+grpc/grpc-go
+gin-gonic/gin
+
+# --- TypeScript and JavaScript
+microsoft/TypeScript
+nodejs/node
+facebook/react
+vuejs/core
+sveltejs/svelte
+denoland/deno
+vitejs/vite
+
+# --- Java, C#, and others
+JetBrains/kotlin
+dotnet/runtime
+elastic/elasticsearch
+apache/kafka

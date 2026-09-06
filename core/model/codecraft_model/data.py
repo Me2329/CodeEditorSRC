@@ -9,7 +9,8 @@ a slice rather than a parse.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+import time
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -217,31 +218,36 @@ def write_dataset(
 
 
 def stream_dataset(
-    roots: list[Path],
+    sources: Iterable[tuple[str, str]],
     tokenizer: Tokenizer,
     directory: Path,
     *,
     validation_fraction: float = 0.05,
-    allow: frozenset[str] = frozenset(),
+    max_tokens: int | None = None,
     progress: bool = False,
 ) -> dict:
-    """Encode every source file straight to disk, one file at a time.
+    """Encode a stream of (path, text) straight to disk, one file at a time.
 
-    Nothing larger than a single source file is ever held in memory, so the
-    corpus can be far bigger than RAM. Tokens go to one flat file first because
-    the split point is only known once the total is; the split then copies
-    rather than re-encoding.
+    `sources` is any iterable, so it can be a directory walk, a generator that
+    clones repositories and deletes them as it goes, or several chained
+    together. Nothing larger than a single source file is held in memory.
+
+    Tokens go to one flat file first because the split point is only known once
+    the total is. The split then renames that file rather than copying it, so
+    peak disk is the token stream plus the validation tail, not twice the
+    stream: at a billion tokens that is the difference between 2.1GB and 4GB.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    dtype = np.uint16 if tokenizer.vocab_size <= 65_536 else np.uint32
+    dtype = np.dtype(np.uint16 if tokenizer.vocab_size <= 65_536 else np.uint32)
 
     combined = directory / "tokens.bin"
     total_tokens = 0
     total_characters = 0
     files = 0
+    started = time.time()
 
     with combined.open("wb") as handle:
-        for path, text in iter_sources(roots, allow=allow):
+        for path, text in sources:
             marked = f"{FILE_MARKER}{Path(path).name}\n{text}\n"
             encoded = np.array(tokenizer.encode(marked), dtype=dtype)
             encoded.tofile(handle)
@@ -250,39 +256,46 @@ def stream_dataset(
             total_tokens += len(encoded)
             total_characters += len(marked)
 
-            if progress and files % 250 == 0:
+            if progress and files % 500 == 0:
+                rate = total_characters / max(time.time() - started, 1e-6) / 1e6
                 print(
-                    f"  {files:,} files  {total_tokens:,} tokens  "
-                    f"{total_characters / 1e6:.1f} MB",
-                    end="\r",
+                    f"  {files:,} files  {total_tokens / 1e6:.1f}M tokens  "
+                    f"{total_characters / 1e6:.0f}MB  {rate:.1f}MB/s",
                     flush=True,
                 )
 
-    if progress:
-        print()
+            if max_tokens is not None and total_tokens >= max_tokens:
+                if progress:
+                    print(f"  reached the {max_tokens:,} token budget", flush=True)
+                break
 
     if total_tokens == 0:
         combined.unlink(missing_ok=True)
         raise ValueError("no source files produced any tokens")
 
     split = int(total_tokens * (1.0 - validation_fraction))
+
+    # Validation is the tail, written first so the training file can then be
+    # made by truncation.
     tokens = np.memmap(combined, dtype=dtype, mode="r")
-
-    # Copied in chunks so a corpus larger than memory still splits.
-    _copy_range(tokens, directory / "train.bin", 0, split)
     _copy_range(tokens, directory / "val.bin", split, total_tokens)
-
     del tokens
-    combined.unlink()
+
+    train = directory / "train.bin"
+    train.unlink(missing_ok=True)
+    with combined.open("r+b") as handle:
+        handle.truncate(split * dtype.itemsize)
+    combined.rename(train)
 
     metadata = {
-        "dtype": str(np.dtype(dtype)),
+        "dtype": str(dtype),
         "train_tokens": split,
         "val_tokens": total_tokens - split,
         "total_tokens": total_tokens,
         "files": files,
         "characters": total_characters,
         "characters_per_token": round(total_characters / total_tokens, 3),
+        "bytes_on_disk": total_tokens * dtype.itemsize,
     }
     (directory / "meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata

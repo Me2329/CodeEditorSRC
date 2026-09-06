@@ -226,7 +226,14 @@ nothing here calls a hosted model.
 | 167 | Wall-clock training budget | `--max-hours`, checkpointing the step in progress first |
 | 168 | Resume with optimiser state | `--resume`; without the moments the loss jumps |
 | 169 | Best and latest checkpoints kept separately | serve the best, resume from the latest |
-| 170 | Corpus statistics recorded | files, characters, characters per token |
+| 170 | Corpus statistics recorded | files, characters, characters per token, bytes on disk |
+| 171 | Repositories cloned, read and deleted one at a time | peak disk is the token stream plus one repository |
+| 172 | Shallow clones with `.git` removed before reading | history is bandwidth spent on near-duplicate text |
+| 173 | An unreachable repository is skipped, not fatal | and deleted even when encoding raises |
+| 174 | Curated 47-repository list, largest first | a token budget still leaves a broad corpus |
+| 175 | Token budget for a corpus | `--max-tokens` |
+| 176 | Split by truncation rather than copy | 2.1GB peak instead of 4GB at a billion tokens |
+| 177 | Disk cost calculator | `codecraft_model corpus`, for any target size |
 
 ## Not implemented
 

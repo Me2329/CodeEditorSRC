@@ -152,6 +152,54 @@ end to end. For comparison, scanning only this repository gives 210k tokens.
 Point it at more and it keeps going. Cloned repositories, a language's standard
 library, a package cache: anything on disk with a source extension.
 
+### Billions of tokens, on a disk that could not hold them
+
+The arithmetic that makes this possible: a token is two bytes. The source it
+came from is not.
+
+```
+$ python -m codecraft_model corpus
+
+        tokens   source text  repositories  tokens on disk   peak, streaming
+----------------------------------------------------------------------------
+         10.0M         0.0GB         0.1GB           0.0GB             0.0GB
+        100.0M         0.3GB         1.1GB           0.2GB             0.3GB
+         1.00B         3.5GB        10.5GB           2.0GB             2.5GB
+        10.00B        35.0GB       105.0GB          20.0GB            25.2GB
+```
+
+A billion tokens is 2GB of tokens, 3.5GB of source text, and about 10.5GB of
+repositories once tests, assets and generated files are counted. Keeping every
+repository would need 12.5GB free; streaming needs 2.5GB, because `prepare`
+clones one repository, encodes it, deletes it, and moves to the next.
+
+```bash
+python -m codecraft_model prepare --run runs/huge \
+  --vocab 32768 --sample-mb 40 \
+  --repos-file corpora/big-code.txt \
+  --max-tokens 1000000000
+```
+
+`corpora/big-code.txt` is a list of 47 repositories, largest first so that a
+token budget cutting the run short still leaves a broad corpus rather than
+whatever sorted first. `--repos` takes them on the command line instead.
+
+Clones are shallow. History is bandwidth spent on text the model never sees, and
+a repository's past revisions are near-duplicates of its present, which is
+training data that teaches nothing. The `.git` directory is deleted immediately
+after checkout, before the files are read, because pack files are a large share
+of a shallow clone and hold nothing readable.
+
+A repository that cannot be fetched is skipped rather than fatal: a corpus built
+from fifty should not be lost to one that has been renamed. Each clone is
+deleted even if encoding raises, so a failure does not leave the disk full and
+block everything after it.
+
+The split at the end renames rather than copies. Validation is written as the
+tail, then the combined file is truncated in place and becomes the training
+file. At a billion tokens that is the difference between a 2.1GB peak and a 4GB
+one.
+
 ### The tokenizer had to be rewritten for this
 
 The first BPE trainer recounted every adjacent pair across the whole corpus on
@@ -373,7 +421,7 @@ more corpus still. Both curves came from four CPU cores.
 make test-model
 ```
 
-175 tests: parameter counts against real modules, tokenizer round trips over
+200 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, the training loop
 actually reducing loss on learnable data, the HTTP surfaces driven over a real
