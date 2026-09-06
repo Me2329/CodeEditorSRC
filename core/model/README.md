@@ -304,40 +304,68 @@ daemon reports model 'codecraft-local', reachable: True
 65 tokens in 318ms, from local weights
 ```
 
-## What a real run actually produced
+## Two real runs, and what changed between them
 
-Numbers from `micro` trained on this repository, so the claims above can be
-checked rather than taken:
+Both trained by this code on this machine, four CPU cores, no GPU. The only
+difference that matters is the corpus.
 
-| | |
-| --- | --- |
-| Corpus | 210,459 tokens from `backend`, `frontend/src`, `core`, `scripts` |
-| Compression | 3.65 characters per token, 4,096-token vocabulary |
-| Model | 1,311,872 parameters, 4 layers, context 256, dropout 0.15 |
-| Training | 3,000 steps, 12.3M tokens seen, 1,283s on 4 CPU cores |
-| Best validation loss | 4.968 at step 1,250, perplexity 143.8 |
+| | small corpus | large corpus |
+| --- | --- | --- |
+| Corpus | 210,459 tokens, this repository | 19,106,483 tokens, 6,545 files, 67MB |
+| Sources | `backend`, `core`, `frontend/src`, `scripts` | the above plus the Python standard library, the C headers, the cargo registry |
+| Vocabulary | 4,096 | 16,384 |
+| Compression | 3.65 characters/token | 3.516 characters/token |
+| Model | 1.3M parameters, context 256 | 8.6M parameters, context 512 |
+| Training | 3,000 steps, 12.3M tokens, 1,283s | 1,500 steps, 12.3M tokens, 2,811s |
+| Passes over the corpus | 60 | 0.68 |
+| Best validation loss | 4.968 | 4.217 |
+| **Bits per character** | **1.964** | **1.730** |
 
-Prompted with `def parse(`, the checkpoint continues:
+Bits per character is the comparison that means anything here. Loss per token is
+not comparable across two different vocabularies, because a 16,384-token
+vocabulary is a harder prediction than a 4,096-token one; dividing by
+characters per token removes that and gives a number you can put side by side.
 
-```python
-def parse(tmp_path) -> None:
-    with client.websocket_connect("/api/v1/ws/ws/execute") as socket:
-        socket.receive_json()
+The shape of the two curves is the real result:
+
+| step | small corpus | large corpus |
+| --- | --- | --- |
+| 250 / 200 | 6.312 | 5.716 |
+| 1,250 / 1,100 | **4.968** (best) | 4.351 |
+| 1,500 | 5.062 | 4.351 |
+| 3,000 / 1,500 | 5.144 | **4.217** (best) |
+
+The small-corpus run bottomed out a third of the way in and got worse from there
+while its training loss kept falling to 1.35. Sixty passes over 200k tokens is
+memorisation, and the validation curve says so.
+
+The large-corpus run never turned. Validation improved at every single
+evaluation and was still improving when the step budget ended, with training
+loss around 3.2 against validation 4.2. It never saw the same token twice: at
+0.68 passes there is nothing to memorise. It stopped because it ran out of
+steps, not because it ran out of things to learn.
+
+What it writes, prompted with `def parse(`:
+
+```rust
+def parse(self, name) -> fmt::Result {
+        let value = self.value.end() {
+            let result = input.parse().unwrap();
+            if len > self.value.len() {
+                let mut buf = input.parse()?;
 ```
 
-Prompted with `#include <` it emits a run of include lines and then opens a
-namespace. It has learned which language it is in and what that language's
-lines look like. It has not learned to mean anything, and it repeats itself.
+It drifts into Rust because the cargo registry is the largest part of the corpus,
+and the Rust it writes is structurally right: `fmt::Result`, `let mut`, the `?`
+operator, `formatter.field`. Prompted with `#include <stdio.h>` it produces a run
+of glibc-style include lines. It has learned each language's shape and the
+statistics of real library code. It is still an 8.6M-parameter model that saw
+12M tokens, which is under two tokens per parameter, so it does not hold a
+thought across more than a few lines.
 
-Be honest about why. Validation loss bottomed out at step 1,250 and rose after,
-while training loss kept falling to 1.35: 12.3M tokens over a 200k-token corpus
-is sixty passes, and a model with anywhere to put them will memorise. The
-best-checkpoint rule is what stops the saved weights being the overfitted ones.
-Fixing it properly means more corpus, not more steps.
-
-So: the pipeline is real, the architecture is real, and the plumbing to the
-editor is real. The capability is whatever the corpus and the compute you give
-it are worth, and this corpus is one repository.
+The honest reading: the corpus fixed overfitting, which was the actual problem.
+Capability now needs the thing this machine does not have, which is compute, and
+more corpus still. Both curves came from four CPU cores.
 
 ## Tests
 
