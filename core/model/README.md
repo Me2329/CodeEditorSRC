@@ -200,6 +200,47 @@ tail, then the combined file is truncated in place and becomes the training
 file. At a billion tokens that is the difference between a 2.1GB peak and a 4GB
 one.
 
+### A billion tokens, measured
+
+Not extrapolated. This ran on four CPU cores with 20GB free:
+
+| | |
+| --- | --- |
+| Tokens | 1,000,004,906 |
+| Files | 292,563 |
+| Source text read | 2,912,573,894 characters, 2.9GB |
+| Compression | 2.913 characters/token, 32,768-token vocabulary |
+| **On disk** | **2.00GB** (`train.bin` 1.9GB, `val.bin` 0.1GB, tokenizer 426KB) |
+| Wall clock | 2,123s end to end, about 35 minutes |
+| Repositories needed | 34 of 47, the budget stopped it early |
+| Repositories that failed | 1, skipped without stopping the run |
+| Peak extra disk | about 3GB |
+
+Cloning ran at roughly 43MB/s and was never the bottleneck. Encoding was, at
+1.4MB/s in pure Python, which is the 35 minutes. It is paid once.
+
+The corpus is `corpora/big-code.txt`: LLVM, the Linux kernel, Swift, MySQL,
+OpenSSL, FFmpeg, QEMU, Rust, CPython, NumPy, Go, Kubernetes, TypeScript, Node,
+React and the rest, plus this machine's Python standard library, C headers and
+cargo registry.
+
+Decoding a window from the middle of the training file gives back real code,
+which is the check that matters:
+
+```c
+	struct iwl_mld_session_protect *session_protect =
+		&mld_vif->session_protect;
+	struct iwl_session_prot_cmd cmd = {
+		.action = cpu_to_le32(FW_CTXT_ACTION_REMOVE),
+	};
+
+	lockdep_assert_wiphy(mld->wiphy);
+```
+
+Training against it was verified end to end: 40 steps of `small` over the 1.9GB
+memory-mapped file, loss falling from 10.49 to 6.64. Doing it properly is a GPU
+job, not four cores.
+
 ### The tokenizer had to be rewritten for this
 
 The first BPE trainer recounted every adjacent pair across the whole corpus on

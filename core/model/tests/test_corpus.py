@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from codecraft_model.corpus import (
+    MEASURED_CHARACTERS_PER_TOKEN,
     Repository,
     clone,
     directory_size,
@@ -177,8 +178,10 @@ def test_a_billion_tokens_is_two_gigabytes_of_tokens() -> None:
 
 
 def test_the_source_is_far_larger_than_the_tokens() -> None:
+    """Measured at 2.913 characters per token over a real billion-token run."""
     numbers = estimate(1_000_000_000)
-    assert numbers["source_text_gb"] == pytest.approx(3.5)
+    assert numbers["source_text_gb"] == pytest.approx(MEASURED_CHARACTERS_PER_TOKEN)
+    assert numbers["source_text_gb"] > numbers["token_stream_gb"]
     assert numbers["repositories_gb"] > numbers["source_text_gb"]
 
 

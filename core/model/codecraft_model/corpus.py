@@ -1,9 +1,10 @@
 """Fetching a corpus far larger than the disk it is built on.
 
 The arithmetic that makes a billion-token corpus practical: a token is two
-bytes, so a billion of them is 2GB. The source they came from is about 3.5GB of
+bytes, so a billion of them is 2GB. The source they came from is about 2.9GB of
 text, and the repositories holding that source are several times larger again
-once non-source files are counted.
+once non-source files are counted. Those are measured numbers, from a real
+billion-token run over the list in corpora/big-code.txt.
 
 So the source is never kept. Each repository is cloned shallow, encoded to
 tokens that are appended to the growing stream, and deleted before the next one
@@ -175,7 +176,15 @@ def iter_repository_sources(
             shutil.rmtree(checkout, ignore_errors=True)
 
 
-def estimate(target_tokens: int, characters_per_token: float = 3.5) -> dict:
+# Measured, not assumed: a 32,768-token vocabulary trained on the corpus in
+# corpora/big-code.txt reached 2.913 characters per token over a billion tokens.
+# A smaller vocabulary compresses less; 3.5 is about right for 4,096.
+MEASURED_CHARACTERS_PER_TOKEN = 2.913
+
+
+def estimate(
+    target_tokens: int, characters_per_token: float = MEASURED_CHARACTERS_PER_TOKEN
+) -> dict:
     """The disk a corpus of `target_tokens` actually costs.
 
     Kept as a function rather than a paragraph in the documentation because the

@@ -22,6 +22,7 @@ import torch
 from .config import SIZES, get_size, humanise
 from .device import describe_device, memory_total_bytes, resolve_device
 from .corpus import (
+    MEASURED_CHARACTERS_PER_TOKEN,
     Repository,
     estimate,
     iter_repository_sources,
@@ -375,7 +376,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="token counts to price, e.g. 1000000000",
     )
-    corpus.add_argument("--characters-per-token", type=float, default=3.5)
+    corpus.add_argument(
+        "--characters-per-token",
+        type=float,
+        default=MEASURED_CHARACTERS_PER_TOKEN,
+        help="the default is measured, not assumed; a smaller vocabulary compresses less",
+    )
     corpus.set_defaults(func=command_corpus)
 
     prepare = subparsers.add_parser("prepare", help="build a corpus and tokenizer")
