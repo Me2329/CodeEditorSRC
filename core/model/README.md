@@ -456,6 +456,22 @@ The honest reading: the corpus fixed overfitting, which was the actual problem.
 Capability now needs the thing this machine does not have, which is compute, and
 more corpus still. Both curves came from four CPU cores.
 
+## What it is not
+
+CodeCraft LM is a base model: trained on next-token prediction and nothing else.
+No instruction tuning, no RLHF, no refusal training, no content filter, no
+system prompt. There is no safety layer to switch on or off, and a flag claiming
+otherwise would toggle a variable no code reads.
+
+The risks that are real are the ordinary ones: confidently wrong code, insecure
+patterns learned from public source, memorised fragments, and licence
+contamination from a corpus spanning GPL, Apache and MIT. That last one is the
+practical problem for anything you intend to ship.
+
+The boundaries that genuinely hold in this project are the sandbox and agent
+plan mode, and they protect your machine from code rather than filtering text.
+[MODEL_CARD.md](MODEL_CARD.md) sets all of this out properly.
+
 ## Tests
 
 ```bash

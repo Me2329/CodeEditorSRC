@@ -234,6 +234,7 @@ nothing here calls a hosted model.
 | 175 | Token budget for a corpus | `--max-tokens` |
 | 176 | Split by truncation rather than copy | 2.1GB peak instead of 4GB at a billion tokens |
 | 177 | Disk cost calculator | `codecraft_model corpus`, for any target size |
+| 178 | Model card stating what the model is and is not | base model, no alignment layer, real risks named |
 
 ## Not implemented
 
