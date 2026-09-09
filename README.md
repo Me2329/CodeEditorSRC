@@ -178,6 +178,32 @@ trained for twenty minutes on one repository produces text shaped like code that
 means very little. The pipeline is real; the capability is whatever you feed it.
 Details in [core/model/README.md](core/model/README.md).
 
+## Extensions
+
+The editor has an extension host. A manifest declares what an extension
+contributes and when it should wake up; the host does the rest.
+
+```
+commands · text actions · snippets · linters · formatters
+language configuration · status bar items · themes
+```
+
+Five extensions ship bundled and enabled, contributing 118 things between them:
+30 text actions, 49 snippets, 11 linters, 10 language configurations, 2
+formatters and 8 status bar items. They use the same public contract a
+third-party extension would, so anything they can do, yours can. Toggle any of
+them from the Extensions panel.
+
+The parts worth knowing about are the failure paths. A throwing extension is
+marked broken and has its contributions withdrawn while the editor carries on. A
+throwing linter is skipped rather than blanking the diagnostics panel. Disabling
+removes exactly that extension's work, because contributions are indexed by
+owner, and one disposable that throws does not strand the others. A plugin
+system that leaks on disable rots within a dozen toggles.
+
+Extension code is not sandboxed. It runs with the page's privileges, so the
+contract is an extension point rather than a security boundary.
+
 ## Security model
 
 Untrusted code is the entire point, so isolation is the product, not a feature.
@@ -225,7 +251,7 @@ make test   # every suite
 | `make test-backend` | REST and WebSocket surfaces against the real sandbox |
 | `make test-assistant` | symbol indexing, completion ranking, routing, the model client, the agent loop |
 | `make test-model` | parameter counts, tokenizer round trips, the KV cache, the training loop, the HTTP surfaces |
-| `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences |
+| `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences, the extension host |
 
 The sandbox suite asserts containment rather than mere execution: each test is
 written so an escape fails loudly instead of passing quietly. It skips checks a

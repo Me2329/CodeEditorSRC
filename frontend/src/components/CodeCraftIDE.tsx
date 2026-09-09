@@ -14,6 +14,7 @@ import {
   Download,
   Loader2,
   Maximize2,
+  Package,
   Play,
   Search,
   Settings as SettingsIcon,
@@ -29,6 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
+import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { ApiError, api } from '../lib/api';
 import type { Command } from '../lib/commands';
 import {
@@ -56,6 +58,7 @@ import { FileExplorer } from './FileExplorer';
 import { PreviewPane } from './PreviewPane';
 import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
+import { ExtensionsPanel } from './ExtensionsPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
@@ -84,7 +87,9 @@ export function CodeCraftIDE() {
   const [analysisPending, setAnalysisPending] = useState(false);
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
-  const [bottomTab, setBottomTab] = useState<'agent' | 'assistant' | 'analysis'>('agent');
+  const [bottomTab, setBottomTab] = useState<
+    'agent' | 'assistant' | 'analysis' | 'extensions'
+  >('agent');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
 
@@ -100,6 +105,10 @@ export function CodeCraftIDE() {
   // Read inside a stable callback, so applying an agent edit does not need to
   // re-subscribe every time the active file changes.
   const activeFileNameRef = useRef('');
+  // The extension API is built once and must see current state, so it reads
+  // these rather than closing over a render's values.
+  const filesRef = useRef<VirtualFile[]>([]);
+  const extensionHostRef = useRef<ReturnType<typeof useExtensions> | null>(null);
 
   const terminalRef = useRef<TerminalHandle>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -188,6 +197,7 @@ export function CodeCraftIDE() {
   }, []);
 
   activeFileNameRef.current = activeFile?.name ?? '';
+  filesRef.current = files;
 
   // Persist the workspace so a refresh does not discard work in progress.
   useEffect(() => {
@@ -477,31 +487,6 @@ export function CodeCraftIDE() {
     [files, activeFileId, handleJumpToLine],
   );
 
-  // Surface analyzer diagnostics as Monaco markers on the active file.
-  useEffect(() => {
-    const editor = editorRef.current;
-    const monaco = monacoRef.current;
-    if (!editor || !monaco) return;
-
-    const model = editor.getModel();
-    if (!model) return;
-
-    const markers = (analysis?.diagnostics ?? []).map((diagnostic) => ({
-      startLineNumber: diagnostic.line,
-      endLineNumber: diagnostic.line,
-      startColumn: diagnostic.column,
-      endColumn: diagnostic.column + 1,
-      message: `${diagnostic.message} (${diagnostic.rule})`,
-      severity:
-        diagnostic.severity === 'error'
-          ? monaco.MarkerSeverity.Error
-          : diagnostic.severity === 'warning'
-            ? monaco.MarkerSeverity.Warning
-            : monaco.MarkerSeverity.Info,
-    }));
-
-    monaco.editor.setModelMarkers(model, 'codecraft-analyzer', markers);
-  }, [analysis]);
 
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -522,6 +507,97 @@ export function CodeCraftIDE() {
     },
     [handleRun],
   );
+
+  /**
+   * What extensions are allowed to do to the editor.
+   *
+   * Every method is a request this component fulfils, so an extension cannot
+   * reach past it into editor internals. Rebuilt when its dependencies change;
+   * the host is handed the new object rather than being recreated, so the
+   * registry survives.
+   */
+  const extensionHostApi = useMemo(
+    () => ({
+      replaceActiveFile: (content: string) => {
+        const editor = editorRef.current;
+        const model = editor?.getModel();
+        if (!editor || !model) return;
+        // Pushed as an edit rather than setValue so one Ctrl+Z takes it back.
+        editor.executeEdits('extension', [{ range: model.getFullModelRange(), text: content }]);
+      },
+      insertAtCursor: (text: string) => {
+        const editor = editorRef.current;
+        const selection = editor?.getSelection();
+        if (!editor || !selection) return;
+        editor.executeEdits('extension', [{ range: selection, text }]);
+      },
+      openFile: (name: string) => {
+        const target = filesRef.current.find((file) => file.name === name);
+        if (target) setActiveFileId(target.id);
+      },
+      createFile: (name: string, content: string) => {
+        const created = createFile(name, content);
+        setFiles((previous) => [...previous, created]);
+        setActiveFileId(created.id);
+      },
+      runCommand: (id: string) => {
+        void extensionHostRef.current?.host.runCommand(id, currentContextRef.current());
+      },
+      notify: (message: string) => notify(message),
+      setStatus: (message: string) => notify(message),
+    }),
+    // The host is reached through a ref rather than a dependency, because the
+    // host owns this object and this object can invoke the host: taking it as a
+    // dependency would be a cycle.
+    [notify],
+  );
+
+  const extensions = useExtensions(extensionHostApi, language);
+  extensionHostRef.current = extensions;
+
+  /** The snapshot handed to commands and status bar items. */
+  const currentContextRef = useRef(() =>
+    editorContextFrom(filesRef.current, null, '', '', 1, 1),
+  );
+  currentContextRef.current = () =>
+    editorContextFrom(files, activeFile ?? null, language, selection, caret.line, caret.column);
+
+  /** Diagnostics contributed by enabled linters, alongside the analyzer's. */
+  const extensionDiagnostics = useMemo(
+    () => extensions.lint(activeFile ?? null, language),
+    [extensions, activeFile, language],
+  );
+
+  const allDiagnostics = useMemo(
+    () => [...(analysis?.diagnostics ?? []), ...extensionDiagnostics],
+    [analysis, extensionDiagnostics],
+  );
+
+  // Surface analyzer and extension diagnostics as Monaco markers.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const markers = allDiagnostics.map((diagnostic) => ({
+      startLineNumber: diagnostic.line,
+      endLineNumber: diagnostic.line,
+      startColumn: diagnostic.column,
+      endColumn: diagnostic.column + 1,
+      message: `${diagnostic.message} (${diagnostic.rule})`,
+      severity:
+        diagnostic.severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : diagnostic.severity === 'warning'
+            ? monaco.MarkerSeverity.Warning
+            : monaco.MarkerSeverity.Info,
+    }));
+
+    monaco.editor.setModelMarkers(model, 'codecraft-analyzer', markers);
+  }, [allDiagnostics]);
 
   /**
    * Apply a file the agent wrote.
@@ -571,6 +647,54 @@ export function CodeCraftIDE() {
     },
     [],
   );
+
+  /** Apply a text action to the selection, or to the file when there is none. */
+  const applyTextAction = useCallback(
+    (transform: (text: string) => string) => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      const currentSelection = editor?.getSelection();
+      if (!editor || !model) return;
+
+      if (currentSelection && !currentSelection.isEmpty()) {
+        const text = model.getValueInRange(currentSelection);
+        editor.executeEdits('extension', [
+          { range: currentSelection, text: transform(text) },
+        ]);
+      } else {
+        editor.executeEdits('extension', [
+          { range: model.getFullModelRange(), text: transform(model.getValue()) },
+        ]);
+      }
+      editor.focus();
+    },
+    [],
+  );
+
+  /**
+   * Commands contributed by extensions, folded into the same palette as the
+   * built-in ones so there is one list rather than two that drift apart.
+   */
+  const extensionCommands: Command[] = useMemo(() => {
+    const actions = extensions.host.allTextActions().map((action) => ({
+      id: action.id,
+      title: action.title,
+      category: action.category,
+      run: () => applyTextAction(action.transform),
+    }));
+
+    const contributed = extensions.host.allCommands().map((command) => ({
+      id: command.id,
+      title: command.title,
+      category: command.category,
+      shortcut: command.shortcut,
+      run: () => {
+        void extensions.host.runCommand(command.id, currentContextRef.current());
+      },
+    }));
+
+    return [...actions, ...contributed];
+  }, [extensions, applyTextAction]);
 
   const commands: Command[] = useMemo(
     () => [
@@ -723,8 +847,42 @@ export function CodeCraftIDE() {
         category: 'Run',
         run: () => terminalRef.current?.clear(),
       },
+      {
+        id: 'view.extensions',
+        title: 'Show extensions',
+        category: 'View',
+        run: () => setBottomTab('extensions'),
+      },
+      {
+        id: 'edit.format',
+        title: 'Format the file',
+        category: 'Edit',
+        shortcut: 'Ctrl+Shift+I',
+        when: () => extensions.host.formatterFor(language) !== null,
+        run: () => {
+          const formatter = extensions.host.formatterFor(language);
+          if (!formatter) return;
+          applyTextAction((text) =>
+            formatter.format(text, { tabSize: preferences.tabSize, insertSpaces: true }),
+          );
+          notify(`Formatted with ${formatter.id}`);
+        },
+      },
+      ...extensionCommands,
     ],
-    [socket, handleRun, preferences, updatePreference, handleExport, files, notify],
+    [
+      socket,
+      handleRun,
+      preferences,
+      updatePreference,
+      handleExport,
+      files,
+      notify,
+      extensionCommands,
+      extensions,
+      language,
+      applyTextAction,
+    ],
   );
 
   const statusBadge = useMemo(() => {
@@ -928,6 +1086,11 @@ export function CodeCraftIDE() {
                 caret={caret}
                 onApplyCode={handleApplyCode}
               />
+            ) : bottomTab === 'extensions' ? (
+              <ExtensionsPanel
+                extensions={extensions.extensions}
+                onToggle={extensions.setEnabled}
+              />
             ) : (
               <>
                 <header className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-800/80 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
@@ -964,7 +1127,14 @@ export function CodeCraftIDE() {
                 onClick={() => setBottomTab('analysis')}
                 icon={Cpu}
                 label="Analysis"
-                badge={analysis?.diagnostics.length}
+                badge={allDiagnostics.length}
+              />
+              <PaneTab
+                active={bottomTab === 'extensions'}
+                onClick={() => setBottomTab('extensions')}
+                icon={Package}
+                label="Extensions"
+                badge={extensions.extensions.filter((state) => state.enabled).length}
               />
             </nav>
           </div>
@@ -979,7 +1149,7 @@ export function CodeCraftIDE() {
         tabSize={preferences.tabSize}
         selectionLength={selection.length}
         symbolCount={symbols.length}
-        diagnosticCount={analysis?.diagnostics.length ?? 0}
+        diagnosticCount={allDiagnostics.length}
         lastRun={lastRun}
         note={statusNote}
         zen={zen}

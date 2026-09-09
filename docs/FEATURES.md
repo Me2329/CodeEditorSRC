@@ -236,6 +236,38 @@ nothing here calls a hosted model.
 | 177 | Disk cost calculator | `codecraft_model corpus`, for any target size |
 | 178 | Model card stating what the model is and is not | base model, no alignment layer, real risks named |
 
+## Extensions
+
+The editor now has an extension host. Everything below is contributed through
+it, by bundled extensions using the same public contract a third-party one
+would, and every one can be switched off from the Extensions panel.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 179 | Extension host with a typed manifest | contributions, activation events, versioned |
+| 180 | Lazy activation | `onStartup`, `onLanguage:x`, `onCommand:x`, `onFile:glob` |
+| 181 | An event already fired still activates a late registration | no missed wake-ups |
+| 182 | Contributions indexed by owning extension | disabling removes exactly its own work |
+| 183 | Complete deactivation | `deactivate` plus every tracked subscription disposed |
+| 184 | One failing disposable does not strand the rest | disposal continues past a throw |
+| 185 | A throwing extension is contained | marked broken, contributions withdrawn, editor unaffected |
+| 186 | A throwing linter is skipped, not fatal | partial diagnostics beat an empty panel |
+| 187 | A throwing command is reported, not propagated | surfaced through the host's notifier |
+| 188 | Per-extension namespaced storage | survives a private window with no value |
+| 189 | Disabled set persisted | choices survive a reload |
+| 190 | Extension API is a request surface, not editor internals | the host can refuse, log or undo any call |
+| 191 | Extensions panel | contributions summarised from the manifest, so it cannot drift |
+| 192 | 30 text actions | casing, line operations, encoding, number conversion |
+| 193 | 49 snippets | Python, Rust, C++, TypeScript, Go, shell |
+| 194 | 11 linters over 8 rule families | conflict markers, mutable defaults, unsafe string functions, unquoted expansions |
+| 195 | 10 language configurations | comments, brackets, indent and dedent patterns |
+| 196 | JSON formatter that survives malformed input | reformats what it can rather than throwing |
+| 197 | Whitespace formatter for every language | indentation, trailing space, final newline |
+| 198 | 8 status bar contributions | caret, selection, language, size, line endings, indent, TODO count |
+| 199 | Extension diagnostics merged into Monaco markers | alongside the analyzer's, in one list |
+| 200 | Extension commands merged into the command palette | one list rather than two that drift |
+| 201 | Format command bound to the language's formatter | hidden when no formatter is registered |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
@@ -251,6 +283,10 @@ Stated plainly so the list above can be trusted:
   per-language LSP.
 - Git integration.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
+- Installing extensions from a registry. The host loads bundled extensions and
+  the contract is public, but there is no marketplace, no download, and no
+  sandbox around extension code: an extension runs with the page's privileges.
+  Treat the contract as the extension point, not as a security boundary.
 - A locally trained model that is useful for real coding help. The pipeline is
   real and the largest configuration is genuinely a billion parameters, but a
   checkpoint trained on one repository for twenty minutes writes text that looks
