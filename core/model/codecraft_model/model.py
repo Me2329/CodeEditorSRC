@@ -17,6 +17,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from .config import ModelConfig
 
@@ -237,6 +238,11 @@ class CodeCraftLM(nn.Module):
         self.register_buffer("rope_cos", cos, persistent=False)
         self.register_buffer("rope_sin", sin, persistent=False)
 
+        # Recompute activations in the backward pass instead of keeping them.
+        # Off by default: it is a memory-for-time trade, and a run that fits
+        # should not pay for it.
+        self.gradient_checkpointing = False
+
         self.apply(self._init_weights)
         # Scale the projections that write into the residual stream by depth, so
         # the stream's variance does not grow with the number of layers.
@@ -244,6 +250,22 @@ class CodeCraftLM(nn.Module):
         for name, parameter in self.named_parameters():
             if name.endswith("o_proj.weight") or name.endswith("down_proj.weight"):
                 torch.nn.init.normal_(parameter, mean=0.0, std=0.02 * scale)
+
+    def enable_gradient_checkpointing(self, enabled: bool = True) -> None:
+        """Trade time for memory during training.
+
+        The activations of every block are normally kept from the forward pass
+        so the backward pass can use them, and they are most of what a training
+        run holds: at a long context they dwarf the weights, the gradients and
+        the optimiser state together. Checkpointing keeps only each block's
+        input and recomputes the rest when the gradient arrives.
+
+        The cost is one extra forward pass, so roughly a third more time per
+        step. The gain is that activation memory stops scaling with depth. It is
+        what lets a model that does not fit be trained at all, which beats
+        training a smaller one faster.
+        """
+        self.gradient_checkpointing = enabled
 
     @staticmethod
     def _init_weights(module: nn.Module) -> None:
@@ -299,9 +321,26 @@ class CodeCraftLM(nn.Module):
         x = self.dropout(self.token_embedding(tokens))
 
         new_caches: list[tuple[torch.Tensor, torch.Tensor]] = []
+        # Only while training, and only without a cache: recomputation needs to
+        # run the block a second time, and a block that appends to a key/value
+        # cache would append twice.
+        recompute = (
+            self.gradient_checkpointing
+            and self.training
+            and torch.is_grad_enabled()
+            and caches is None
+        )
         for index, block in enumerate(self.blocks):
             cache = caches[index] if caches is not None else None
-            x, updated = block(x, cos, sin, cache)
+            if recompute:
+                # use_reentrant=False is the supported implementation: it keeps
+                # working with anything that does not return a plain tensor,
+                # which this does not.
+                x, updated = torch.utils.checkpoint.checkpoint(
+                    block, x, cos, sin, cache, use_reentrant=False
+                )
+            else:
+                x, updated = block(x, cos, sin, cache)
             new_caches.append(updated)
 
         x = self.final_norm(x)

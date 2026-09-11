@@ -676,6 +676,21 @@ way to make a folder is to name a file into one.
 | 459 | They wrap round | a key that does nothing at the end feels broken |
 | 460 | Two problems on one line are one place to go | |
 
+## Keeping your place, and fitting a bigger model
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 461 | Open tabs, the active file and the split survive a reload | the work already survived; the place you were in it did not |
+| 462 | Recently used files survive too | so the palette is useful on the first Ctrl+P after a reload |
+| 463 | A stored session that makes no sense is dropped | the cost of getting it wrong is no tabs; throwing is an editor that will not start |
+| 464 | Ids are reconciled against the workspace | an imported workspace has entirely different ones |
+| 465 | A split showing the active file closes | two panes on one file only halve the width |
+| 466 | Saved on every change, not on unload | a tab closed by a crash is what this is for |
+| 467 | `train --checkpointing` recomputes activations | activation memory stops scaling with depth |
+| 468 | Gradients are identical either way | tested on gradients, not loss: a lost graph shows the same loss |
+| 469 | Never recomputes with a key/value cache | a block that appends to one would append twice |
+| 470 | Off unless asked for | a run that fits should not pay a third more time |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -609,3 +609,75 @@ def test_nothing_is_computed_when_nobody_is_listening(model: CodeCraftLM, monkey
 
     list(model.generate(tokens, max_new_tokens=3, temperature=0.0, on_token=lambda *_: None))
     assert calls == 3
+
+
+# ------------------------------------------------------ gradient checkpointing
+
+
+def test_recomputing_gives_the_same_gradients() -> None:
+    """The whole claim: it costs time and changes nothing else.
+
+    Compared on gradients rather than on loss. The loss is computed in the
+    forward pass either way, so a checkpointing bug that lost the graph would
+    show an identical loss and wrong gradients.
+    """
+    config = ModelConfig(**{**CONFIG.to_dict(), "n_layers": 3})
+    torch.manual_seed(0)
+    plain = CodeCraftLM(config).train()
+    torch.manual_seed(0)
+    recomputed = CodeCraftLM(config).train()
+    recomputed.enable_gradient_checkpointing()
+
+    tokens = torch.randint(1, config.vocab_size, (2, 8))
+    for model in (plain, recomputed):
+        _, loss, _ = model(tokens, targets=tokens)
+        loss.backward()
+
+    for left, right in zip(plain.parameters(), recomputed.parameters()):
+        assert torch.allclose(left.grad, right.grad, atol=1e-6)
+
+
+def test_it_is_off_unless_asked_for(model: CodeCraftLM) -> None:
+    """A run that fits should not pay a third more time for memory it has."""
+    assert model.gradient_checkpointing is False
+
+
+def test_it_can_be_turned_off_again(model: CodeCraftLM) -> None:
+    model.enable_gradient_checkpointing()
+    model.enable_gradient_checkpointing(False)
+
+    assert model.gradient_checkpointing is False
+
+
+def test_generation_is_unaffected(model: CodeCraftLM) -> None:
+    """Recomputation would run a block twice, and a block that appends to a
+    key/value cache would append twice."""
+    model.enable_gradient_checkpointing()
+    model.eval()
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    assert len(list(model.generate(tokens, max_new_tokens=4, temperature=0.0))) == 4
+
+
+def test_a_forward_pass_with_a_cache_does_not_recompute(model: CodeCraftLM) -> None:
+    """Even in training mode: the cache is what makes it unsafe, not the mode."""
+    model.enable_gradient_checkpointing()
+    model.train()
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    _, _, caches = model(tokens)
+    logits, _, _ = model(tokens[:, :1], caches=caches, start_position=4)
+
+    assert logits.shape[0] == 1
+
+
+def test_inference_does_not_recompute(model: CodeCraftLM) -> None:
+    """There is no backward pass to save memory for."""
+    model.enable_gradient_checkpointing()
+    model.eval()
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    with torch.no_grad():
+        logits, _, _ = model(tokens, project_all=True)
+
+    assert logits.shape[1] == 4

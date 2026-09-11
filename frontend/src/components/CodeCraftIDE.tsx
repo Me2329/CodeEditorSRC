@@ -42,6 +42,7 @@ import {
 } from '../lib/recent';
 import { decide as decideDropped, explain as explainRefused, uniqueName } from '../lib/drop';
 import { nextAfter, previousBefore } from '../lib/problems';
+import { loadSession, reconcile, saveSession } from '../lib/session';
 import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
 import {
@@ -191,6 +192,14 @@ export function CodeCraftIDE() {
    * The previous strip showed every file, which made it a second file explorer
    * rather than a record of what you are working on.
    */
+  /**
+   * What was open last time.
+   *
+   * Read once, before the files arrive: the ids in it are reconciled against
+   * the workspace as soon as there is one, and anything pointing at a file that
+   * is gone is dropped rather than repaired.
+   */
+  const restored = useRef(loadSession());
   const [tabs, setTabs] = useState(NO_TABS);
 
   /**
@@ -230,6 +239,35 @@ export function CodeCraftIDE() {
   // result of navigating does not record a new place and bury the one we came
   // from.
   const navigatingRef = useRef(false);
+
+  // Applied once, when the workspace first has files in it. A second pass would
+  // fight with whatever the user has done since.
+  const sessionApplied = useRef(false);
+  useEffect(() => {
+    if (sessionApplied.current || files.length === 0) return;
+    sessionApplied.current = true;
+
+    const session = reconcile(restored.current, files.map((file) => file.id));
+    if (session.open.length === 0) return;
+
+    setTabs({ open: [...session.open], active: session.active || null });
+    setRecent(session.recent);
+    if (session.split) setSplitFileId(session.split);
+    if (session.active) setActiveFileId(session.active);
+  }, [files.length]);
+
+  // Saved on every change rather than on unload: a tab closed by the browser
+  // crashing is exactly the case this is for.
+  useEffect(() => {
+    if (!sessionApplied.current) return;
+    saveSession({
+      open: [...tabs.open],
+      active: tabs.active ?? '',
+      split: splitFileId ?? '',
+      recent: [...recent],
+      collapsed: [],
+    });
+  }, [tabs, splitFileId, recent]);
 
   // Showing a file opens a tab for it; deleting one closes its tab.
   useEffect(() => {

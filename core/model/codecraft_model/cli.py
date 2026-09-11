@@ -272,11 +272,16 @@ def command_train(args: argparse.Namespace) -> int:
         config = config.__class__(**{**config.to_dict(), **overrides})
 
     model = CodeCraftLM(config)
+    if args.checkpointing:
+        # Activation memory stops scaling with depth, at the cost of one extra
+        # forward pass per step.
+        model.enable_gradient_checkpointing()
     described = "resumed" if resuming else f"'{args.size or 'micro'}'"
     print(
         f"model {described}: {humanise(model.parameter_count())} parameters, "
         f"vocab {config.vocab_size}, context {config.max_seq_len}, "
         f"dropout {config.dropout}"
+        + (", recomputing activations" if args.checkpointing else "")
     )
 
     tokens_per_step = args.batch * min(args.block, config.max_seq_len) * args.accumulate
@@ -976,6 +981,14 @@ def main(argv: list[str] | None = None) -> int:
         "--compile",
         action="store_true",
         help="fuse the graph with torch.compile: faster steps, slow first step",
+    )
+    trainer.add_argument(
+        "--checkpointing",
+        action="store_true",
+        help=(
+            "recompute activations in the backward pass: roughly a third more "
+            "time per step, and activation memory stops scaling with depth"
+        ),
     )
     trainer.add_argument(
         "--max-hours",
