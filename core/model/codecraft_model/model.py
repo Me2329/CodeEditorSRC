@@ -304,6 +304,7 @@ class CodeCraftLM(nn.Module):
         temperature: float = 0.8,
         top_k: int | None = 40,
         top_p: float | None = 0.95,
+        min_p: float | None = None,
         repetition_penalty: float = 1.1,
         stop_tokens: set[int] | None = None,
     ):
@@ -329,7 +330,7 @@ class CodeCraftLM(nn.Module):
                 next_token = torch.argmax(next_logits, dim=-1, keepdim=True)
             else:
                 next_logits = next_logits / temperature
-                next_logits = _filter_logits(next_logits, top_k, top_p)
+                next_logits = _filter_logits(next_logits, top_k, top_p, min_p)
                 probabilities = F.softmax(next_logits, dim=-1)
                 next_token = torch.multinomial(probabilities, num_samples=1)
 
@@ -366,18 +367,40 @@ def _apply_repetition_penalty(
 
 
 def _filter_logits(
-    logits: torch.Tensor, top_k: int | None, top_p: float | None
+    logits: torch.Tensor,
+    top_k: int | None,
+    top_p: float | None,
+    min_p: float | None = None,
 ) -> torch.Tensor:
     """Restrict sampling to the most probable tokens.
 
-    top_k keeps a fixed number of candidates; top_p keeps the smallest set whose
-    probabilities sum past a threshold. Applying both keeps a hard ceiling on
-    the candidate list while still adapting to how confident the model is.
+    Three filters, applied together, each covering a case the others miss.
+
+    top_k keeps a fixed number of candidates, which puts a hard ceiling on how
+    wrong a sample can go but ignores how confident the model is.
+
+    top_p keeps the smallest set whose probabilities sum past a threshold, which
+    does adapt to confidence but badly at the extremes: when the model is very
+    sure, top_p still admits a long tail of near-zero candidates to reach its
+    sum, and one of them eventually gets picked.
+
+    min_p keeps everything within a fraction of the most likely token. That is
+    the filter that matches what code needs. After `def ` the model is certain
+    and min_p leaves almost nothing to choose from; mid-comment it is not, and
+    min_p widens on its own. It is off by default because changing sampling
+    silently would make two runs of the same checkpoint incomparable.
     """
     if top_k is not None and top_k > 0:
         k = min(top_k, logits.size(-1))
         threshold = torch.topk(logits, k, dim=-1).values[..., -1, None]
         logits = logits.masked_fill(logits < threshold, float("-inf"))
+
+    if min_p is not None and 0 < min_p < 1.0:
+        probabilities = F.softmax(logits, dim=-1)
+        # Relative to the best candidate, not to a fixed probability: the whole
+        # point is that the threshold moves with the model's confidence.
+        floor = probabilities.amax(dim=-1, keepdim=True) * min_p
+        logits = logits.masked_fill(probabilities < floor, float("-inf"))
 
     if top_p is not None and 0 < top_p < 1.0:
         ordered, indices = torch.sort(logits, descending=True, dim=-1)

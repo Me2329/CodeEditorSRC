@@ -123,6 +123,7 @@ class Engine:
         temperature: float = 0.8,
         top_k: int | None = 40,
         top_p: float | None = 0.95,
+        min_p: float | None = None,
         repetition_penalty: float = 1.1,
     ):
         """Yield (text_delta, token_id) pairs for `prompt`.
@@ -155,6 +156,7 @@ class Engine:
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 stop_tokens={self.end_token},
             ):
@@ -402,6 +404,7 @@ class Handler(BaseHTTPRequestHandler):
             "top_k": body.get("top_k", 40),
             "top_p": body.get("top_p", 0.95),
             "repetition_penalty": float(body.get("repetition_penalty", 1.1)),
+            "min_p": body.get("min_p"),
         }
 
     def _handle_generate(self) -> None:

@@ -349,9 +349,18 @@ RAM and a batch is a slice rather than a parse.
 
 ### sample
 
-Temperature, top-k, top-p and a repetition penalty, with a key/value cache so
-each token costs one step instead of a re-read of the prefix. Tokens stream as
-they are produced.
+Temperature, top-k, top-p, min-p and a repetition penalty, with a key/value
+cache so each token costs one step instead of a re-read of the prefix. Tokens
+stream as they are produced.
+
+min-p is the one worth knowing about. top-p keeps the smallest set of tokens
+whose probabilities sum past a threshold, which adapts to confidence but badly
+at the extremes: when the model is very sure, top-p still admits a long tail of
+near-zero candidates in order to reach its sum, and eventually one gets picked.
+min-p instead keeps everything within a fraction of the most likely token, so
+after `def ` it leaves almost nothing to choose from and mid-comment it widens
+on its own. It is off by default, because changing sampling silently would make
+two runs of the same checkpoint incomparable.
 
 ### serve
 

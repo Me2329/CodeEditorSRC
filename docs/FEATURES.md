@@ -346,6 +346,16 @@ would, and every one can be switched off from the Extensions panel.
 | 258 | Model status in the status bar | says what is behind inline completion |
 | 259 | Probed rather than polled | a missing model is the common case and rarely changes |
 
+## Sampling
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 260 | min-p sampling | keeps tokens within a fraction of the most likely one |
+| 261 | Adapts to confidence in both directions | narrow after `def `, wide mid-comment |
+| 262 | The best token can never be filtered out | it is its own reference |
+| 263 | Off by default | silent sampling changes make runs incomparable |
+| 264 | Available from `sample`, `/generate` and the engine | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

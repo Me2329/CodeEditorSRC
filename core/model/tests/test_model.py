@@ -253,3 +253,56 @@ def test_repetition_penalty_moves_negative_scores_further_away() -> None:
     logits = torch.tensor([[-2.0, -2.0]])
     penalised = _apply_repetition_penalty(logits.clone(), [0], 2.0)
     assert float(penalised[0, 0]) < float(penalised[0, 1])
+
+
+# ---------------------------------------------------------------- min-p
+
+
+def test_min_p_keeps_only_what_is_close_to_the_best() -> None:
+    """A fraction of the top probability, not a fixed one.
+
+    The values sit clear of the threshold rather than on it: a candidate exactly
+    at the boundary is decided by floating-point rounding, which is not a
+    behaviour worth pinning down.
+    """
+    logits = torch.log(torch.tensor([[0.6, 0.4, 0.05, 0.05]]))
+    filtered = _filter_logits(logits.clone(), top_k=None, top_p=None, min_p=0.5)
+
+    # 0.4 is comfortably above half of 0.6; 0.05 is well below.
+    assert int(torch.isfinite(filtered).sum()) == 2
+
+
+def test_min_p_narrows_when_the_model_is_confident() -> None:
+    """After `def ` there is not much to choose from, and that is correct."""
+    confident = torch.log(torch.tensor([[0.97, 0.01, 0.01, 0.01]]))
+    filtered = _filter_logits(confident.clone(), top_k=None, top_p=None, min_p=0.1)
+
+    assert int(torch.isfinite(filtered).sum()) == 1
+
+
+def test_min_p_widens_when_the_model_is_unsure() -> None:
+    """Mid-comment, where several continuations are equally reasonable."""
+    unsure = torch.log(torch.tensor([[0.3, 0.28, 0.22, 0.2]]))
+    filtered = _filter_logits(unsure.clone(), top_k=None, top_p=None, min_p=0.1)
+
+    assert int(torch.isfinite(filtered).sum()) == 4
+
+
+def test_min_p_always_keeps_the_best_token() -> None:
+    """It is its own reference, so it can never be filtered out."""
+    logits = torch.log(torch.tensor([[0.99, 0.005, 0.005]]))
+    filtered = _filter_logits(logits.clone(), top_k=None, top_p=None, min_p=0.99)
+
+    assert int(torch.isfinite(filtered).sum()) >= 1
+
+
+def test_min_p_is_off_unless_asked_for() -> None:
+    """Changing sampling silently would make two runs incomparable."""
+    logits = torch.log(torch.tensor([[0.6, 0.3, 0.05, 0.05]]))
+    assert int(torch.isfinite(_filter_logits(logits.clone(), None, None)).sum()) == 4
+
+
+def test_generation_accepts_min_p(model: CodeCraftLM) -> None:
+    tokens = torch.randint(0, CONFIG.vocab_size, (1, 4))
+    produced = list(model.generate(tokens, max_new_tokens=5, temperature=0.8, min_p=0.05))
+    assert len(produced) == 5

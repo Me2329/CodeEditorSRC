@@ -335,6 +335,7 @@ def command_sample(args: argparse.Namespace) -> int:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        min_p=args.min_p,
         repetition_penalty=args.repetition_penalty,
         stop_tokens={tokenizer.special_id("<|end|>")},
     ):
@@ -619,6 +620,12 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--temperature", type=float, default=0.8)
     sampler.add_argument("--top-k", type=int, default=40)
     sampler.add_argument("--top-p", type=float, default=0.95)
+    sampler.add_argument(
+        "--min-p",
+        type=float,
+        default=None,
+        help="keep tokens within this fraction of the most likely one; adapts to confidence",
+    )
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
     add_device(sampler)
     sampler.set_defaults(func=command_sample)
