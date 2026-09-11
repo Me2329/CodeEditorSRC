@@ -347,6 +347,78 @@ def command_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_evaluate(args: argparse.Namespace) -> int:
+    """Measure a checkpoint, rather than reading samples and forming a view."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .evaluate import measure_perplexity, measure_throughput, report
+
+    device = resolve_device(args.device)
+    model, payload = load_checkpoint(checkpoint, device)
+    print(
+        f"{humanise(model.parameter_count())} parameters, step {payload['step']}, "
+        f"on {describe_device(device)}\n"
+    )
+
+    if args.quantize:
+        from .quantize import quantize_model
+
+        measured = quantize_model(model)
+        model.to(device)
+        print(
+            f"int8 weights: {measured.original_bytes / 1e6:.1f}MB -> "
+            f"{measured.quantized_bytes / 1e6:.1f}MB ({measured.compression:.2f}x), "
+            f"mean error {measured.mean_error:.6f}\n"
+        )
+
+    perplexity = None
+    validation = run / "val.bin"
+    if validation.exists():
+        metadata = json.loads((run / "meta.json").read_text(encoding="utf-8"))
+        perplexity = measure_perplexity(
+            model,
+            TokenDataset(validation, metadata["dtype"]),
+            batches=args.batches,
+            batch_size=args.batch,
+            block_size=min(args.block, model.config.max_seq_len),
+            characters_per_token=metadata.get("characters_per_token"),
+            device=device,
+        )
+        print(
+            f"held-out loss        {perplexity.loss:.4f}\n"
+            f"perplexity           {perplexity.perplexity:.2f}\n"
+            f"bits per token       {perplexity.bits_per_token:.3f}\n"
+            f"bits per character   {perplexity.bits_per_character:.3f}"
+            "   (comparable across tokenizers)\n"
+            f"tokens scored        {perplexity.tokens_scored:,}\n"
+        )
+    else:
+        print("no val.bin in the run directory; skipping perplexity\n")
+
+    throughput = measure_throughput(
+        model,
+        prompt_tokens=args.prompt_tokens,
+        generate_tokens=args.generate_tokens,
+        device=device,
+    )
+    print(
+        f"prefill              {throughput.prefill_tokens_per_second:,.0f} tok/s\n"
+        f"decode               {throughput.decode_tokens_per_second:,.1f} tok/s\n"
+        f"time to first token  {throughput.first_token_ms:.0f}ms"
+    )
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(report(perplexity, throughput), indent=2), encoding="utf-8"
+        )
+        print(f"\nwritten to {args.json}")
+    return 0
+
+
 def command_infill(args: argparse.Namespace) -> int:
     """Complete at a caret, with the code on both sides of it."""
     run = Path(args.run)
@@ -550,6 +622,22 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
     add_device(sampler)
     sampler.set_defaults(func=command_sample)
+
+    evaluator = subparsers.add_parser(
+        "evaluate", help="measure held-out perplexity and throughput"
+    )
+    evaluator.add_argument("--run", required=True)
+    evaluator.add_argument("--batches", type=int, default=50)
+    evaluator.add_argument("--batch", type=int, default=8)
+    evaluator.add_argument("--block", type=int, default=512)
+    evaluator.add_argument("--prompt-tokens", type=int, default=256)
+    evaluator.add_argument("--generate-tokens", type=int, default=64)
+    evaluator.add_argument(
+        "--quantize", action="store_true", help="measure the int8 model instead"
+    )
+    evaluator.add_argument("--json", default=None, help="also write the numbers to a file")
+    add_device(evaluator)
+    evaluator.set_defaults(func=command_evaluate)
 
     infill = subparsers.add_parser(
         "infill", help="complete between a prefix and a suffix"

@@ -313,6 +313,26 @@ would, and every one can be switched off from the Extensions panel.
 | 235 | Changes panel for agent edits | seeing the diff beats trusting the promise |
 | 236 | Baseline recorded once per run | a second edit still diffs against what the user last saw |
 
+## Measurement and search
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 237 | `evaluate` command | held-out perplexity and throughput in one place |
+| 238 | Bits per character reported | the only figure comparable across tokenizers |
+| 239 | Prefill and decode measured separately | compute-bound and memory-bound respectively |
+| 240 | Time to first token | the prefill number as lag someone feels |
+| 241 | Warmup discarded | otherwise the measurement is startup, not speed |
+| 242 | Fixed evaluation seed | a difference between checkpoints is a real difference |
+| 243 | Evaluation leaves a training model in training mode | dropout stays on |
+| 244 | Quantized evaluation | measured: int8 costs nothing in quality here |
+| 245 | Workspace-wide search | plain text, whole word, case, regular expressions |
+| 246 | An invalid pattern returns nothing rather than throwing | it is the normal state while typing one |
+| 247 | Empty-matching patterns refused | no useful meaning, and it would hang |
+| 248 | Match cap | a runaway pattern cannot lock the tab |
+| 249 | Per-line cursor reset | a match at the start of a line is not skipped |
+| 250 | Replace across the workspace | capture groups in regex mode, literal dollars otherwise |
+| 251 | Only changed files returned | including the case-normalising replacement that really does change one |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

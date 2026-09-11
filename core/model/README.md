@@ -472,6 +472,42 @@ The boundaries that genuinely hold in this project are the sandbox and agent
 plan mode, and they protect your machine from code rather than filtering text.
 [MODEL_CARD.md](MODEL_CARD.md) sets all of this out properly.
 
+## Measuring a checkpoint
+
+```bash
+python -m codecraft_model evaluate --run runs/big
+python -m codecraft_model evaluate --run runs/big --quantize   # the int8 model
+```
+
+Held-out perplexity, bits per token, bits per character, and throughput split
+into prefill and decode. Bits per character is the one to compare across runs:
+loss per token is not comparable between a 4,096-token vocabulary and a
+32,768-token one, because the second predicts from a harder menu.
+
+Prefill and decode are separate because they behave differently. Prefill reads
+the whole prompt in one compute-bound pass; decode produces one token at a time
+and is bound by reading the weights. Time to first token is the prefill number
+restated as the lag someone actually feels.
+
+### What int8 costs, measured
+
+The billion-token checkpoint, scored on held-out data before and after
+quantizing:
+
+| | float32 | int8 |
+| --- | --- | --- |
+| Held-out loss | 4.2336 | 4.2332 |
+| Perplexity | 68.97 | 68.94 |
+| Bits per character | 1.737 | 1.737 |
+| Weights | 34.6MB | 21.3MB |
+
+Quality is unchanged. The difference is smaller than the noise between two
+seeds, which is the answer you want from a quantization scheme.
+
+Decode is slower quantized, because dequantization happens per forward pass:
+this trades compute for memory rather than being faster. It exists so a model
+that would not otherwise fit can be served at all.
+
 ## Tests
 
 ```bash
