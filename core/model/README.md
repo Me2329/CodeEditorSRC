@@ -603,6 +603,33 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Picking between several completions
+
+Greedy decoding takes the likeliest token at every step, which is not the same
+as the likeliest sequence. For a suggestion that will be accepted or rejected
+whole, the sequence is what matters.
+
+```bash
+curl -s localhost:8940/infill -d '{"prefix": "def add(a, b):\n    return ", "suffix": "\n", "candidates": 4}'
+```
+
+Four samples are drawn at a temperature that lets them differ, and the one the
+model believed most is returned. Believed most means the highest mean
+log-probability under the model's own distribution, taken before temperature,
+top-k and the penalties: a probability measured after the distribution has been
+cut down says how likely a token was among the ones still allowed, which is a
+property of the sampler rather than of the model.
+
+Mean rather than total, or the shortest candidate wins every time by having
+fewer chances to be wrong.
+
+It costs what it says: four candidates, four generations. That is worth it for a
+completion someone is waiting on and reading, and not worth it for anything
+generated in bulk, so it is off unless asked for and capped at eight.
+
+The response carries `confidence` either way, which is the same number and is
+what a client would threshold on to decide whether to show a suggestion at all.
+
 ## Stopping on text
 
 A stop token works when the model was trained to emit one. Everything else needs
@@ -833,7 +860,7 @@ whatever it is shown.
 make test-model
 ```
 
-396 tests: parameter counts against real modules, tokenizer round trips over
+405 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

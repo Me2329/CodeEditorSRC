@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
 import {
   matching as matchingSnippets,
@@ -265,6 +266,15 @@ export function CodeCraftIDE() {
    * terminal comes back the moment another file is showing.
    */
   const isMarkdown = preferences.markdownPreview && activeFile?.language === 'markdown';
+
+  /**
+   * TODO and FIXME notes across the workspace.
+   *
+   * Recomputed from the files rather than tracked: scanning a workspace is a
+   * regex over a few thousand lines, which is cheaper than the bookkeeping that
+   * would keep an incremental list correct.
+   */
+  const todos = useMemo(() => scanWorkspace(files), [files]);
 
   // ------------------------------------------------------------------ startup
   useEffect(() => {
@@ -1749,7 +1759,13 @@ export function CodeCraftIDE() {
                   error={analysisError}
                   pending={analysisPending}
                   extensionDiagnostics={extensionDiagnostics}
+                  todos={todos}
                   onJumpToLine={handleJumpToLine}
+                  onOpenTodo={(fileId, line) => {
+                    if (fileId !== activeFileId) setActiveFileId(fileId);
+                    // Let the editor swap models before moving the caret.
+                    window.setTimeout(() => handleJumpToLine(line), 60);
+                  }}
                 />
               </>
             )}
@@ -1772,7 +1788,7 @@ export function CodeCraftIDE() {
                 onClick={() => setBottomTab('analysis')}
                 icon={Cpu}
                 label="Analysis"
-                badge={allDiagnostics.length}
+                badge={allDiagnostics.length + outstanding(todos)}
               />
               <PaneTab
                 active={bottomTab === 'search'}

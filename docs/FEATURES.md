@@ -601,6 +601,23 @@ way to make a folder is to name a file into one.
 | 409 | Compare the open file with another | for the copy that drifted, rather than the version that changed |
 | 410 | The diff view closes without judging | a comparison is not a proposal to accept or discard |
 
+## Confidence, candidates and notes
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 411 | Every token's log-probability is available | under the model's own distribution, before sampling |
+| 412 | Nothing is computed when nobody asks | the log-softmax is over the whole vocabulary |
+| 413 | `candidates` samples several completions and picks one | the likeliest token at each step is not the likeliest sequence |
+| 414 | Scored by mean log-probability, not total | or the shortest candidate always wins |
+| 415 | Capped at eight | each candidate is a whole generation |
+| 416 | `confidence` in every infill response | what a client would threshold on before showing a suggestion |
+| 417 | TODO, FIXME, BUG, HACK, XXX and NOTE collected | a to-do list nothing else ever gathers |
+| 418 | A marker counts when a comment opener precedes it | `print("TODO")` is not a task |
+| 419 | Markers mid-comment are found | requiring the opener immediately before would miss most real notes |
+| 420 | Ordered by how bad, then by file and line | the question is what is worst, not what is where |
+| 421 | NOTE is not counted as outstanding work | or the badge means "comments" rather than "things to fix" |
+| 422 | Clicking one opens its file at its line | across files, not only the open one |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

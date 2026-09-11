@@ -546,3 +546,66 @@ def test_recycling_never_happens_when_there_is_room(model: CodeCraftLM) -> None:
     # The prompt, then one forward per generated token bar the last: the model
     # is not run again once the budget is spent.
     assert widths == [4] + [1] * 5
+
+
+# ----------------------------------------------------------- log probabilities
+
+
+def test_every_token_is_reported_with_its_log_probability(model: CodeCraftLM) -> None:
+    seen: list[tuple[int, float]] = []
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    produced = list(
+        model.generate(
+            tokens, max_new_tokens=5, temperature=0.0,
+            on_token=lambda token, logprob: seen.append((token, logprob)),
+        )
+    )
+
+    assert [token for token, _ in seen] == produced
+    assert all(logprob < 0 for _, logprob in seen)
+
+
+def test_the_log_probability_is_the_model_s_own(model: CodeCraftLM) -> None:
+    """Measured before temperature, top-k and the penalties.
+
+    A probability taken after the distribution has been cut down says how likely
+    the token was among the ones still allowed, which is a property of the
+    sampler rather than of the model.
+    """
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    greedy: list[float] = []
+    list(model.generate(tokens, max_new_tokens=1, temperature=0.0,
+                        on_token=lambda _t, logprob: greedy.append(logprob)))
+
+    narrowed: list[float] = []
+    list(model.generate(tokens, max_new_tokens=1, temperature=0.0, top_k=1,
+                        on_token=lambda _t, logprob: narrowed.append(logprob)))
+
+    # top_k=1 leaves one candidate, so a sampler-relative probability would be
+    # exactly zero in log space. It is not.
+    assert narrowed[0] == pytest.approx(greedy[0])
+    assert narrowed[0] < -0.001
+
+
+def test_nothing_is_computed_when_nobody_is_listening(model: CodeCraftLM, monkeypatch) -> None:
+    """The log-softmax is over the whole vocabulary; it is not free."""
+    from codecraft_model import model as module
+
+    calls = 0
+    original = module.F.log_softmax
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.F, "log_softmax", counted)
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    list(model.generate(tokens, max_new_tokens=3, temperature=0.0))
+    assert calls == 0
+
+    list(model.generate(tokens, max_new_tokens=3, temperature=0.0, on_token=lambda *_: None))
+    assert calls == 3

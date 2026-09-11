@@ -337,6 +337,7 @@ class CodeCraftLM(nn.Module):
         repetition_penalty: float = 1.1,
         no_repeat_ngram: int = 0,
         recycle_context: float = 0.0,
+        on_token=None,
         stop_tokens: set[int] | None = None,
         prefix_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         prefix_length: int = 0,
@@ -357,6 +358,12 @@ class CodeCraftLM(nn.Module):
         `no_repeat_ngram` forbids repeating an n-gram this call has already
         produced, which is what stops a small model looping on a phrase. Zero
         turns it off.
+
+        `on_token` is called with each token and its log-probability under the
+        model's own distribution, before temperature, top-k or any penalty. That
+        is the number worth reporting: a probability measured after the
+        distribution has been cut down says how likely the token was among the
+        ones still allowed, which is not a property of the model.
 
         `recycle_context` is the fraction of the window to keep when it fills.
         Zero stops instead, which is the default and the honest answer for a
@@ -399,6 +406,11 @@ class CodeCraftLM(nn.Module):
 
         for _ in range(max_new_tokens):
             next_logits = logits[:, -1, :].float()
+            # Taken before anything modifies the distribution, so what is
+            # reported is the model's own opinion rather than the sampler's.
+            true_logprobs = (
+                F.log_softmax(next_logits, dim=-1) if on_token is not None else None
+            )
 
             if repetition_penalty != 1.0 and generated:
                 next_logits = _apply_repetition_penalty(
@@ -422,6 +434,8 @@ class CodeCraftLM(nn.Module):
                 next_token = torch.multinomial(probabilities, num_samples=1)
 
             token_id = int(next_token.item())
+            if true_logprobs is not None:
+                on_token(token_id, float(true_logprobs[0, token_id]))
             if token_id in stop_tokens:
                 return
             yield token_id

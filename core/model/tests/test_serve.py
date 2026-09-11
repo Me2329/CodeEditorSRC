@@ -551,6 +551,65 @@ def test_the_infill_route_takes_stop_sequences(base_url: str) -> None:
     assert "e" not in body["completion"]
 
 
+def test_a_completion_reports_how_confident_the_model_was(run_directory) -> None:
+    """Mean log-probability under the model's own distribution, before sampling."""
+    engine = Engine(run_directory)
+    engine.infill("def f(", ")", max_tokens=8, temperature=0.0, use_cache=False)
+
+    assert engine.last_confidence < 0
+    assert engine.last_confidence > -20
+
+
+def test_best_of_returns_one_of_its_candidates(run_directory) -> None:
+    engine = Engine(run_directory)
+    text, total = engine.infill_best_of(
+        "def parse(text):\n    ", "\n", candidates=3, max_tokens=6, temperature=0.8
+    )
+
+    assert isinstance(text, str)
+    # Every candidate is a whole generation, so the tokens add up.
+    assert total >= 0
+
+
+def test_best_of_costs_what_it_says(run_directory) -> None:
+    engine = Engine(run_directory)
+    one, _ = engine.infill_best_of("def f(", ")", candidates=1, max_tokens=4)
+    engine.response_cache.clear()
+    _, many = engine.infill_best_of("def f(", ")", candidates=4, max_tokens=4)
+    _, single = engine.infill("def f(", ")", max_tokens=4, use_cache=False)
+
+    assert isinstance(one, str)
+    assert many >= single
+
+
+def test_best_of_zero_is_refused(run_directory) -> None:
+    """Picking the best of nothing has no answer."""
+    engine = Engine(run_directory)
+
+    with pytest.raises(ValueError, match="at least one candidate"):
+        engine.infill_best_of("a", "b", candidates=0)
+
+
+def test_the_infill_route_takes_candidates(base_url: str) -> None:
+    body = post(
+        f"{base_url}/infill",
+        {"prefix": "def f(", "suffix": ")", "max_tokens": 6, "candidates": 3},
+    )
+
+    assert body["candidates"] == 3
+    assert isinstance(body["confidence"], float)
+
+
+def test_the_candidate_count_is_bounded(base_url: str) -> None:
+    """A request for fifty generations is a denial of service with a polite name."""
+    body = post(
+        f"{base_url}/infill",
+        {"prefix": "def f(", "suffix": ")", "max_tokens": 4, "candidates": 500},
+    )
+
+    assert body["candidates"] == 8
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

@@ -6,6 +6,7 @@
 import { AlertTriangle, ChevronRight, Info, XCircle } from 'lucide-react';
 import { useState } from 'react';
 
+import type { Todo } from '../lib/todos';
 import type { AnalysisResult, AstNode, Diagnostic } from '../lib/types';
 
 interface Props {
@@ -19,7 +20,16 @@ interface Props {
    * recompute on every keystroke, the analyzer's arrive when it answers.
    */
   extensionDiagnostics?: readonly Diagnostic[];
+  /**
+   * TODO and FIXME notes from every file, not only this one.
+   *
+   * Shown here because this panel already answers "what is wrong with the
+   * code", and a note somebody left for themselves is the part of that the
+   * analyzer cannot see.
+   */
+  todos?: readonly Todo[];
   onJumpToLine: (line: number) => void;
+  onOpenTodo?: (fileId: string, line: number) => void;
 }
 
 export function AnalysisPanel({
@@ -27,7 +37,9 @@ export function AnalysisPanel({
   error,
   pending,
   extensionDiagnostics = [],
+  todos = [],
   onJumpToLine,
+  onOpenTodo,
 }: Props) {
   if (error) {
     return (
@@ -46,6 +58,7 @@ export function AnalysisPanel({
         <p className="text-xs text-slate-500">
           {pending ? 'Analyzing…' : 'Start typing to see the structure of your code.'}
         </p>
+        <TodoList todos={todos} onOpen={onOpenTodo} />
       </PanelShell>
     );
   }
@@ -95,6 +108,8 @@ export function AnalysisPanel({
         </section>
       )}
 
+      <TodoList todos={todos} onOpen={onOpenTodo} />
+
       {ast && ast.children.length === 0 && diagnostics.length === 0 && (
         <p className="mt-4 text-xs text-slate-500">No declarations found in this file.</p>
       )}
@@ -104,6 +119,52 @@ export function AnalysisPanel({
 
 function PanelShell({ children }: { children: React.ReactNode }) {
   return <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>;
+}
+
+/** Notes left in comments, across the whole workspace. */
+function TodoList({
+  todos,
+  onOpen,
+}: {
+  todos: readonly Todo[];
+  onOpen?: (fileId: string, line: number) => void;
+}) {
+  if (todos.length === 0) return null;
+
+  return (
+    <section className="mt-4">
+      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Notes in comments ({todos.length})
+      </h3>
+      <ul className="space-y-0.5">
+        {todos.map((todo) => (
+          <li key={`${todo.fileId}:${todo.line}:${todo.kind}`}>
+            <button
+              type="button"
+              onClick={() => onOpen?.(todo.fileId, todo.line)}
+              className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-[11px] text-slate-400 transition-colors hover:bg-slate-800/40 hover:text-slate-200"
+            >
+              <span
+                className={`shrink-0 font-mono text-[9px] uppercase ${
+                  todo.kind === 'FIXME' || todo.kind === 'BUG'
+                    ? 'text-halt'
+                    : todo.kind === 'NOTE'
+                      ? 'text-slate-600'
+                      : 'text-amber-400/80'
+                }`}
+              >
+                {todo.kind}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{todo.text || '(no note)'}</span>
+              <span className="shrink-0 font-mono text-[9px] text-slate-600">
+                {todo.fileName}:{todo.line}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function Metric({ label, value, warn = false }: { label: string; value: number; warn?: boolean }) {

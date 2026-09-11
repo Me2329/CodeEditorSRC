@@ -137,6 +137,10 @@ class Engine:
         self.prefix_cache = PrefixCache()
         self.response_cache = ResponseCache()
 
+        # The mean log-probability of the last completion, which is how
+        # best-of-n picks between candidates.
+        self.last_confidence = float("-inf")
+
     def describe(self) -> dict:
         config = self.model.config
         return {
@@ -322,6 +326,7 @@ class Engine:
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
             watcher = StopWatcher(stop or ())
             count = 0
+            logprobs: list[float] = []
 
             for token_id in self.model.generate(
                 tokens,
@@ -331,6 +336,7 @@ class Engine:
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
                 no_repeat_ngram=no_repeat_ngram,
+                on_token=lambda _id, logprob: logprobs.append(logprob),
                 # A model that has finished the middle says so; without these it
                 # would run on into whatever it thinks follows the suffix.
                 stop_tokens={self.end_token, self.tokenizer.fim_prefix,
@@ -355,9 +361,47 @@ class Engine:
                 watcher.feed(decoder.decode(b"", final=True))
 
         completion = watcher.text
+        self.last_confidence = (
+            sum(logprobs) / len(logprobs) if logprobs else float("-inf")
+        )
         if use_cache:
             self.response_cache.put(key, completion)
         return completion, count
+
+    def infill_best_of(
+        self, prefix: str, suffix: str, *, candidates: int = 4, temperature: float = 0.6, **options
+    ) -> tuple[str, int]:
+        """Sample several completions and return the one the model believed most.
+
+        A weak model at temperature zero is not the same as a weak model at its
+        best. Greedy decoding takes the likeliest token at every step, which is
+        not the likeliest sequence, and for a suggestion that will be accepted
+        or rejected whole, the sequence is what matters.
+
+        Scored by mean log-probability rather than total, or the shortest
+        candidate wins every time by having fewer chances to be wrong.
+
+        Costs `candidates` times as much. Worth it for a completion someone is
+        waiting on and reading; not worth it for anything generated in bulk.
+        """
+        if candidates < 1:
+            raise ValueError("best-of needs at least one candidate")
+
+        best_text = ""
+        best_score = float("-inf")
+        total = 0
+
+        for _ in range(candidates):
+            # Caching is off: identical requests would otherwise return the same
+            # remembered answer every time and the sampling would do nothing.
+            text, count = self.infill(
+                prefix, suffix, temperature=temperature, use_cache=False, **options
+            )
+            total += count
+            if self.last_confidence > best_score and text.strip():
+                best_score, best_text = self.last_confidence, text
+
+        return best_text, total
 
     def _remember_prefill(self, ids: list[int], caches, length: int) -> None:
         """Store a prefill, unless the prompt was trimmed to fit the context.
@@ -634,20 +678,38 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         started = time.time()
-        text, count = self.engine.infill(
-            prefix,
-            suffix,
-            max_tokens=max(1, min(int(body.get("max_tokens", 64)), 512)),
-            temperature=float(body.get("temperature", 0.2)),
-            no_repeat_ngram=max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
-            stop=_stop_sequences(body),
-        )
+        # Bounded low: each candidate is a whole generation, and a request that
+        # asks for fifty of them is a denial of service with a polite name.
+        candidates = max(1, min(int(body.get("candidates", 1)), 8))
+        shared = {
+            "max_tokens": max(1, min(int(body.get("max_tokens", 64)), 512)),
+            "no_repeat_ngram": max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
+            "stop": _stop_sequences(body),
+        }
+
+        if candidates > 1:
+            text, count = self.engine.infill_best_of(
+                prefix,
+                suffix,
+                candidates=candidates,
+                temperature=float(body.get("temperature", 0.6)),
+                **shared,
+            )
+        else:
+            text, count = self.engine.infill(
+                prefix,
+                suffix,
+                temperature=float(body.get("temperature", 0.2)),
+                **shared,
+            )
         self._send_json(
             200,
             {
                 "model": self.engine.name,
                 "completion": text,
                 "tokens": count,
+                "candidates": candidates,
+                "confidence": round(self.engine.last_confidence, 4),
                 "seconds": round(time.time() - started, 3),
             },
         )
