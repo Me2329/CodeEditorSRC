@@ -165,6 +165,8 @@ export interface Preferences {
   liveAnalysis: boolean;
   /** Grey-text suggestions ahead of the caret, from the local model. */
   inlineCompletion: boolean;
+  /** Shortcut overrides, as written text against a command id. */
+  keybindings: Record<string, string>;
   /** Show whitespace characters. */
   renderWhitespace: boolean;
   /** Hide every panel but the editor. */
@@ -186,6 +188,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fontLigatures: true,
   liveAnalysis: true,
   inlineCompletion: true,
+  keybindings: {},
   renderWhitespace: false,
   zenMode: false,
   wallSeconds: 10,
@@ -218,6 +221,13 @@ export function normalisePreferences(raw: unknown): Preferences {
     fontLigatures: flag(source.fontLigatures, DEFAULT_PREFERENCES.fontLigatures),
     liveAnalysis: flag(source.liveAnalysis, DEFAULT_PREFERENCES.liveAnalysis),
     inlineCompletion: flag(source.inlineCompletion, DEFAULT_PREFERENCES.inlineCompletion),
+    // Only string values survive: a hand-edited file cannot install a binding
+    // the resolver would choke on.
+    keybindings: Object.fromEntries(
+      Object.entries(source.keybindings ?? {}).filter(
+        ([command, keys]) => typeof command === 'string' && typeof keys === 'string',
+      ),
+    ),
     renderWhitespace: flag(source.renderWhitespace, DEFAULT_PREFERENCES.renderWhitespace),
     zenMode: flag(source.zenMode, DEFAULT_PREFERENCES.zenMode),
     wallSeconds: number(source.wallSeconds, DEFAULT_PREFERENCES.wallSeconds, 1, 120),

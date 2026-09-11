@@ -356,6 +356,22 @@ would, and every one can be switched off from the Extensions panel.
 | 263 | Off by default | silent sampling changes make runs incomparable |
 | 264 | Available from `sample`, `/generate` and the engine | |
 
+## Keybindings
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 265 | Shortcuts as a table, not a chain of conditionals | listable, displayable, overridable |
+| 266 | Ctrl and Cmd folded into one modifier | a single binding covers both keyboards |
+| 267 | Written shortcuts parse from what people type | `Ctrl+Shift+P`, `cmd+p`, `Mod+,` |
+| 268 | Parsing and describing agree | asserted, or a written binding could never fire |
+| 269 | Modifier-only shortcuts refused | they can never fire, so installing one is a dead key |
+| 270 | Conflicts detected rather than resolved silently | a shortcut that does nothing is invisible |
+| 271 | Scoped bindings | a format shortcut does not fire in a search box |
+| 272 | User overrides by command id | survives a change to the default |
+| 273 | An unparseable override falls back | losing a shortcut silently is worse than ignoring a typo |
+| 274 | Every shipped binding is checked against a real command | a dead shortcut fails the build |
+| 275 | Platform notation for display | `Ctrl+Shift+P` or `⌘⇧P` |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

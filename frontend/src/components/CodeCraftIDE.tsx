@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
 import { ApiError, api } from '../lib/api';
 import type { Command } from '../lib/commands';
 import {
@@ -342,59 +343,36 @@ export function CodeCraftIDE() {
   // Global shortcuts. Monaco owns the ones that act on text; these are the
   // application-level bindings, so they are registered on the window and each
   // one calls preventDefault to stop the browser's own handling.
+  /**
+   * Bindings, with user overrides applied.
+   *
+   * Stored as written text against a command id, so a renamed shortcut survives
+   * a change to the default and an unparseable one falls back rather than
+   * silently removing the binding.
+   */
+  const bindings = useMemo(
+    () => mergeBindings(DEFAULT_BINDINGS, preferences.keybindings ?? {}),
+    [preferences.keybindings],
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const modifier = event.ctrlKey || event.metaKey;
+      // Bindings live in a table rather than in this handler, so they can be
+      // listed, displayed and overridden. The handler's only job is to look one
+      // up and run it.
+      const command = resolveBinding(event, bindings);
+      if (!command) return;
 
-      if (modifier && event.key === 'Enter') {
-        event.preventDefault();
-        if (socket.isRunning) socket.abort();
-        else handleRun();
-        return;
-      }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'p') {
-        event.preventDefault();
-        setPaletteMode('commands');
-        return;
-      }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        setBottomTab('search');
-        return;
-      }
-      if (modifier && event.shiftKey && event.key.toLowerCase() === 'o') {
-        event.preventDefault();
-        setPaletteMode('symbols');
-        return;
-      }
-      if (modifier && !event.shiftKey && event.key.toLowerCase() === 'p') {
-        event.preventDefault();
-        setPaletteMode('files');
-        return;
-      }
-      if (modifier && event.key === ',') {
-        event.preventDefault();
-        setSettingsOpen(true);
-        return;
-      }
-      if (event.altKey && event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        updatePreference('wordWrap', !preferences.wordWrap);
-        return;
-      }
-      if (event.key === 'F11') {
-        event.preventDefault();
-        updatePreference('zenMode', !preferences.zenMode);
-        return;
-      }
-      if (event.key === 'Escape' && preferences.zenMode) {
-        updatePreference('zenMode', false);
-      }
+      const found = commandsRef.current.find((entry) => entry.id === command);
+      if (!found || (found.when && !found.when())) return;
+
+      event.preventDefault();
+      found.run();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleRun, socket, preferences.wordWrap, preferences.zenMode, updatePreference]);
+  }, [bindings]);
 
   // ------------------------------------------------------------- interactions
   const handleLanguageChange = useCallback(
@@ -813,6 +791,13 @@ export function CodeCraftIDE() {
         run: () => (socket.isRunning ? socket.abort() : handleRun()),
       },
       {
+        id: 'palette.commands',
+        title: 'Show all commands',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Shift+P',
+        run: () => setPaletteMode('commands'),
+      },
+      {
         id: 'view.files',
         title: 'Go to file',
         category: 'Navigate',
@@ -998,6 +983,11 @@ export function CodeCraftIDE() {
       applyTextAction,
     ],
   );
+
+  // The keydown handler is registered before `commands` exists, so it reads the
+  // current list through a ref rather than being re-registered on every change.
+  const commandsRef = useRef<Command[]>([]);
+  commandsRef.current = commands;
 
   const statusBadge = useMemo(() => {
     if (!lastRun) return null;
