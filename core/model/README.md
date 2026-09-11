@@ -481,6 +481,60 @@ The boundaries that genuinely hold in this project are the sandbox and agent
 plan mode, and they protect your machine from code rather than filtering text.
 [MODEL_CARD.md](MODEL_CARD.md) sets all of this out properly.
 
+## Teaching it to answer rather than continue
+
+```bash
+python -m codecraft_model finetune --run runs/big --examples examples/instructions.jsonl
+```
+
+A base model does not know it is in a conversation. Fine-tuning is more
+next-token prediction on examples shaped like question then answer, with the
+loss computed on the answer only.
+
+The mask is the whole mechanism, and the alignment is the part that bites.
+Labels are shifted by one, because the logits at position i predict the token at
+position i+1. Align them position for position and the model learns to predict
+the token it has already been shown, which it picks up instantly and which
+teaches it nothing.
+
+That bug was in the first version here, and the model said so plainly: after
+fine-tuning, its first output was its own stop token, every single time. Worth
+knowing what the symptom looks like, because the loss curve gives no hint. It
+fell from 2.4 to 0.86 while learning nothing.
+
+### What twelve examples actually bought
+
+Fine-tuned on `examples/instructions.jsonl`, twelve examples, 150 steps.
+
+A prompt it was trained on:
+
+```
+write a function that adds two numbers
+
+def add(a: int, b: int) -> int:
+    return a + b
+```
+
+Correct, and it stopped on its own after twenty tokens rather than running to
+the budget. Before fine-tuning, the same prompt produced Rust documentation
+comments.
+
+A prompt it was not trained on:
+
+```
+multiply two numbers together
+
+def
+      // This is a string to the same as a string.
+      void _M(const char* const char* ...
+```
+
+So: it reproduces what it was shown, it learned the format, and it learned to
+stop. It did not learn the task. That is exactly what twelve examples on an
+8.6M-parameter model should do, and pretending otherwise would be the easiest
+kind of self-deception here. Instruction tuning wants thousands of examples,
+and the format is what this code provides.
+
 ## A checkpoint that loads without unpickling
 
 ```bash
