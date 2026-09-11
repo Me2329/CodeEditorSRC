@@ -119,6 +119,7 @@ class Attention(nn.Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
+        past = 0 if cache is None else cache[0].shape[2]
         if cache is not None:
             past_k, past_v = cache
             k = torch.cat([past_k, k], dim=2)
@@ -130,14 +131,35 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.n_groups, dim=1)
             v = v.repeat_interleave(self.n_groups, dim=1)
 
-        # A single query attends to the whole cached prefix, so the causal mask
-        # only applies while processing more than one position at a time.
+        # Three cases, and the third is the one that is easy to get wrong.
+        #
+        # One query with a cache behind it attends to everything, so no mask.
+        # A whole sequence with nothing cached is the ordinary causal case.
+        # A run of queries *on top of* a cache needs a mask aligned to the
+        # bottom right: query i sits at absolute position past+i and may see
+        # every key up to it. `is_causal=True` would align the mask to the top
+        # left instead, letting query 0 see only key 0 and hiding the entire
+        # cached prefix from the new tokens. That case does not arise while
+        # decoding one token at a time, which is why it can lurk.
+        attn_mask = None
+        is_causal = False
+        if seq > 1:
+            if past == 0:
+                is_causal = True
+            else:
+                rows = torch.arange(past, past + seq, device=q.device).unsqueeze(1)
+                columns = torch.arange(past + seq, device=q.device).unsqueeze(0)
+                # True means the key takes part, which is SDPA's convention for
+                # a boolean mask.
+                attn_mask = columns <= rows
+
         attended = F.scaled_dot_product_attention(
             q,
             k,
             v,
+            attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
-            is_causal=seq > 1,
+            is_causal=is_causal,
         )
 
         attended = attended.transpose(1, 2).contiguous().view(batch, seq, -1)
@@ -314,16 +336,49 @@ class CodeCraftLM(nn.Module):
         min_p: float | None = None,
         repetition_penalty: float = 1.1,
         stop_tokens: set[int] | None = None,
+        prefix_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+        prefix_length: int = 0,
+        on_prefill=None,
     ):
-        """Yield tokens one at a time, using the cache so each step is O(1)."""
+        """Yield tokens one at a time, using the cache so each step is O(1).
+
+        `prefix_caches` skips part of the prefill. When the caller already holds
+        the key/value tensors for the first `prefix_length` tokens of this exact
+        prompt, only what follows them is run. This is the difference between
+        re-reading a 256-token context on every keystroke and reading the one
+        character that was typed.
+
+        `on_prefill` is handed the caches and their length once the prompt has
+        been read, which is the moment worth remembering: the prompt is what the
+        next request will share, and the tokens generated after it are not.
+        """
         self.eval()
         stop_tokens = stop_tokens or set()
 
         # Prefill: run the prompt once and keep its cache.
         context = tokens[:, -self.config.max_seq_len :]
-        logits, _, caches = self.forward(context)
-        position = context.shape[1]
         generated = context[0].tolist()
+
+        reused = 0
+        if prefix_caches is not None and prefix_length > 0:
+            if context.shape[1] != tokens.shape[1]:
+                # The prompt was trimmed to fit, so position i of the cache is
+                # no longer position i of the prompt and every cached key is
+                # attached to the wrong place. Refusing beats answering wrongly.
+                raise ValueError("a trimmed prompt cannot reuse a cached prefix")
+            if prefix_length >= context.shape[1]:
+                raise ValueError("the cached prefix leaves no token to run")
+            reused = prefix_length
+
+        logits, _, caches = self.forward(
+            context[:, reused:],
+            caches=prefix_caches if reused else None,
+            start_position=reused,
+        )
+        position = context.shape[1]
+
+        if on_prefill is not None:
+            on_prefill(caches, position)
 
         for _ in range(max_new_tokens):
             next_logits = logits[:, -1, :].float()

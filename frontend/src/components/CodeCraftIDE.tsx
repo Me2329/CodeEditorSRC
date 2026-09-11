@@ -13,6 +13,7 @@ import {
   Cpu,
   Download,
   GitCompare,
+  History as HistoryIcon,
   Loader2,
   Maximize2,
   Package,
@@ -43,6 +44,15 @@ import {
   prune as pruneTabs,
 } from '../lib/tabs';
 import { ApiError, api } from '../lib/api';
+import {
+  type History,
+  loadHistory,
+  record as recordRevision,
+  type RevisionReason,
+  revisionsFor,
+  saveHistory,
+  forget as forgetHistory,
+} from '../lib/history';
 import type { Command } from '../lib/commands';
 import {
   applyTheme,
@@ -66,6 +76,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { CommandPalette, type PaletteMode } from './CommandPalette';
 import { FileExplorer } from './FileExplorer';
+import { HistoryPanel } from './HistoryPanel';
 import { PreviewPane } from './PreviewPane';
 import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
@@ -77,6 +88,9 @@ import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
 const ANALYSIS_DEBOUNCE_MS = 700;
+
+/** How long the typing has to stop before the file is worth snapshotting. */
+const SNAPSHOT_IDLE_MS = 2500;
 
 /** ANSI helpers keep the console messages readable in one place. */
 const ansi = {
@@ -102,7 +116,7 @@ export function CodeCraftIDE() {
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
   const [bottomTab, setBottomTab] = useState<
-    'agent' | 'assistant' | 'analysis' | 'extensions' | 'diff' | 'search'
+    'agent' | 'assistant' | 'analysis' | 'extensions' | 'diff' | 'search' | 'history'
   >('agent');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
@@ -154,6 +168,37 @@ export function CodeCraftIDE() {
   useEffect(() => {
     if (tabs.active && tabs.active !== activeFileId) setActiveFileId(tabs.active);
   }, [tabs.active]);
+  /**
+   * Snapshots of files as they were, because there is no git in a browser.
+   *
+   * Held beside the workspace rather than inside it: history has to outlive the
+   * file it belongs to, or deleting the wrong file would take the only copy of
+   * its contents with it.
+   */
+  const [history, setHistory] = useState<History>(() => loadHistory());
+
+  useEffect(() => {
+    saveHistory(history);
+  }, [history]);
+
+  const snapshot = useCallback(
+    (fileId: string, content: string, reason: RevisionReason) => {
+      setHistory((current) => recordRevision(current, { fileId, content, reason }));
+    },
+    [],
+  );
+
+  // One snapshot per keystroke would be unreadable and would fill the storage
+  // quota, so one is taken when the typing stops. Recording declines anything
+  // identical to the last snapshot, which is what makes running this on every
+  // change harmless.
+  useEffect(() => {
+    if (!activeFile) return;
+    const { id, content } = activeFile;
+    const timer = window.setTimeout(() => snapshot(id, content, 'edit'), SNAPSHOT_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeFile?.id, activeFile?.content, snapshot]);
+
   const isPreviewRuntime = activeRuntime !== null && !activeRuntime.executable;
 
   // ------------------------------------------------------------------ startup
@@ -353,6 +398,10 @@ export function CodeCraftIDE() {
       return;
     }
 
+    // The state the code was in when it last ran is the one worth going back
+    // to, so it is a landmark in the history rather than an ordinary edit.
+    if (activeFile) snapshot(activeFile.id, activeFile.content, 'run');
+
     setLastRun(null);
     const args = parseArgs(argsText);
     terminalRef.current?.writeLine(
@@ -369,7 +418,7 @@ export function CodeCraftIDE() {
         memory_mb: preferences.memoryMb,
       },
     });
-  }, [activeRuntime, files, language, socket, stdin, argsText, preferences]);
+  }, [activeRuntime, activeFile, files, language, socket, stdin, argsText, preferences, snapshot]);
 
   // Global shortcuts. Monaco owns the ones that act on text; these are the
   // application-level bindings, so they are registered on the window and each
@@ -427,6 +476,36 @@ export function CodeCraftIDE() {
       );
     },
     [activeFile],
+  );
+
+  /**
+   * Put an earlier version of a file back.
+   *
+   * What is there now is snapshotted first, so restoring the wrong revision
+   * costs a second click rather than the work it replaced. When the file is the
+   * one on screen the change goes through Monaco, which puts it in the undo
+   * stack instead of swapping the model out from under the caret.
+   */
+  const handleRestore = useCallback(
+    (fileId: string, content: string) => {
+      const target = files.find((file) => file.id === fileId);
+      if (!target || target.content === content) return;
+
+      snapshot(fileId, target.content, 'restore');
+      setFiles((previous) =>
+        previous.map((file) => (file.id === fileId ? { ...file, content } : file)),
+      );
+
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      if (editor && model && fileId === activeFile?.id) {
+        editor.executeEdits('codecraft-restore', [
+          { range: model.getFullModelRange(), text: content },
+        ]);
+      }
+      notify(`Restored ${target.name}`);
+    },
+    [files, activeFile?.id, snapshot, notify],
   );
 
   /** Save the workspace as a JSON file the editor can read back. */
@@ -720,6 +799,12 @@ export function CodeCraftIDE() {
         setAgentEdits((edits) =>
           name in edits ? edits : { ...edits, [name]: priorContent },
         );
+        // Recording the content the agent is about to replace, which is the
+        // version someone will want back if the rewrite went wide. Safe to run
+        // from inside the updater because recording identical content is
+        // declined, so a second invocation adds nothing.
+        const replaced = previous.find((file) => file.name === name);
+        if (replaced) snapshot(replaced.id, replaced.content, 'assistant');
         return previous;
       });
 
@@ -745,7 +830,7 @@ export function CodeCraftIDE() {
         ]);
       }
     },
-    [],
+    [snapshot],
   );
 
   /** Replace the active file with code the assistant produced. */
@@ -754,6 +839,7 @@ export function CodeCraftIDE() {
       const editor = editorRef.current;
       const model = editor?.getModel();
       if (!editor || !model) return;
+      if (activeFile) snapshot(activeFile.id, activeFile.content, 'assistant');
       // Pushed as an edit operation rather than setValue, so a single Ctrl+Z
       // takes it back.
       editor.executeEdits('codecraft-assistant', [
@@ -761,7 +847,7 @@ export function CodeCraftIDE() {
       ]);
       editor.focus();
     },
-    [],
+    [activeFile, snapshot],
   );
 
   /** Apply a text action to the selection, or to the file when there is none. */
@@ -1016,6 +1102,35 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'view.history',
+        title: 'Show local history',
+        category: 'View',
+        run: () => setBottomTab('history'),
+      },
+      {
+        id: 'history.restoreLast',
+        title: 'Restore the last snapshot of this file',
+        category: 'Edit',
+        when: () =>
+          activeFile !== null && revisionsFor(history, activeFile.id).length > 0,
+        run: () => {
+          if (!activeFile) return;
+          const [newest] = revisionsFor(history, activeFile.id);
+          if (newest) handleRestore(activeFile.id, newest.content);
+        },
+      },
+      {
+        id: 'history.clearFile',
+        title: 'Discard local history for this file',
+        category: 'Edit',
+        when: () => activeFile !== null && revisionsFor(history, activeFile.id).length > 0,
+        run: () => {
+          if (!activeFile) return;
+          setHistory((current) => forgetHistory(current, activeFile.id));
+          notify('History cleared for this file');
+        },
+      },
+      {
         id: 'edit.format',
         title: 'Format the file',
         category: 'Edit',
@@ -1266,6 +1381,13 @@ export function CodeCraftIDE() {
                   window.setTimeout(() => handleJumpToLine(line), 60);
                 }}
                 onReplace={(changes) => {
+                  // Replace across files is the change most likely to be
+                  // regretted, and the one undo cannot reach in the files that
+                  // are not on screen.
+                  for (const change of changes) {
+                    const before = files.find((file) => file.id === change.fileId);
+                    if (before) snapshot(before.id, before.content, 'replace');
+                  }
                   setFiles((previous) =>
                     previous.map((file) => {
                       const change = changes.find((entry) => entry.fileId === file.id);
@@ -1302,6 +1424,16 @@ export function CodeCraftIDE() {
                   Nothing to review. Files the agent changes appear here.
                 </p>
               )
+            ) : bottomTab === 'history' ? (
+              <HistoryPanel
+                history={history}
+                file={activeFile}
+                onRestore={handleRestore}
+                onForget={(fileId) => {
+                  setHistory((current) => forgetHistory(current, fileId));
+                  notify('History cleared for this file');
+                }}
+              />
             ) : bottomTab === 'extensions' ? (
               <ExtensionsPanel
                 extensions={extensions.extensions}
@@ -1361,6 +1493,13 @@ export function CodeCraftIDE() {
                 icon={GitCompare}
                 label="Changes"
                 badge={Object.keys(agentEdits).length || undefined}
+              />
+              <PaneTab
+                active={bottomTab === 'history'}
+                onClick={() => setBottomTab('history')}
+                icon={HistoryIcon}
+                label="History"
+                badge={activeFile ? revisionsFor(history, activeFile.id).length || undefined : undefined}
               />
               <PaneTab
                 active={bottomTab === 'extensions'}

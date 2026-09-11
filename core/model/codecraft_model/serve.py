@@ -30,6 +30,7 @@ from pathlib import Path
 
 import torch
 
+from .cache import PrefixCache, ResponseCache
 from .config import humanise
 from .device import (
     architecture_warning,
@@ -92,6 +93,12 @@ class Engine:
         self.name = f"codecraft-{run.name}"
         self.end_token = self.tokenizer.special_id("<|end|>")
 
+        # Both caches serve the caret, where requests repeat: one remembers the
+        # prefill so a keystroke costs a token instead of a context, the other
+        # remembers whole answers so going back to where you were costs nothing.
+        self.prefix_cache = PrefixCache()
+        self.response_cache = ResponseCache()
+
     def describe(self) -> dict:
         config = self.model.config
         return {
@@ -113,6 +120,12 @@ class Engine:
             "weight_bytes": (
                 self.quantization.quantized_bytes if self.quantization else None
             ),
+            "cache": {
+                "responses": len(self.response_cache.entries),
+                "response_hit_rate": round(self.response_cache.stats.hit_rate, 3),
+                "prefix_reuses": self.prefix_cache.stats.partial,
+                "prefix_misses": self.prefix_cache.stats.misses,
+            },
         }
 
     def stream(
@@ -181,6 +194,7 @@ class Engine:
         top_k: int | None = 40,
         top_p: float | None = 0.95,
         repetition_penalty: float = 1.05,
+        use_cache: bool = True,
     ) -> tuple[str, int]:
         """Write what goes between `prefix` and `suffix`.
 
@@ -192,7 +206,32 @@ class Engine:
         inline suggestion should be the likely continuation rather than an
         interesting one, and the budget is small because a suggestion nobody
         asked for should not be a paragraph.
+
+        Two caches sit in front of the model, and both exist because an editor
+        asks the same question over and over. An identical request returns the
+        answer it gave last time, which also keeps a suggestion stable as the
+        editor re-requests it rather than flickering between samples. A request
+        that merely extends an earlier one reuses that prefill and pays only for
+        the tokens that are new. `use_cache=False` turns both off, which is what
+        a caller asking for a different suggestion to the same question wants.
+
+        Returns the completion and the number of tokens generated, which is zero
+        for an answer that came from the cache.
         """
+        key = ResponseCache.key(
+            prefix,
+            suffix,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+        )
+        if use_cache:
+            remembered = self.response_cache.get(key)
+            if remembered is not None:
+                return remembered, 0
+
         ids = self.tokenizer.encode_infill(
             prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
         )
@@ -203,6 +242,9 @@ class Engine:
             dtype=self.amp_dtype,
             enabled=self.amp_dtype is not None,
         ):
+            reuse = self.prefix_cache.take(ids) if use_cache else None
+            prefix_caches, reused = reuse if reuse else (None, 0)
+
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
             pieces: list[str] = []
             count = 0
@@ -218,6 +260,15 @@ class Engine:
                 # would run on into whatever it thinks follows the suffix.
                 stop_tokens={self.end_token, self.tokenizer.fim_prefix,
                              self.tokenizer.fim_suffix, self.tokenizer.fim_middle},
+                prefix_caches=prefix_caches,
+                prefix_length=reused,
+                # Remembering the prompt's own prefill, not the generated tail:
+                # the next request extends the prompt, never the suggestion.
+                on_prefill=(
+                    (lambda caches, length: self._remember_prefill(ids, caches, length))
+                    if use_cache
+                    else None
+                ),
             ):
                 count += 1
                 piece = self.tokenizer.vocab.get(token_id)
@@ -226,7 +277,20 @@ class Engine:
 
             pieces.append(decoder.decode(b"", final=True))
 
-        return "".join(pieces), count
+        completion = "".join(pieces)
+        if use_cache:
+            self.response_cache.put(key, completion)
+        return completion, count
+
+    def _remember_prefill(self, ids: list[int], caches, length: int) -> None:
+        """Store a prefill, unless the prompt was trimmed to fit the context.
+
+        A trimmed prompt's cache describes the tail of `ids` while the cache is
+        looked up by leading tokens, so storing it would hand a later request
+        keys attached to the wrong positions. Dropping it costs one prefill.
+        """
+        if length == len(ids):
+            self.prefix_cache.store(ids, caches)
 
     def complete(self, prompt: str, **options) -> tuple[str, int]:
         """Non-streaming generation. Returns the text and the token count."""

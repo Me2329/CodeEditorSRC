@@ -600,18 +600,64 @@ Decode is slower quantized, because dequantization happens per forward pass:
 this trades compute for memory rather than being faster. It exists so a model
 that would not otherwise fit can be served at all.
 
+## Serving the same question twice
+
+An editor at a caret asks almost the same question on every keystroke. The
+previous request plus one token is the next request, and prefilling it from
+scratch re-reads a context that has not changed.
+
+Two caches sit in front of `infill`. A prefix cache keeps the key/value tensors
+from the last prefill, so a request that extends an earlier one pays only for
+the tokens that are new. A response cache keeps whole answers, so a request
+identical to a recent one returns without touching the model, which also keeps
+a suggestion stable instead of resampling it each time the editor re-asks.
+
+Measured on the FIM checkpoint, typing 22 characters into a 240-token file on
+CPU, 12 tokens of completion each:
+
+| | total | per request |
+| --- | --- | --- |
+| No caching | 1.94s | 88ms |
+| Prefix cache | 1.64s | 74ms |
+| A request already seen | | under 1ms |
+
+All 22 completions were byte-identical with the cache and without it, which is
+the property that matters: reuse is an optimisation, and an optimisation that
+changes the answer is a bug.
+
+The 1.18x is honest and smaller than it sounds like it should be. Prefill is
+one forward pass over 240 positions; decode is twelve passes over one position
+each, and at this model size each of those pays roughly the same fixed cost. The
+cache removes most of the prefill, which is about a fifth of the work. It grows
+with the size of the file and shrinks as the completion gets longer. The
+response cache is the one that turns a request into nothing at all.
+
+### The bug this found
+
+Reusing a prefill means running several new tokens on top of a cache, which the
+decode path never does: it runs one. `scaled_dot_product_attention` with
+`is_causal=True` aligns its mask to the top left, so with four new queries over
+a cache of eight, query 0 could see key 0 and nothing else. Every cached token
+was masked out.
+
+The fix is an explicit mask aligned to the bottom right, and the test that
+catches it compares logits rather than sampled tokens. A test on sampled tokens
+passes with the mask wrong, because an untrained model emits the same token
+whatever it is shown.
+
 ## Tests
 
 ```bash
 make test-model
 ```
 
-200 tests: parameter counts against real modules, tokenizer round trips over
+327 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
-position, incremental decoding matching a full forward pass, the training loop
-actually reducing loss on learnable data, the HTTP surfaces driven over a real
-socket, and the whole command line run end to end from source files to
-generated text at a scale that fits in a test.
+position, incremental decoding matching a full forward pass, a reused prefill
+giving the same logits as a whole one, the training loop actually reducing loss
+on learnable data, the HTTP surfaces driven over a real socket, and the whole
+command line run end to end from source files to generated text at a scale that
+fits in a test.
 
 The CUDA paths are tested with stubs rather than skipped. The failure that
 matters most there is a wheel built without the card's architecture, and by

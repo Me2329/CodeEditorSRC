@@ -424,6 +424,46 @@ are now different things.
 | 307 | `project_all` on the forward pass | full logits without the model scoring them itself |
 | 308 | A much lower learning rate by default | fine-tuning adjusts a model that already works |
 
+## Local history
+
+There is no git in a browser, and the ways to lose an afternoon are ordinary
+ones: an assistant rewrite that replaced more than it should have, a replace
+across every file, a paste over what turned out to be the whole buffer. Undo
+covers the first few seconds of that and nothing after a reload.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 309 | Snapshots of every file as it was | a panel of its own, with the diff against the buffer now |
+| 310 | A snapshot when the typing stops | 2.5 seconds of quiet, not one per keystroke |
+| 311 | Edits close together collapse into one entry | 45 seconds, so a burst of typing is one place to go back to |
+| 312 | A run, an assistant edit and a replace-all are landmarks | they keep their own entry and never collapse |
+| 313 | Content identical to the last snapshot is not recorded | entries that diff to nothing are not entries |
+| 314 | Restoring snapshots the current content first | so restoring the wrong revision is itself undoable |
+| 315 | A restore goes through the editor | one Ctrl+Z takes it back |
+| 316 | Bounded per file and in total, oldest first | an unbounded history fills the storage quota and takes the workspace with it |
+| 317 | A failed write halves the budget and retries once | history is expendable; editing is not |
+| 318 | Deleting a file keeps its history | deleting the wrong file is the accident this exists for |
+| 319 | Malformed stored entries are dropped, not fatal | a shape change costs history, not the session |
+| 320 | Relative ages, and why each snapshot was taken | "before running", "before an assistant edit" |
+
+This is not version control. There are no branches, no commits, no remote, and
+history lives in the browser alongside the workspace.
+
+## Prompt caching at the caret
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 321 | A prefix cache over the last prefill | a keystroke costs the new tokens, not the whole context |
+| 322 | Reuse declined below 16 shared tokens | rebuilding a short prefix beats slicing a cache |
+| 323 | Trimmed caches are views, not copies | copying key/value tensors would undo the saving |
+| 324 | A response cache for requests already seen | under a millisecond, and a suggestion that does not flicker |
+| 325 | Sampling settings are part of the cache key | the same prompt at two temperatures is two questions |
+| 326 | `use_cache=False` to ask again | for a caller that wants a different suggestion |
+| 327 | Hit rates reported by `describe` | whether the cache works is not something to infer from timings |
+| 328 | Bottom-right aligned attention mask over a cache | `is_causal` hides the whole cached prefix from new tokens |
+| 329 | A trimmed prompt refuses a cached prefix | its keys belong to different positions |
+| 330 | Reuse verified on logits, not sampled tokens | an untrained model emits the same token either way |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
@@ -437,7 +477,7 @@ Stated plainly so the list above can be trusted:
   cannot fetch dependencies.
 - Language servers. Completion comes from the local index, not from a
   per-language LSP.
-- Git integration.
+- Git integration. Local history is snapshots in the browser, not version control.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
 - Installing extensions from a registry. The host loads bundled extensions and
   the contract is public, but there is no marketplace, no download, and no

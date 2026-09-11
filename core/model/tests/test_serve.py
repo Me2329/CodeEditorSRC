@@ -357,6 +357,90 @@ def test_infill_with_an_empty_suffix_still_works(run_directory) -> None:
     assert isinstance(text, str)
 
 
+def test_an_identical_infill_request_is_answered_from_the_cache(run_directory) -> None:
+    """An editor re-asking the same question should not pay for it twice.
+
+    The token count is zero because nothing was generated, which is also how a
+    caller can tell a remembered answer from a fresh one.
+    """
+    engine = Engine(run_directory)
+    first, generated = engine.infill("def parse(", ")\n", max_tokens=8, temperature=0.0)
+    second, remembered = engine.infill("def parse(", ")\n", max_tokens=8, temperature=0.0)
+
+    assert second == first
+    assert remembered == 0
+    assert engine.response_cache.stats.hits == 1
+    assert generated >= 0
+
+
+def test_asking_again_without_the_cache_runs_the_model(run_directory) -> None:
+    """`use_cache=False` is what a request for a different suggestion needs."""
+    engine = Engine(run_directory)
+    engine.infill("def parse(", ")\n", max_tokens=8, temperature=0.0)
+    _, count = engine.infill(
+        "def parse(", ")\n", max_tokens=8, temperature=0.0, use_cache=False
+    )
+
+    assert engine.response_cache.stats.hits == 0
+    assert count >= 0
+
+
+def test_a_different_budget_is_a_different_question(run_directory) -> None:
+    """Sampling settings are part of the key, or the cache answers the wrong one."""
+    engine = Engine(run_directory)
+    engine.infill("def parse(", ")\n", max_tokens=8, temperature=0.0)
+    engine.infill("def parse(", ")\n", max_tokens=16, temperature=0.0)
+
+    assert engine.response_cache.stats.hits == 0
+
+
+def test_extending_a_prompt_reuses_the_earlier_prefill(run_directory) -> None:
+    """The keystroke case: the same file with one more character typed.
+
+    A file rather than a line, because reuse is deliberately declined when there
+    is too little in common to be worth the slicing, and a one-line prompt is
+    under that threshold.
+    """
+    engine = Engine(run_directory)
+    head = CORPUS[:400]
+    engine.infill(head + "return [line", "]\n", max_tokens=4, temperature=0.0)
+    engine.infill(head + "return [line.", "]\n", max_tokens=4, temperature=0.0)
+
+    assert engine.prefix_cache.stats.partial == 1
+
+
+def test_a_prompt_with_little_in_common_is_not_worth_reusing(run_directory) -> None:
+    """Slicing and concatenating a cache is not free; a short prefix is cheaper
+    to rebuild than to reuse."""
+    engine = Engine(run_directory)
+    engine.infill("def f(", ")\n", max_tokens=4, temperature=0.0)
+    engine.infill("def g(", ")\n", max_tokens=4, temperature=0.0)
+
+    assert engine.prefix_cache.stats.partial == 0
+
+
+def test_a_cached_prefill_does_not_change_the_completion(run_directory) -> None:
+    """Reuse is an optimisation; an optimisation that changes the answer is a bug."""
+    engine = Engine(run_directory)
+    warm, _ = engine.infill("def parse(text):\n    return x", "\n", max_tokens=6, temperature=0.0)
+
+    cold_engine = Engine(run_directory)
+    cold, _ = cold_engine.infill(
+        "def parse(text):\n    return x", "\n", max_tokens=6, temperature=0.0, use_cache=False
+    )
+
+    assert warm == cold
+
+
+def test_the_caches_are_reported(run_directory) -> None:
+    """Whether the cache is working is not something to guess at from timings."""
+    engine = Engine(run_directory)
+    engine.infill("def parse(", ")\n", max_tokens=4, temperature=0.0)
+
+    described = engine.describe()
+    assert described["cache"]["responses"] == 1
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

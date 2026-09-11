@@ -306,3 +306,102 @@ def test_generation_accepts_min_p(model: CodeCraftLM) -> None:
     tokens = torch.randint(0, CONFIG.vocab_size, (1, 4))
     produced = list(model.generate(tokens, max_new_tokens=5, temperature=0.8, min_p=0.05))
     assert len(produced) == 5
+
+
+# --------------------------------------------------------------- prefix reuse
+
+
+def _greedy(model: CodeCraftLM, tokens: torch.Tensor, **options) -> list[int]:
+    return list(model.generate(tokens, max_new_tokens=6, temperature=0.0, **options))
+
+
+def test_a_reused_prefix_gives_the_same_logits(model: CodeCraftLM) -> None:
+    """The whole point: skipping part of the prefill must change nothing.
+
+    Compared on logits rather than on sampled tokens. An untrained model emits
+    the same token whatever it is shown, so a test that compares what was
+    generated would pass with the positions wired up wrongly.
+    """
+    torch.manual_seed(0)
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 12))
+
+    whole, _, caches = model(tokens, project_all=True)
+    trimmed = [(keys[:, :, :8, :], values[:, :, :8, :]) for keys, values in caches]
+    rest, _, _ = model(tokens[:, 8:], caches=trimmed, start_position=8, project_all=True)
+
+    assert torch.allclose(rest, whole[:, 8:, :], atol=1e-5)
+
+
+def test_a_prefix_at_the_wrong_position_does_not_give_the_same_logits() -> None:
+    """The negative control for the test above.
+
+    Rotary embeddings are applied by position, so a cache used at the wrong
+    offset produces different attention. If this ever matches, the test above
+    is measuring nothing.
+    """
+    torch.manual_seed(0)
+    model = CodeCraftLM(CONFIG).eval()
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 12))
+
+    whole, _, caches = model(tokens, project_all=True)
+    trimmed = [(keys[:, :, :8, :], values[:, :, :8, :]) for keys, values in caches]
+    shifted, _, _ = model(tokens[:, 8:], caches=trimmed, start_position=6, project_all=True)
+
+    assert not torch.allclose(shifted, whole[:, 8:, :], atol=1e-5)
+
+
+def test_generating_with_a_reused_prefix_reads_only_the_new_tokens(
+    model: CodeCraftLM,
+) -> None:
+    """The saving is real only if the prompt is not read again."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 12))
+    caches = model(tokens[:, :8])[2]
+
+    widths: list[int] = []
+    original = model.forward
+
+    def spy(input_tokens, *args, **kwargs):
+        widths.append(input_tokens.shape[1])
+        return original(input_tokens, *args, **kwargs)
+
+    model.forward = spy  # type: ignore[method-assign]
+    try:
+        _greedy(model, tokens, prefix_caches=caches, prefix_length=8)
+    finally:
+        model.forward = original  # type: ignore[method-assign]
+
+    # Four tokens of prompt left, then one forward per generated token.
+    assert widths[0] == 4
+
+
+def test_the_prefill_is_reported_with_its_length(model: CodeCraftLM) -> None:
+    seen: list[int] = []
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 9))
+
+    _greedy(model, tokens, on_prefill=lambda _caches, length: seen.append(length))
+
+    assert seen == [9]
+
+
+def test_reusing_the_whole_prompt_is_refused(model: CodeCraftLM) -> None:
+    """There would be no token left to produce logits from."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 5))
+    caches = model(tokens)[2]
+
+    with pytest.raises(ValueError, match="no token to run"):
+        _greedy(model, tokens, prefix_caches=caches, prefix_length=5)
+
+
+def test_a_trimmed_prompt_refuses_a_cached_prefix(model: CodeCraftLM) -> None:
+    """Trimming shifts every position, so cached keys belong somewhere else."""
+    long_prompt = torch.randint(1, CONFIG.vocab_size, (1, CONFIG.max_seq_len + 4))
+    caches = model(long_prompt[:, : CONFIG.max_seq_len])[2]
+
+    with pytest.raises(ValueError, match="trimmed prompt"):
+        _greedy(model, long_prompt, prefix_caches=caches, prefix_length=4)
+
+
+def test_no_prefix_cache_is_the_ordinary_path(model: CodeCraftLM) -> None:
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 6))
+
+    assert len(_greedy(model, tokens)) == 6
