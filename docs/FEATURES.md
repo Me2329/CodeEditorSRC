@@ -333,6 +333,19 @@ would, and every one can be switched off from the Extensions panel.
 | 250 | Replace across the workspace | capture groups in regex mode, literal dollars otherwise |
 | 251 | Only changed files returned | including the case-normalising replacement that really does change one |
 
+## Search panel and model status
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 252 | Search panel with results grouped by file | click a result to jump there |
+| 253 | Match highlighting in the result line | offsets, not a second search |
+| 254 | Collapsible file groups | |
+| 255 | Ctrl+Shift+F | and a command palette entry |
+| 256 | Replace is two steps | the file count is shown before anything changes |
+| 257 | Replacement on the open file goes through Monaco | one Ctrl+Z takes the whole thing back |
+| 258 | Model status in the status bar | says what is behind inline completion |
+| 259 | Probed rather than polled | a missing model is the common case and rarely changes |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

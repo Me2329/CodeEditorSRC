@@ -62,6 +62,7 @@ import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
 import { DiffView } from './DiffView';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { SearchPanel } from './SearchPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
@@ -91,7 +92,7 @@ export function CodeCraftIDE() {
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
   const [bottomTab, setBottomTab] = useState<
-    'agent' | 'assistant' | 'analysis' | 'extensions' | 'diff'
+    'agent' | 'assistant' | 'analysis' | 'extensions' | 'diff' | 'search'
   >('agent');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
@@ -356,6 +357,11 @@ export function CodeCraftIDE() {
         setPaletteMode('commands');
         return;
       }
+      if (modifier && event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        setBottomTab('search');
+        return;
+      }
       if (modifier && event.shiftKey && event.key.toLowerCase() === 'o') {
         event.preventDefault();
         setPaletteMode('symbols');
@@ -605,6 +611,34 @@ export function CodeCraftIDE() {
   );
 
   const extensions = useExtensions(extensionHostApi, language);
+
+  /**
+   * Whether the local model is running.
+   *
+   * Probed once at startup and again when inline completion is switched on,
+   * rather than polled: a model that is not running is the common case, and
+   * asking every few seconds would be noise for a fact that rarely changes.
+   */
+  const [modelStatus, setModelStatus] = useState<{ available: boolean; model?: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!preferences.inlineCompletion) return;
+    let cancelled = false;
+
+    api
+      .modelStatus()
+      .then((status) => {
+        if (!cancelled) setModelStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setModelStatus({ available: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [preferences.inlineCompletion]);
   extensionHostRef.current = extensions;
 
   /** The snapshot handed to commands and status bar items. */
@@ -921,6 +955,13 @@ export function CodeCraftIDE() {
         run: () => terminalRef.current?.clear(),
       },
       {
+        id: 'view.search',
+        title: 'Search across files',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Shift+F',
+        run: () => setBottomTab('search'),
+      },
+      {
         id: 'view.extensions',
         title: 'Show extensions',
         category: 'View',
@@ -1159,6 +1200,34 @@ export function CodeCraftIDE() {
                 caret={caret}
                 onApplyCode={handleApplyCode}
               />
+            ) : bottomTab === 'search' ? (
+              <SearchPanel
+                files={files}
+                onOpen={(fileId, line) => {
+                  if (fileId !== activeFileId) setActiveFileId(fileId);
+                  // Let the editor swap models before moving the caret.
+                  window.setTimeout(() => handleJumpToLine(line), 60);
+                }}
+                onReplace={(changes) => {
+                  setFiles((previous) =>
+                    previous.map((file) => {
+                      const change = changes.find((entry) => entry.fileId === file.id);
+                      return change ? { ...file, content: change.content } : file;
+                    }),
+                  );
+                  // The file on screen goes through Monaco, so one Ctrl+Z takes
+                  // the whole replacement back rather than leaving it stranded.
+                  const editor = editorRef.current;
+                  const model = editor?.getModel();
+                  const onScreen = changes.find((entry) => entry.name === activeFileNameRef.current);
+                  if (editor && model && onScreen) {
+                    editor.executeEdits('codecraft-replace', [
+                      { range: model.getFullModelRange(), text: onScreen.content },
+                    ]);
+                  }
+                  notify(`Replaced in ${changes.length} ${changes.length === 1 ? 'file' : 'files'}`);
+                }}
+              />
             ) : bottomTab === 'diff' ? (
               reviewing && agentEdits[reviewing] !== undefined ? (
                 <DiffView
@@ -1220,6 +1289,12 @@ export function CodeCraftIDE() {
                 badge={allDiagnostics.length}
               />
               <PaneTab
+                active={bottomTab === 'search'}
+                onClick={() => setBottomTab('search')}
+                icon={Search}
+                label="Search"
+              />
+              <PaneTab
                 active={bottomTab === 'diff'}
                 onClick={() => {
                   setReviewing((current) => current ?? Object.keys(agentEdits)[0] ?? null);
@@ -1250,6 +1325,7 @@ export function CodeCraftIDE() {
         selectionLength={selection.length}
         symbolCount={symbols.length}
         diagnosticCount={allDiagnostics.length}
+        modelName={modelStatus?.available ? (modelStatus.model ?? 'local model') : null}
         lastRun={lastRun}
         note={statusNote}
         zen={zen}
@@ -1316,6 +1392,7 @@ function StatusBar({
   note,
   zen,
   onLeaveZen,
+  modelName,
   onOpenPalette,
 }: {
   language: string;
@@ -1328,6 +1405,8 @@ function StatusBar({
   diagnosticCount: number;
   lastRun: RunOutcome | null;
   note: string;
+  /** The local model behind inline completion, or null when none is running. */
+  modelName: string | null;
   zen: boolean;
   onLeaveZen: () => void;
   onOpenPalette: () => void;
@@ -1356,6 +1435,11 @@ function StatusBar({
 
       <span className="ml-auto flex items-center gap-3">
         {note && <span className="text-indigo-300">{note}</span>}
+        {modelName && (
+          <span className="truncate text-caret" title="Inline completion is backed by this model">
+            {modelName}
+          </span>
+        )}
         {symbolCount > 0 && <span>{symbolCount} symbols</span>}
         <span className={diagnosticCount > 0 ? 'text-amber-400' : ''}>
           {diagnosticCount} problem{diagnosticCount === 1 ? '' : 's'}
