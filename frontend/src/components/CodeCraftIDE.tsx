@@ -1320,6 +1320,7 @@ export function CodeCraftIDE() {
                   analysis={analysis}
                   error={analysisError}
                   pending={analysisPending}
+                  extensionDiagnostics={extensionDiagnostics}
                   onJumpToLine={handleJumpToLine}
                 />
               </>

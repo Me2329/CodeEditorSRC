@@ -12,10 +12,23 @@ interface Props {
   analysis: AnalysisResult | null;
   error: string | null;
   pending: boolean;
+  /**
+   * Diagnostics from enabled extensions, shown alongside the analyzer's.
+   *
+   * Separate from `analysis` because they have different lifetimes: these
+   * recompute on every keystroke, the analyzer's arrive when it answers.
+   */
+  extensionDiagnostics?: readonly Diagnostic[];
   onJumpToLine: (line: number) => void;
 }
 
-export function AnalysisPanel({ analysis, error, pending, onJumpToLine }: Props) {
+export function AnalysisPanel({
+  analysis,
+  error,
+  pending,
+  extensionDiagnostics = [],
+  onJumpToLine,
+}: Props) {
   if (error) {
     return (
       <PanelShell>
@@ -27,6 +40,9 @@ export function AnalysisPanel({ analysis, error, pending, onJumpToLine }: Props)
   if (!analysis) {
     return (
       <PanelShell>
+        {extensionDiagnostics.length > 0 && (
+          <DiagnosticList diagnostics={extensionDiagnostics} onJump={onJumpToLine} />
+        )}
         <p className="text-xs text-slate-500">
           {pending ? 'Analyzing…' : 'Start typing to see the structure of your code.'}
         </p>
@@ -34,7 +50,9 @@ export function AnalysisPanel({ analysis, error, pending, onJumpToLine }: Props)
     );
   }
 
-  const { metrics, diagnostics, ast } = analysis;
+  const { metrics, ast } = analysis;
+  // Analyzer findings first: a parse error is more urgent than a long line.
+  const diagnostics = [...analysis.diagnostics, ...extensionDiagnostics];
 
   return (
     <PanelShell>
@@ -56,20 +74,7 @@ export function AnalysisPanel({ analysis, error, pending, onJumpToLine }: Props)
       </dl>
 
       {diagnostics.length > 0 && (
-        <section className="mt-4">
-          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            Diagnostics ({diagnostics.length})
-          </h3>
-          <ul className="space-y-1">
-            {diagnostics.slice(0, 40).map((diagnostic, index) => (
-              <DiagnosticRow
-                key={`${diagnostic.rule}-${diagnostic.line}-${index}`}
-                diagnostic={diagnostic}
-                onJump={onJumpToLine}
-              />
-            ))}
-          </ul>
-        </section>
+        <DiagnosticList diagnostics={diagnostics} onJump={onJumpToLine} />
       )}
 
       {ast && ast.children.length > 0 && (
@@ -115,6 +120,39 @@ const SEVERITY_STYLES = {
   warning: { icon: AlertTriangle, className: 'text-amber-400' },
   info: { icon: Info, className: 'text-sky-400' },
 } as const;
+
+/** Diagnostics, capped so a file full of findings stays scrollable. */
+function DiagnosticList({
+  diagnostics,
+  onJump,
+}: {
+  diagnostics: readonly Diagnostic[];
+  onJump: (line: number) => void;
+}) {
+  const shown = diagnostics.slice(0, 40);
+
+  return (
+    <section className="mt-4">
+      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Diagnostics ({diagnostics.length})
+      </h3>
+      <ul className="space-y-1">
+        {shown.map((diagnostic, index) => (
+          <DiagnosticRow
+            key={`${diagnostic.rule}-${diagnostic.line}-${index}`}
+            diagnostic={diagnostic}
+            onJump={onJump}
+          />
+        ))}
+      </ul>
+      {diagnostics.length > shown.length && (
+        <p className="mt-1 text-[10px] text-slate-600">
+          and {diagnostics.length - shown.length} more
+        </p>
+      )}
+    </section>
+  );
+}
 
 function DiagnosticRow({
   diagnostic,
