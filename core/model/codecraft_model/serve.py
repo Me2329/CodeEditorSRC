@@ -115,6 +115,21 @@ class Engine:
         self.name = f"codecraft-{run.name}"
         self.end_token = self.tokenizer.special_id("<|end|>")
 
+        # A run prepared before the fill-in-the-middle markers existed has a
+        # tokenizer that now knows four tokens its checkpoint has no embeddings
+        # for. Ordinary generation never emits them, so chat is unaffected, but
+        # infill puts them in the prompt and the model indexes off the end of
+        # its own table. The failure without this check is an IndexError from
+        # inside the embedding, which says nothing about what to do.
+        self.infill_error: str | None = None
+        if self.tokenizer.vocab_size > self.model.config.vocab_size:
+            self.infill_error = (
+                f"this checkpoint has {self.model.config.vocab_size} embeddings and its "
+                f"tokenizer now has {self.tokenizer.vocab_size} tokens, so it predates the "
+                "fill-in-the-middle markers. Ordinary generation works; completing at a "
+                "caret needs the run prepared and trained again."
+            )
+
         # Both caches serve the caret, where requests repeat: one remembers the
         # prefill so a keystroke costs a token instead of a context, the other
         # remembers whole answers so going back to where you were costs nothing.
@@ -139,6 +154,8 @@ class Engine:
             "trained_steps": self.payload.get("step"),
             "val_loss": self.payload.get("val_loss"),
             "adapter": self.adapter,
+            "infill": self.infill_error is None,
+            "infill_error": self.infill_error,
             "quantized": self.quantization is not None,
             "weight_bytes": (
                 self.quantization.quantized_bytes if self.quantization else None
@@ -248,6 +265,8 @@ class Engine:
         Returns the completion and the number of tokens generated, which is zero
         for an answer that came from the cache.
         """
+        if self.infill_error is not None:
+            raise ValueError(self.infill_error)
         key = ResponseCache.key(
             prefix,
             suffix,
@@ -558,6 +577,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error(
                 400, "invalid_request_error", "'prefix' and 'suffix' must be strings"
             )
+            return
+
+        if self.engine.infill_error is not None:
+            self._send_error(400, "invalid_request_error", self.engine.infill_error)
             return
 
         started = time.time()

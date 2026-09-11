@@ -168,6 +168,8 @@ export interface Preferences {
   /** Offer snippets in the completion list. Unlike the model's suggestions,
    *  these work with nothing running. */
   snippets: boolean;
+  /** Show a rendered view beside a markdown file instead of the terminal. */
+  markdownPreview: boolean;
   /** Shortcut overrides, as written text against a command id. */
   keybindings: Record<string, string>;
   /** Show whitespace characters. */
@@ -192,6 +194,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   liveAnalysis: true,
   inlineCompletion: true,
   snippets: true,
+  markdownPreview: true,
   keybindings: {},
   renderWhitespace: false,
   zenMode: false,
@@ -226,6 +229,7 @@ export function normalisePreferences(raw: unknown): Preferences {
     liveAnalysis: flag(source.liveAnalysis, DEFAULT_PREFERENCES.liveAnalysis),
     inlineCompletion: flag(source.inlineCompletion, DEFAULT_PREFERENCES.inlineCompletion),
     snippets: flag(source.snippets, DEFAULT_PREFERENCES.snippets),
+    markdownPreview: flag(source.markdownPreview, DEFAULT_PREFERENCES.markdownPreview),
     // Only string values survive: a hand-edited file cannot install a binding
     // the resolver would choke on.
     keybindings: Object.fromEntries(

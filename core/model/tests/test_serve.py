@@ -468,6 +468,39 @@ def test_serving_without_an_adapter_reports_none(run_directory) -> None:
     assert Engine(run_directory).describe()["adapter"] is None
 
 
+def test_a_checkpoint_older_than_the_fim_markers_says_so(run_directory, tmp_path) -> None:
+    """The failure without this is an IndexError from inside the embedding.
+
+    A run prepared before the markers existed has a tokenizer that knows four
+    tokens its checkpoint has no embeddings for. Ordinary generation never emits
+    them; infill puts them in the prompt.
+    """
+    import shutil
+
+    older = tmp_path / "older"
+    older.mkdir()
+    for name in ("tokenizer.json", "meta.json", "train.bin", "val.bin"):
+        shutil.copy(run_directory / name, older / name)
+
+    tokenizer = Tokenizer.load(run_directory / "tokenizer.json")
+    narrow = ModelConfig(
+        vocab_size=tokenizer.vocab_size - 4, d_model=64, n_layers=2, n_heads=4,
+        n_kv_heads=2, d_ff=128, max_seq_len=128,
+    )
+    torch.manual_seed(0)
+    save_checkpoint(older / "model.pt", CodeCraftLM(narrow), None, 10, 2.5, TrainConfig())
+
+    engine = Engine(older)
+
+    assert engine.describe()["infill"] is False
+    with pytest.raises(ValueError, match="predates the fill-in-the-middle"):
+        engine.infill("def f(", ")")
+
+
+def test_an_ordinary_run_supports_infill(run_directory) -> None:
+    assert Engine(run_directory).describe()["infill"] is True
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

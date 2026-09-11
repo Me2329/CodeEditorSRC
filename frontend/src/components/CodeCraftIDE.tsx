@@ -249,6 +249,14 @@ export function CodeCraftIDE() {
   }, [activeFile?.id, activeFile?.content, snapshot]);
 
   const isPreviewRuntime = activeRuntime !== null && !activeRuntime.executable;
+  /**
+   * Markdown gets the preview pane too, whatever runtime is selected.
+   *
+   * Notes and READMEs sit beside code rather than instead of it, so a markdown
+   * file open in a Python workspace should still be readable as a document. The
+   * terminal comes back the moment another file is showing.
+   */
+  const isMarkdown = preferences.markdownPreview && activeFile?.language === 'markdown';
 
   // ------------------------------------------------------------------ startup
   useEffect(() => {
@@ -1603,7 +1611,9 @@ export function CodeCraftIDE() {
             available height and paints over the panel below it.
           */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {isPreviewRuntime ? (
+            {isMarkdown ? (
+              <PreviewPane files={files} entryName={activeFile?.name ?? ''} markdown />
+            ) : isPreviewRuntime ? (
               <PreviewPane files={files} entryName={activeRuntime?.entry ?? 'index.html'} />
             ) : (
               <TerminalPane

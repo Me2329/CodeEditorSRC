@@ -145,6 +145,12 @@ export function SettingsPanel({ open, preferences, onChange, onReset, onClose }:
               checked={preferences.snippets}
               onChange={(value) => onChange('snippets', value)}
             />
+            <Toggle
+              label="Markdown preview"
+              hint="Render .md files beside the editor instead of the terminal"
+              checked={preferences.markdownPreview}
+              onChange={(value) => onChange('markdownPreview', value)}
+            />
           </Section>
 
           <Section

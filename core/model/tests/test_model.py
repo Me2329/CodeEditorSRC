@@ -467,3 +467,82 @@ def test_the_prompt_is_exempt_from_the_ban(model: CodeCraftLM) -> None:
     )
 
     assert banned == free
+
+
+# ------------------------------------------------------------ context recycling
+
+
+def test_a_full_context_stops_by_default(model: CodeCraftLM) -> None:
+    """Stopping is the honest answer for a completion that ran out of room."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, CONFIG.max_seq_len - 4))
+
+    produced = list(model.generate(tokens, max_new_tokens=50, temperature=0.0))
+
+    assert len(produced) == 5
+
+
+def test_recycling_carries_on_past_the_window(model: CodeCraftLM) -> None:
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, CONFIG.max_seq_len - 4))
+
+    produced = list(
+        model.generate(tokens, max_new_tokens=50, temperature=0.0, recycle_context=0.5)
+    )
+
+    assert len(produced) == 50
+
+
+def test_recycling_re_reads_the_window_it_keeps(model: CodeCraftLM) -> None:
+    """The cache cannot be shifted, only rebuilt, and that is the cost."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, CONFIG.max_seq_len - 2))
+    widths: list[int] = []
+    original = model.forward
+
+    def spy(input_tokens, *args, **kwargs):
+        widths.append(input_tokens.shape[1])
+        return original(input_tokens, *args, **kwargs)
+
+    model.forward = spy  # type: ignore[method-assign]
+    try:
+        list(model.generate(tokens, max_new_tokens=12, temperature=0.0, recycle_context=0.5))
+    finally:
+        model.forward = original  # type: ignore[method-assign]
+
+    # The prompt, then single tokens, then a re-read of half the window.
+    assert widths[0] == CONFIG.max_seq_len - 2
+    assert CONFIG.max_seq_len // 2 in widths[1:]
+
+
+def test_a_recycle_fraction_of_one_is_refused(model: CodeCraftLM) -> None:
+    """Keeping the whole window leaves no room for the token that follows it."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    with pytest.raises(ValueError, match="fraction of the window"):
+        list(model.generate(tokens, max_new_tokens=4, recycle_context=1.0))
+
+
+def test_a_negative_recycle_fraction_is_refused(model: CodeCraftLM) -> None:
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+
+    with pytest.raises(ValueError, match="fraction of the window"):
+        list(model.generate(tokens, max_new_tokens=4, recycle_context=-0.5))
+
+
+def test_recycling_never_happens_when_there_is_room(model: CodeCraftLM) -> None:
+    """It should cost nothing for a generation that fits."""
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 4))
+    widths: list[int] = []
+    original = model.forward
+
+    def spy(input_tokens, *args, **kwargs):
+        widths.append(input_tokens.shape[1])
+        return original(input_tokens, *args, **kwargs)
+
+    model.forward = spy  # type: ignore[method-assign]
+    try:
+        list(model.generate(tokens, max_new_tokens=6, temperature=0.0, recycle_context=0.5))
+    finally:
+        model.forward = original  # type: ignore[method-assign]
+
+    # The prompt, then one forward per generated token bar the last: the model
+    # is not run again once the budget is spent.
+    assert widths == [4] + [1] * 5

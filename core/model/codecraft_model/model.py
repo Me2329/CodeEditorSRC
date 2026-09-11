@@ -336,6 +336,7 @@ class CodeCraftLM(nn.Module):
         min_p: float | None = None,
         repetition_penalty: float = 1.1,
         no_repeat_ngram: int = 0,
+        recycle_context: float = 0.0,
         stop_tokens: set[int] | None = None,
         prefix_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         prefix_length: int = 0,
@@ -356,7 +357,16 @@ class CodeCraftLM(nn.Module):
         `no_repeat_ngram` forbids repeating an n-gram this call has already
         produced, which is what stops a small model looping on a phrase. Zero
         turns it off.
+
+        `recycle_context` is the fraction of the window to keep when it fills.
+        Zero stops instead, which is the default and the honest answer for a
+        completion. Set it, and generation continues: the most recent tokens are
+        re-read from position zero and everything before them is forgotten. That
+        costs one prefill per recycle and loses the beginning of the text, which
+        is a real trade rather than a free continuation.
         """
+        if not 0.0 <= recycle_context < 1.0:
+            raise ValueError("recycle_context is a fraction of the window, below 1")
         self.eval()
         stop_tokens = stop_tokens or set()
 
@@ -418,10 +428,29 @@ class CodeCraftLM(nn.Module):
 
             generated.append(token_id)
             produced.append(token_id)
-            if position >= self.config.max_seq_len:
-                # The context is full. Stopping is honest; silently dropping the
-                # oldest tokens would invalidate every cached key.
+
+            if len(produced) >= max_new_tokens:
+                # The budget is spent. Running the model once more would compute
+                # logits nobody reads, which on the last step of a short
+                # completion is a measurable fraction of the whole thing.
                 return
+
+            if position >= self.config.max_seq_len:
+                if recycle_context <= 0:
+                    # The context is full. Stopping is honest; silently dropping
+                    # the oldest tokens would invalidate every cached key.
+                    return
+
+                # Every cached key is bound to the position it was computed at,
+                # so keeping the recent tokens means reading them again from
+                # position zero. The cache cannot be shifted, only rebuilt.
+                keep = max(1, int(self.config.max_seq_len * recycle_context))
+                window = torch.tensor(
+                    [generated[-keep:]], dtype=torch.long, device=next_token.device
+                )
+                logits, _, caches = self.forward(window)
+                position = window.shape[1]
+                continue
 
             logits, _, caches = self.forward(
                 next_token, caches=caches, start_position=position

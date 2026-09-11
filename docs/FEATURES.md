@@ -562,6 +562,32 @@ way to make a folder is to name a file into one.
 | 385 | Different architectures are refused | the point between two basins is worse than both |
 | 386 | `evaluate --checkpoint` measures any file | a soup, a fine-tune, an adapter-merged model |
 
+## Markdown preview
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 387 | `.md` files render beside the editor | in place of the terminal, whatever runtime is selected |
+| 388 | The renderer is written here, not installed | a markdown library is hundreds of kilobytes to render headings |
+| 389 | Headings, lists, quotes, rules, tables | and fenced code with its language |
+| 390 | Bold, italic, strikethrough, code spans, links, images | |
+| 391 | Everything is escaped, including HTML in the source | the sandbox is a second line of defence, not the first |
+| 392 | `javascript:` and `data:` links are refused | the text stays, the link does not |
+| 393 | Links open away from the frame | a preview that navigates itself has stopped being one |
+| 394 | Code spans are held out of inline markup | `**not bold**` in backticks stays as written |
+| 395 | An underscore inside a word is not italic | or every snake_case name turns half a line italic |
+| 396 | Pipes without a divider row are a paragraph | so a shell pipeline is not a one-cell table |
+| 397 | What it does not do is written down | nested lists, reference links, footnotes, HTML passthrough |
+
+## Generating past the context
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 398 | `recycle_context` continues past a full window | the recent tokens are re-read from position zero |
+| 399 | Off by default | stopping is the honest answer for a completion that ran out of room |
+| 400 | The cost is stated, not hidden | one prefill per recycle, and the beginning of the text is gone |
+| 401 | The last decode step is no longer computed | its logits were never read |
+| 402 | A checkpoint older than the FIM markers refuses infill | with a sentence, instead of an IndexError from inside the embedding |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

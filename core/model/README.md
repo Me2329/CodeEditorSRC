@@ -603,6 +603,37 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Running out of context
+
+A generation stops when the window fills. That is the default and it is the
+honest answer for a completion: the alternative is to drop the oldest tokens,
+and every cached key is bound to the position it was computed at, so dropping
+them silently would leave the cache describing text that is no longer there.
+
+`recycle_context` makes the trade explicitly. Set it to a fraction and the most
+recent tokens are kept and read again from position zero, so generation
+continues. It costs one prefill per recycle and the beginning of the text is
+gone, which is why it is off unless asked for.
+
+The same pass removed a wasted step: the loop used to run the model once more
+after the last token, computing logits nobody read. On an eight-token completion
+that was a ninth of the decoding.
+
+### A checkpoint older than its tokenizer
+
+Adding the fill-in-the-middle markers to the tokenizer gave every run prepared
+before that change a tokenizer that knows four tokens its checkpoint has no
+embeddings for. Ordinary generation never emits them. Infill puts them straight
+into the prompt, and the model indexed off the end of its own table:
+
+```
+IndexError: index out of range in self
+```
+
+The engine now compares the two at load and says what happened, which run is
+affected and what to do about it. Chat still works on those checkpoints; only
+infill is refused, and it is refused with a sentence.
+
 ## Averaging checkpoints
 
 Training walks a noisy path. Late in a run the weights at two nearby steps sit
@@ -776,7 +807,7 @@ whatever it is shown.
 make test-model
 ```
 
-368 tests: parameter counts against real modules, tokenizer round trips over
+376 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
