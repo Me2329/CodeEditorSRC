@@ -12,6 +12,7 @@ import {
   Code2,
   Cpu,
   Download,
+  GitCompare,
   Loader2,
   Maximize2,
   Package,
@@ -59,6 +60,7 @@ import { FileExplorer } from './FileExplorer';
 import { PreviewPane } from './PreviewPane';
 import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
+import { DiffView } from './DiffView';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
@@ -89,7 +91,7 @@ export function CodeCraftIDE() {
 
   const [lastRun, setLastRun] = useState<RunOutcome | null>(null);
   const [bottomTab, setBottomTab] = useState<
-    'agent' | 'assistant' | 'analysis' | 'extensions'
+    'agent' | 'assistant' | 'analysis' | 'extensions' | 'diff'
   >('agent');
   const [caret, setCaret] = useState({ line: 1, column: 1 });
   const [selection, setSelection] = useState('');
@@ -655,8 +657,29 @@ export function CodeCraftIDE() {
    * An existing file is edited through Monaco so a single undo takes the change
    * back; a new one is added to the workspace.
    */
+  /**
+   * The state before the agent's most recent edit to each file.
+   *
+   * Kept so a change can be reviewed rather than only observed. The agent's
+   * edits already go through Monaco's undo stack, so this is about seeing what
+   * happened, not about being able to take it back.
+   */
+  const [agentEdits, setAgentEdits] = useState<Record<string, string>>({});
+  const [reviewing, setReviewing] = useState<string | null>(null);
+
   const handleAgentFileChanged = useCallback(
     (name: string, content: string) => {
+      setFiles((previous) => {
+        const priorContent = previous.find((file) => file.name === name)?.content ?? '';
+        // Only the first edit in a run records a baseline: a second edit to the
+        // same file should still diff against what the user last saw, not
+        // against the agent's own intermediate state.
+        setAgentEdits((edits) =>
+          name in edits ? edits : { ...edits, [name]: priorContent },
+        );
+        return previous;
+      });
+
       setFiles((previous) => {
         const existing = previous.find((file) => file.name === name);
         if (!existing) {
@@ -1136,6 +1159,23 @@ export function CodeCraftIDE() {
                 caret={caret}
                 onApplyCode={handleApplyCode}
               />
+            ) : bottomTab === 'diff' ? (
+              reviewing && agentEdits[reviewing] !== undefined ? (
+                <DiffView
+                  name={reviewing}
+                  before={agentEdits[reviewing]!}
+                  after={files.find((file) => file.name === reviewing)?.content ?? ''}
+                  onAccept={() => {
+                    setAgentEdits(({ [reviewing]: _dropped, ...rest }) => rest);
+                    setReviewing(null);
+                    setBottomTab('agent');
+                  }}
+                />
+              ) : (
+                <p className="p-3 text-xs text-slate-500">
+                  Nothing to review. Files the agent changes appear here.
+                </p>
+              )
             ) : bottomTab === 'extensions' ? (
               <ExtensionsPanel
                 extensions={extensions.extensions}
@@ -1178,6 +1218,16 @@ export function CodeCraftIDE() {
                 icon={Cpu}
                 label="Analysis"
                 badge={allDiagnostics.length}
+              />
+              <PaneTab
+                active={bottomTab === 'diff'}
+                onClick={() => {
+                  setReviewing((current) => current ?? Object.keys(agentEdits)[0] ?? null);
+                  setBottomTab('diff');
+                }}
+                icon={GitCompare}
+                label="Changes"
+                badge={Object.keys(agentEdits).length || undefined}
               />
               <PaneTab
                 active={bottomTab === 'extensions'}

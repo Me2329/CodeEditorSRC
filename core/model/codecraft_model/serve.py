@@ -54,7 +54,7 @@ FLUSH_TOKEN = -1
 class Engine:
     """A loaded checkpoint, ready to answer requests."""
 
-    def __init__(self, run: Path, device: str | None = None) -> None:
+    def __init__(self, run: Path, device: str | None = None, *, quantize: bool = False) -> None:
         checkpoint = run / "model.pt"
         tokenizer_path = run / "tokenizer.json"
         for path in (checkpoint, tokenizer_path):
@@ -75,6 +75,15 @@ class Engine:
         self.run = run
         self.tokenizer = Tokenizer.load(tokenizer_path)
         self.model, self.payload = load_checkpoint(checkpoint, self.device)
+
+        self.quantization = None
+        if quantize:
+            # Serving holds one copy of the weights, unlike training's four, so
+            # the weights are the whole budget and int8 quarters it.
+            from .quantize import quantize_model
+
+            self.quantization = quantize_model(self.model)
+            self.model.to(self.device)
 
         # PyTorch releases the GIL inside kernels, so two concurrent generations
         # would genuinely run at once and thrash a machine sized for one.
@@ -100,6 +109,10 @@ class Engine:
             "d_model": config.d_model,
             "trained_steps": self.payload.get("step"),
             "val_loss": self.payload.get("val_loss"),
+            "quantized": self.quantization is not None,
+            "weight_bytes": (
+                self.quantization.quantized_bytes if self.quantization else None
+            ),
         }
 
     def stream(
@@ -579,21 +592,31 @@ class ModelServer(ThreadingHTTPServer):
 
 
 def build_server(
-    run: Path, host: str = "127.0.0.1", port: int = 8940, device: str | None = None
+    run: Path,
+    host: str = "127.0.0.1",
+    port: int = 8940,
+    device: str | None = None,
+    *,
+    quantize: bool = False,
 ) -> ModelServer:
     """Load the checkpoint and bind the socket, without serving yet.
 
     Split out from `serve` so tests can bind port 0 and drive the server on a
     thread of their own.
     """
-    return ModelServer((host, port), Engine(run, device))
+    return ModelServer((host, port), Engine(run, device, quantize=quantize))
 
 
 def serve(
-    run: Path, *, host: str = "127.0.0.1", port: int = 8940, device: str | None = None
+    run: Path,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8940,
+    device: str | None = None,
+    quantize: bool = False,
 ) -> int:
     try:
-        server = build_server(run, host, port, device)
+        server = build_server(run, host, port, device, quantize=quantize)
     except FileNotFoundError as error:
         print(f"error: {error}")
         return 1
@@ -603,7 +626,13 @@ def serve(
     print(
         f"CodeCraft LM  {described['parameters_human']} parameters  "
         f"context {described['context']}  val loss {described['val_loss']:.3f}\n"
-        f"running on {described['device']}, precision {described['precision']}\n"
+        f"running on {described['device']}, precision {described['precision']}"
+        + (
+            f", int8 weights ({server.engine.quantization.compression:.1f}x smaller)"
+            if server.engine.quantization
+            else ""
+        )
+        + "\n"
         f"listening on http://{host}:{bound}\n"
         f"  POST /v1/messages   Messages-compatible, set ANTHROPIC_BASE_URL to this\n"
         f"  POST /generate      native prompt completion\n"

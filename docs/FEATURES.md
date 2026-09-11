@@ -294,6 +294,25 @@ would, and every one can be switched off from the Extensions panel.
 | 221 | Requests cancelled when the user types | a stale request outlives its relevance |
 | 222 | Inline completion is a preference | off means no requests at all |
 
+## Quantization and review
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 223 | Int8 weights for serving | `serve --quantize` |
+| 224 | Symmetric per-output-channel scales | one outlier row would otherwise squash every other row |
+| 225 | Rounding rather than truncation | truncating biases every weight toward zero |
+| 226 | Embedding, norms and output head left in float | tied weights and a softmax amplify small errors |
+| 227 | Zero rows handled without dividing by zero | |
+| 228 | Quantization report with measured error | the claim can be checked rather than believed |
+| 229 | Measured compression stated honestly | 2.23x overall, 4x on the matrices it touches |
+| 230 | Line diff by longest common subsequence | lines, not characters: a rename is one change |
+| 231 | Large files fall back rather than allocating | a diff nobody can read is not worth an out-of-memory error |
+| 232 | Unchanged runs collapsed with context | a one-line change in a thousand lines stays readable |
+| 233 | Both line numberings preserved | before and after, side by side |
+| 234 | Unified diff export | copy into a commit message or a review |
+| 235 | Changes panel for agent edits | seeing the diff beats trusting the promise |
+| 236 | Baseline recorded once per run | a second edit still diffs against what the user last saw |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

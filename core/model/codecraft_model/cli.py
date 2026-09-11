@@ -377,7 +377,13 @@ def command_infill(args: argparse.Namespace) -> int:
 def command_serve(args: argparse.Namespace) -> int:
     from .serve import serve
 
-    return serve(Path(args.run), host=args.host, port=args.port, device=args.device)
+    return serve(
+        Path(args.run),
+        host=args.host,
+        port=args.port,
+        device=args.device,
+        quantize=args.quantize,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -562,6 +568,11 @@ def main(argv: list[str] | None = None) -> int:
     server.add_argument("--run", required=True)
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8940)
+    server.add_argument(
+        "--quantize",
+        action="store_true",
+        help="int8 weights: roughly 2.3x smaller overall, for a model that would not otherwise fit",
+    )
     add_device(server)
     server.set_defaults(func=command_serve)
 
