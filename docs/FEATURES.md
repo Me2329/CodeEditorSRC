@@ -657,6 +657,25 @@ way to make a folder is to name a file into one.
 | 445 | The new engine is built before it is swapped in | a request in flight finishes against the weights it started with |
 | 446 | A checkpoint that will not load leaves the old one running | stale weights beat a server that stops |
 
+## Reading the model, dropping files, walking problems
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 447 | `chat` talks to a checkpoint at the terminal | for the failures no number shows |
+| 448 | Earlier turns are replayed as token ids | decoding the turn markers to text drops them |
+| 449 | `/reset` forgets the conversation | |
+| 450 | `tokens` shows how text is split | with spaces as middle dots and newlines escaped |
+| 451 | It warns when decoding does not rebuild the input | a tokenizer that cannot is one that silently changes code |
+| 452 | Files dropped on the window are opened | the gesture people try before looking for the dialog |
+| 453 | Binary extensions are refused before being read | |
+| 454 | Anything over 2MB is refused | a workspace lives in browser storage |
+| 455 | A folder dropped by accident stops at fifty | |
+| 456 | What was skipped and why is reported | a file that silently does not appear is worse |
+| 457 | A dropped name that exists becomes `name-2.ext` | a drop is not a decision to overwrite |
+| 458 | F8 and Shift+F8 walk the diagnostics | fixing means not taking your hands off the keyboard |
+| 459 | They wrap round | a key that does nothing at the end feels broken |
+| 460 | Two problems on one line are one place to go | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

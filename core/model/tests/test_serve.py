@@ -765,6 +765,17 @@ def test_a_checkpoint_that_will_not_load_leaves_the_old_one_running(
         server.server_close()
 
 
+def test_a_caller_can_hand_over_token_ids(run_directory) -> None:
+    """For the instruction format, whose turn markers do not survive decoding."""
+    engine = Engine(run_directory)
+    ids = engine.tokenizer.encode("def parse")
+
+    from_ids = [delta for delta, _ in engine.stream("", prompt_ids=ids, max_tokens=6, temperature=0.0)]
+    from_text = [delta for delta, _ in engine.stream("def parse", max_tokens=6, temperature=0.0)]
+
+    assert "".join(from_ids) == "".join(from_text)
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

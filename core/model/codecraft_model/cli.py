@@ -382,6 +382,121 @@ def command_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_chat(args: argparse.Namespace) -> int:
+    """A conversation at the terminal, for trying a model without a client.
+
+    The point is to see what a checkpoint actually does. Everything else here
+    measures a model; this is for reading it, which catches the failures no
+    number shows: a model that has learned the format and none of the task, or
+    one that answers and then keeps going.
+
+    The history is kept in the prompt rather than in a cache, because the
+    context here is a few hundred tokens and the code that would manage a cache
+    across turns is more than the feature is worth.
+    """
+    from .instruct import render_for_inference
+    from .serve import Engine
+
+    run = Path(args.run)
+    try:
+        engine = Engine(run, args.device, adapter=Path(args.adapter) if args.adapter else None)
+    except FileNotFoundError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    described = engine.describe()
+    print(
+        f"{described['parameters_human']} parameters, step {described['trained_steps']}, "
+        f"on {described['device']}\n"
+        "Type a message. Ctrl+C or an empty line to leave; /reset forgets the conversation.\n"
+    )
+
+    turns: list[tuple[str, str]] = []
+
+    while True:
+        try:
+            message = input("you > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+        if not message:
+            return 0
+        if message == "/reset":
+            turns.clear()
+            print("(forgotten)\n")
+            continue
+
+        # Built as ids rather than as text. The turn markers are special
+        # tokens, and decoding them to hand over a string drops them: the model
+        # would be asked the question with no format around it at all.
+        end = engine.tokenizer.special_id("<|end|>")
+        ids: list[int] = []
+        for earlier, reply in turns[-args.history :]:
+            ids += render_for_inference(earlier, engine.tokenizer)
+            ids += engine.tokenizer.encode(reply) + [end]
+        ids += render_for_inference(message, engine.tokenizer, args.system)
+
+        print("bot > ", end="", flush=True)
+        answer: list[str] = []
+        for delta, _ in engine.stream(
+            "",
+            prompt_ids=ids,
+            max_tokens=args.tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+        ):
+            if delta:
+                answer.append(delta)
+                print(delta, end="", flush=True)
+        print("\n")
+
+        turns.append((message, "".join(answer)))
+
+
+def command_tokens(args: argparse.Namespace) -> int:
+    """Show how the tokenizer splits a piece of text.
+
+    Worth having as a command rather than a note in a notebook: nearly every
+    surprise about what a model does with a prompt turns out to be a surprise
+    about how the prompt was split, and reading the split takes seconds.
+    """
+    run = Path(args.run)
+    tokenizer_path = run / "tokenizer.json"
+    if not tokenizer_path.exists():
+        print(f"no tokenizer at {tokenizer_path}", file=sys.stderr)
+        return 1
+
+    tokenizer = Tokenizer.load(tokenizer_path)
+    text = args.text if args.text is not None else sys.stdin.read()
+    ids = tokenizer.encode(text)
+
+    print(f"{len(text)} characters, {len(ids)} tokens", end="")
+    if ids:
+        print(f", {len(text) / len(ids):.3f} characters per token")
+    else:
+        print()
+
+    if not args.quiet:
+        print()
+        for token_id in ids:
+            piece = tokenizer.vocab.get(token_id, b"")
+            shown = piece.decode("utf-8", "replace")
+            # Whitespace is where a split is most often surprising, so it is
+            # shown rather than printed.
+            shown = shown.replace("\n", "\\n").replace("\t", "\\t").replace(" ", "·")
+            print(f"  {token_id:>6}  {shown}")
+
+    # The round trip is the property that matters: a tokenizer that cannot
+    # rebuild its input is one that silently changes code.
+    rebuilt = tokenizer.decode(ids)
+    if rebuilt != text:
+        print("\nwarning: decoding did not reproduce the input", file=sys.stderr)
+        return 1
+    return 0
+
+
 def command_finetune(args: argparse.Namespace) -> int:
     """Teach a base model to answer instead of continuing."""
     run = Path(args.run)
@@ -955,6 +1070,29 @@ def main(argv: list[str] | None = None) -> int:
         help="relative weights, one per checkpoint; equal by default",
     )
     averager.set_defaults(func=command_average)
+
+    chatter = subparsers.add_parser("chat", help="talk to a checkpoint at the terminal")
+    chatter.add_argument("--run", required=True)
+    chatter.add_argument("--adapter", default=None, help="a low-rank adapter to merge in first")
+    chatter.add_argument("--system", default="", help="a system prompt for every turn")
+    chatter.add_argument("--tokens", type=int, default=200)
+    chatter.add_argument("--temperature", type=float, default=0.7)
+    chatter.add_argument("--top-k", type=int, default=40)
+    chatter.add_argument("--top-p", type=float, default=0.95)
+    chatter.add_argument(
+        "--history",
+        type=int,
+        default=6,
+        help="how many earlier exchanges to replay into the prompt",
+    )
+    add_device(chatter)
+    chatter.set_defaults(func=command_chat)
+
+    inspector = subparsers.add_parser("tokens", help="show how text is split into tokens")
+    inspector.add_argument("--run", required=True)
+    inspector.add_argument("--text", default=None, help="the text to split; omit to read stdin")
+    inspector.add_argument("--quiet", action="store_true", help="counts only, no listing")
+    inspector.set_defaults(func=command_tokens)
 
     exporter = subparsers.add_parser(
         "export", help="write a checkpoint that loads without unpickling"

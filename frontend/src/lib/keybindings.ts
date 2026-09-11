@@ -123,6 +123,8 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'edit.format', keys: 'mod+shift+i', when: 'editor' },
   { command: 'navigate.back', keys: 'alt+ArrowLeft' },
   { command: 'navigate.forward', keys: 'alt+ArrowRight' },
+  { command: 'view.nextProblem', keys: 'F8' },
+  { command: 'view.previousProblem', keys: 'shift+F8' },
 ];
 
 /**

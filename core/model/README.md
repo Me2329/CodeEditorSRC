@@ -603,6 +603,40 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Reading a model rather than measuring it
+
+```bash
+codecraft_model chat --run runs/fim
+codecraft_model tokens --run runs/fim --text "def parse(text):"
+```
+
+Everything else here measures a checkpoint. `chat` is for reading one, which
+catches the failures no number shows: a model that learned the format and none
+of the task, or one that answers and then keeps going.
+
+Writing it found a bug in it. The first version built each turn by rendering the
+instruction prompt and decoding it back to text, which is the obvious thing to
+do and silently wrong: the turn markers are special tokens and `decode` drops
+them, so the model was asked the question with no format around it at all. The
+prompt is built as token ids now, and `stream` takes them directly.
+
+`tokens` shows how text is split, with spaces as middle dots and newlines
+escaped, because whitespace is where a split is most often surprising:
+
+```
+73 characters, 20 tokens, 3.650 characters per token
+
+   327  def
+  1842  ·parse
+    46  (
+   512  text
+   307  ):
+   268  \n···
+```
+
+Nearly every surprise about what a model does with a prompt turns out to be a
+surprise about how the prompt was split.
+
 ## Serving a model that is still training
 
 Training writes a new checkpoint whenever the validation loss improves. A server
@@ -947,7 +981,7 @@ whatever it is shown.
 make test-model
 ```
 
-437 tests: parameter counts against real modules, tokenizer round trips over
+443 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

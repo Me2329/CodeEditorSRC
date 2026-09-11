@@ -129,6 +129,72 @@ def test_serving_can_be_told_how_many_threads_to_use(tmp_path, monkeypatch) -> N
     assert asked == [2]
 
 
+def test_tokens_shows_the_split(tmp_path, sources, capsys) -> None:
+    """Nearly every surprise about what a model does with a prompt turns out to
+    be a surprise about how the prompt was split."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    assert main(["tokens", "--run", str(run), "--text", "def parse(text):"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "16 characters" in printed
+    assert "characters per token" in printed
+
+    # One row per token, whatever this tokenizer's merges happen to be: a small
+    # vocabulary splits "def" into two pieces and a large one does not.
+    reported = int(printed.split("characters, ")[1].split(" tokens")[0])
+    rows = [line for line in printed.splitlines() if line.startswith("  ") and line.strip()]
+    assert len(rows) == reported
+
+
+def test_tokens_marks_whitespace(tmp_path, sources, capsys) -> None:
+    """Whitespace is where a split is most often surprising."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(["tokens", "--run", str(run), "--text", "a b"])
+
+    assert "·" in capsys.readouterr().out
+
+
+def test_tokens_counts_without_listing(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(["tokens", "--run", str(run), "--text", "def parse", "--quiet"])
+    printed = capsys.readouterr().out
+
+    assert "characters" in printed
+    assert "def" not in printed
+
+
+def test_tokens_without_a_tokenizer_says_so(tmp_path, capsys) -> None:
+    assert main(["tokens", "--run", str(tmp_path), "--text", "x"]) == 1
+    assert "no tokenizer" in capsys.readouterr().err
+
+
+def test_a_chat_prompt_keeps_its_turn_markers(tmp_path, sources) -> None:
+    """Decoding the rendered prompt to text drops them, and the model is then
+    asked the question with no format around it at all."""
+    from codecraft_model.instruct import render_for_inference
+    from codecraft_model.tokenizer import Tokenizer as Tok
+
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    tokenizer = Tok.load(run / "tokenizer.json")
+
+    ids = render_for_inference("a question", tokenizer, "be terse")
+
+    assert tokenizer.special_id("<|user|>") in ids
+    assert tokenizer.special_id("<|assistant|>") in ids
+    # The round trip that does not hold, which is why the ids are used directly.
+    assert tokenizer.encode(tokenizer.decode(ids)) != ids
+
+
 def test_resuming_takes_the_architecture_from_the_checkpoint(
     tmp_path, sources, capsys
 ) -> None:

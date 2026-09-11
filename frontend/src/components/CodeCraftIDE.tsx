@@ -40,6 +40,8 @@ import {
   prune as pruneRecent,
   touch as touchRecent,
 } from '../lib/recent';
+import { decide as decideDropped, explain as explainRefused, uniqueName } from '../lib/drop';
+import { nextAfter, previousBefore } from '../lib/problems';
 import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
 import {
@@ -662,6 +664,47 @@ export function CodeCraftIDE() {
     window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     notify('Workspace exported.');
   }, [files, language, notify]);
+
+  /**
+   * Take files dropped onto the window.
+   *
+   * Importing through a dialog works and nobody looks for it; dragging source
+   * onto the window is what people try first, and it did nothing at all. What
+   * is refused and why is decided in one place and reported, because a file
+   * that silently does not appear is worse than one with an explanation.
+   */
+  const handleDropped = useCallback(
+    async (dropped: readonly File[]) => {
+      const { accepted, refused } = decideDropped(dropped);
+      if (accepted.length === 0) {
+        notify(explainRefused(refused) || 'Nothing there to open.');
+        return;
+      }
+
+      // Read first, then add: a half-read drop that has already changed the
+      // workspace is worse than one that has not started.
+      const read = await Promise.all(
+        accepted.map(async (file) => ({ name: file.name, content: await file.text() })),
+      );
+
+      let opened = '';
+      setFiles((previous) => {
+        const taken = previous.map((file) => file.name);
+        const added = read.map((entry) => {
+          const name = uniqueName(entry.name, taken);
+          taken.push(name);
+          return createFile(name, entry.content);
+        });
+        opened = added[added.length - 1]?.id ?? '';
+        return [...previous, ...added];
+      });
+      if (opened) setActiveFileId(opened);
+
+      const note = `Added ${read.length} ${read.length === 1 ? 'file' : 'files'}.`;
+      notify(refused.length ? `${note} ${explainRefused(refused)}` : note);
+    },
+    [notify],
+  );
 
   /**
    * Rename a file, which is also how it is moved.
@@ -1407,6 +1450,28 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'view.nextProblem',
+        title: 'Go to the next problem',
+        category: 'Navigate',
+        shortcut: 'F8',
+        when: () => allDiagnostics.length > 0,
+        run: () => {
+          const line = nextAfter(allDiagnostics.map((d) => d.line), caret.line);
+          if (line !== null) handleJumpToLine(line);
+        },
+      },
+      {
+        id: 'view.previousProblem',
+        title: 'Go to the previous problem',
+        category: 'Navigate',
+        shortcut: 'Shift+F8',
+        when: () => allDiagnostics.length > 0,
+        run: () => {
+          const line = previousBefore(allDiagnostics.map((d) => d.line), caret.line);
+          if (line !== null) handleJumpToLine(line);
+        },
+      },
+      {
         id: 'view.split',
         title: splitFileId ? 'Close the split editor' : 'Open a file beside this one',
         category: 'View',
@@ -1527,6 +1592,9 @@ export function CodeCraftIDE() {
       handleNavigate,
       splitFileId,
       recent,
+      allDiagnostics,
+      caret.line,
+      handleJumpToLine,
       handleInsertSnippet,
     ],
   );
@@ -1624,7 +1692,19 @@ export function CodeCraftIDE() {
         />
       )}
 
-      <div className="flex min-h-0 flex-1">
+      <div
+        className="flex min-h-0 flex-1"
+        // On the whole workspace rather than on the editor: people aim at the
+        // window, not at a particular pane.
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          if (!event.dataTransfer.files.length) return;
+          event.preventDefault();
+          void handleDropped(Array.from(event.dataTransfer.files));
+        }}
+      >
         {!zen && (
         <FileExplorer
           files={files}

@@ -199,6 +199,7 @@ class Engine:
         no_repeat_ngram: int = 0,
         stop: list[str] | None = None,
         report: dict | None = None,
+        prompt_ids: list[int] | None = None,
     ):
         """Yield (text_delta, token_id) pairs for `prompt`.
 
@@ -218,8 +219,14 @@ class Engine:
         the engine is shared between request threads, and an attribute holding
         "what the last call did" belongs to whichever call finished most
         recently, not to the one asking.
+
+        `prompt_ids` replaces the encoding step for a caller that has already
+        built the ids. That matters for anything using the instruction format:
+        the turn markers are special tokens, and decoding them to text to hand
+        over a string drops them, so the model would be asked a question with no
+        format at all.
         """
-        ids = self.tokenizer.encode(prompt)
+        ids = prompt_ids if prompt_ids is not None else self.tokenizer.encode(prompt)
         # Leave room to answer: a prompt that fills the context has nowhere to
         # put the reply, so the oldest tokens go first.
         room = self.model.config.max_seq_len - max(1, min(max_tokens, 64))
