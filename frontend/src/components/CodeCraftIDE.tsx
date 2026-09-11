@@ -34,6 +34,14 @@ import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
+import {
+  EMPTY as NO_TABS,
+  close as closeTab,
+  cycle as cycleTab,
+  move as moveTab,
+  open as openTab,
+  prune as pruneTabs,
+} from '../lib/tabs';
 import { ApiError, api } from '../lib/api';
 import type { Command } from '../lib/commands';
 import {
@@ -64,6 +72,7 @@ import { RuntimePicker } from './RuntimePicker';
 import { DiffView } from './DiffView';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { SearchPanel } from './SearchPanel';
+import { TabStrip } from './TabStrip';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
@@ -123,6 +132,28 @@ export function CodeCraftIDE() {
 
   const activeRuntime = runtimes.find((runtime) => runtime.id === language) ?? null;
   const activeFile = files.find((file) => file.id === activeFileId) ?? files[0] ?? null;
+
+  /**
+   * Which files have tabs, as distinct from which files exist.
+   *
+   * The previous strip showed every file, which made it a second file explorer
+   * rather than a record of what you are working on.
+   */
+  const [tabs, setTabs] = useState(NO_TABS);
+
+  // Showing a file opens a tab for it; deleting one closes its tab.
+  useEffect(() => {
+    if (activeFile) setTabs((current) => openTab(current, activeFile.id));
+  }, [activeFile?.id]);
+
+  useEffect(() => {
+    setTabs((current) => pruneTabs(current, files.map((file) => file.id)));
+  }, [files]);
+
+  // Closing the tab that was showing has to move the editor too.
+  useEffect(() => {
+    if (tabs.active && tabs.active !== activeFileId) setActiveFileId(tabs.active);
+  }, [tabs.active]);
   const isPreviewRuntime = activeRuntime !== null && !activeRuntime.executable;
 
   // ------------------------------------------------------------------ startup
@@ -947,6 +978,38 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('search'),
       },
       {
+        id: 'tabs.close',
+        title: 'Close the current tab',
+        category: 'View',
+        shortcut: 'Ctrl+W',
+        when: () => tabs.active !== null,
+        run: () => setTabs((current) => (current.active ? closeTab(current, current.active) : current)),
+      },
+      {
+        id: 'tabs.next',
+        title: 'Next tab',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Tab',
+        run: () => setTabs((current) => cycleTab(current, 1)),
+      },
+      {
+        id: 'tabs.previous',
+        title: 'Previous tab',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Shift+Tab',
+        run: () => setTabs((current) => cycleTab(current, -1)),
+      },
+      {
+        id: 'tabs.closeOthers',
+        title: 'Close other tabs',
+        category: 'View',
+        when: () => tabs.open.length > 1,
+        run: () =>
+          setTabs((current) =>
+            current.active ? { open: [current.active], active: current.active } : current,
+          ),
+      },
+      {
         id: 'view.extensions',
         title: 'Show extensions',
         category: 'View',
@@ -981,6 +1044,7 @@ export function CodeCraftIDE() {
       extensions,
       language,
       applyTextAction,
+      tabs,
     ],
   );
 
@@ -1089,11 +1153,14 @@ export function CodeCraftIDE() {
         )}
 
         <main className="flex min-w-0 flex-1 flex-col border-r border-slate-800/80">
-          <EditorTabs
+          <TabStrip
             files={files}
-            activeFileId={activeFile?.id ?? ''}
+            open={tabs.open}
+            active={tabs.active}
             entryName={activeRuntime?.entry ?? ''}
             onSelect={setActiveFileId}
+            onClose={(fileId) => setTabs((current) => closeTab(current, fileId))}
+            onReorder={(fileId, to) => setTabs((current) => moveTab(current, fileId, to))}
           />
           {activeFile ? (
             <Editor
@@ -1327,48 +1394,6 @@ export function CodeCraftIDE() {
 }
 
 /** Open files as a tab strip, so switching does not need the explorer. */
-function EditorTabs({
-  files,
-  activeFileId,
-  entryName,
-  onSelect,
-}: {
-  files: VirtualFile[];
-  activeFileId: string;
-  entryName: string;
-  onSelect: (id: string) => void;
-}) {
-  if (files.length <= 1) return null;
-
-  return (
-    <nav className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-slate-800/80 bg-charcoal">
-      {files.map((file) => {
-        const active = file.id === activeFileId;
-        return (
-          <button
-            key={file.id}
-            type="button"
-            onClick={() => onSelect(file.id)}
-            aria-current={active}
-            className={`flex shrink-0 items-center gap-1.5 border-r border-slate-800/80 px-3 font-mono text-[11px] transition-colors ${
-              active
-                ? 'border-b-2 border-b-accent bg-obsidian text-slate-100'
-                : 'text-slate-500 hover:bg-slate-800/40 hover:text-slate-300'
-            }`}
-          >
-            {file.name}
-            {file.name === entryName && (
-              <span className="text-[8px] uppercase text-run" title="Entry point">
-                entry
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </nav>
-  );
-}
-
 function StatusBar({
   language,
   toolchain,

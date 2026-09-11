@@ -117,6 +117,9 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'view.settings', keys: 'mod+,' },
   { command: 'view.wrap', keys: 'alt+z' },
   { command: 'view.zen', keys: 'F11' },
+  { command: 'tabs.close', keys: 'mod+w' },
+  { command: 'tabs.next', keys: 'mod+Tab' },
+  { command: 'tabs.previous', keys: 'mod+shift+Tab' },
   { command: 'edit.format', keys: 'mod+shift+i', when: 'editor' },
 ];
 

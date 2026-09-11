@@ -387,6 +387,27 @@ would, and every one can be switched off from the Extensions panel.
 | 284 | Truncated files reported by tensor name | |
 | 285 | Int8 export | `export --quantize` |
 
+## Editor tabs
+
+The previous strip listed every file in the workspace, which made it a second
+file explorer rather than a record of what you are working on. Open and exists
+are now different things.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 286 | Open files tracked apart from existing files | closing a tab does not delete anything |
+| 287 | Closing activates the tab to the right | falling back left when it was last |
+| 288 | A run of closes keeps moving one way | rather than bouncing between neighbours |
+| 289 | Closing an inactive tab leaves the current one showing | |
+| 290 | An already-open file activates in place | reordering under someone mid-navigation is unusable |
+| 291 | Middle-click closes | the gesture nobody thinks about until it is missing |
+| 292 | Drag to reorder | and reordering is not navigation |
+| 293 | Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab | with palette entries |
+| 294 | Close others | |
+| 295 | Deleting a file prunes its tab | and activates another if it was showing |
+| 296 | Pruning returns the same object when there is nothing to do | no re-render per keystroke |
+| 297 | The entry file is marked in its tab | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
