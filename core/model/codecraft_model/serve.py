@@ -32,7 +32,6 @@ import torch
 
 from .cache import PrefixCache, ResponseCache
 from .config import humanise
-from .stopping import StopWatcher
 from .device import (
     architecture_warning,
     autocast_dtype,
@@ -40,6 +39,8 @@ from .device import (
     enable_fast_matmul,
     resolve_device,
 )
+from .inflight import Supersede, Ticket
+from .stopping import StopWatcher
 from .tokenizer import Tokenizer
 from .train import load_checkpoint
 
@@ -140,6 +141,16 @@ class Engine:
         # The mean log-probability of the last completion, which is how
         # best-of-n picks between candidates.
         self.last_confidence = float("-inf")
+        self._superseded = 0
+
+    def supersede_count(self) -> int:
+        """How many requests were abandoned because a newer one arrived.
+
+        On the engine rather than the server so it appears in the model card
+        beside the cache numbers, which answer the same kind of question: is the
+        editor asking for more than it uses?
+        """
+        return self._superseded
 
     def describe(self) -> dict:
         config = self.model.config
@@ -165,6 +176,7 @@ class Engine:
             "weight_bytes": (
                 self.quantization.quantized_bytes if self.quantization else None
             ),
+            "superseded_requests": self.supersede_count(),
             "cache": {
                 "responses": len(self.response_cache.entries),
                 "response_hit_rate": round(self.response_cache.stats.hit_rate, 3),
@@ -269,6 +281,7 @@ class Engine:
         no_repeat_ngram: int = 4,
         stop: list[str] | None = None,
         use_cache: bool = True,
+        ticket: Ticket | None = None,
     ) -> tuple[str, int]:
         """Write what goes between `prefix` and `suffix`.
 
@@ -352,6 +365,10 @@ class Engine:
                 ),
             ):
                 count += 1
+                if ticket is not None and ticket.cancelled:
+                    # Between tokens is the only safe place to stop: there is
+                    # nothing to kill, only a loop holding tensors.
+                    break
                 piece = self.tokenizer.vocab.get(token_id)
                 if piece is not None:
                     _, hit = watcher.feed(decoder.decode(piece))
@@ -364,6 +381,11 @@ class Engine:
         self.last_confidence = (
             sum(logprobs) / len(logprobs) if logprobs else float("-inf")
         )
+        # A half-finished answer is not the answer to this prompt, and caching
+        # it would hand it to the next request that asks the same question.
+        if ticket is not None and ticket.cancelled:
+            self._superseded += 1
+            return "", count
         if use_cache:
             self.response_cache.put(key, completion)
         return completion, count
@@ -678,6 +700,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         started = time.time()
+        # One live completion per source. A client that keeps typing supersedes
+        # its own last request rather than queueing behind it; a different
+        # client, or the chat route, is a separate conversation and unaffected.
+        source = self.headers.get("X-Request-Source") or "infill"
+        ticket = self.server.supersede.begin(source)
+
         # Bounded low: each candidate is a whole generation, and a request that
         # asks for fifty of them is a denial of service with a polite name.
         candidates = max(1, min(int(body.get("candidates", 1)), 8))
@@ -687,21 +715,25 @@ class Handler(BaseHTTPRequestHandler):
             "stop": _stop_sequences(body),
         }
 
-        if candidates > 1:
-            text, count = self.engine.infill_best_of(
-                prefix,
-                suffix,
-                candidates=candidates,
-                temperature=float(body.get("temperature", 0.6)),
-                **shared,
-            )
-        else:
-            text, count = self.engine.infill(
-                prefix,
-                suffix,
-                temperature=float(body.get("temperature", 0.2)),
-                **shared,
-            )
+        try:
+            if candidates > 1:
+                text, count = self.engine.infill_best_of(
+                    prefix,
+                    suffix,
+                    candidates=candidates,
+                    temperature=float(body.get("temperature", 0.6)),
+                    **shared,
+                )
+            else:
+                text, count = self.engine.infill(
+                    prefix,
+                    suffix,
+                    temperature=float(body.get("temperature", 0.2)),
+                    ticket=ticket,
+                    **shared,
+                )
+        finally:
+            self.server.supersede.end(ticket)
         self._send_json(
             200,
             {
@@ -710,6 +742,7 @@ class Handler(BaseHTTPRequestHandler):
                 "tokens": count,
                 "candidates": candidates,
                 "confidence": round(self.engine.last_confidence, 4),
+                "superseded": ticket.cancelled,
                 "seconds": round(time.time() - started, 3),
             },
         )
@@ -826,6 +859,9 @@ class ModelServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], engine: Engine) -> None:
         super().__init__(address, Handler)
         self.engine = engine
+        # Generation is serialised, so a request nobody wants is not merely
+        # wasted, it is in front of the one that matters.
+        self.supersede = Supersede()
 
 
 def build_server(

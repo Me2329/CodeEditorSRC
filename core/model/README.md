@@ -603,6 +603,29 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Abandoning work nobody wants
+
+An editor sends a completion request per pause in typing. If the user keeps
+typing, the answer to the previous one is already wrong by the time it arrives.
+The client abandons it; the server did not, and went on holding the model's lock
+for a suggestion nothing would show.
+
+That is worse than waste. Generation is serialised, so an obsolete request is not
+merely wasted, it is *in front of* the one that matters: a three-keystroke burst
+could leave the useful request waiting behind two dead ones.
+
+A newer request now cancels the older one from the same source. Not every older
+one: two editors, or a completion and a chat, are separate conversations and
+neither supersedes the other, which is what the `X-Request-Source` header is
+for. A cancelled generation stops between tokens rather than being killed,
+because there is nothing to kill: it is a loop holding tensors.
+
+A cancelled completion returns empty and is not cached, since half an answer is
+not the answer to the prompt that was asked, and caching it would hand that half
+to the next request asking the same question. The response says `superseded` so
+the editor shows nothing rather than reading the empty completion as "the model
+had no suggestion".
+
 ## Picking between several completions
 
 Greedy decoding takes the likeliest token at every step, which is not the same
@@ -860,7 +883,7 @@ whatever it is shown.
 make test-model
 ```
 
-405 tests: parameter counts against real modules, tokenizer round trips over
+420 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

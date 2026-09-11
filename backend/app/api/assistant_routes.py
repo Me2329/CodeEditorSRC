@@ -61,6 +61,11 @@ class InfillRequest(BaseModel):
     # Low on purpose: a suggestion should be the likely continuation rather
     # than an interesting one.
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    # Identifies the editor asking, so the model server can abandon this
+    # client's previous request when a newer one arrives. Two editors are two
+    # sources and neither supersedes the other. Bounded because it is used as a
+    # dictionary key on the model server.
+    source: str = Field(default="", max_length=64)
 
 
 @router.post("/api/v1/assistant/complete")
@@ -375,6 +380,7 @@ async def infill(payload: InfillRequest) -> dict:
             payload.suffix,
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
+            source=payload.source,
         )
     except modelclient.ModelUnavailable as exc:
         # 503 rather than 500: the editor treats this as "no suggestion" and
@@ -387,6 +393,10 @@ async def infill(payload: InfillRequest) -> dict:
         "tokens": result.tokens,
         "model": result.model,
         "seconds": result.seconds,
+        # True when a newer request from the same editor arrived first. The
+        # completion is empty, and the editor should show nothing rather than
+        # treating it as "the model had no suggestion".
+        "superseded": result.superseded,
     }
 
 

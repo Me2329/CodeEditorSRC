@@ -32,13 +32,14 @@ class Infill:
     tokens: int
     model: str
     seconds: float
+    superseded: bool = False
 
 
-def _post(path: str, payload: dict, timeout: float) -> dict:
+def _post(path: str, payload: dict, timeout: float, headers: dict | None = None) -> dict:
     request = urllib.request.Request(
         f"{settings.model_url.rstrip('/')}{path}",
         json.dumps(payload).encode("utf-8"),
-        {"Content-Type": "application/json"},
+        {"Content-Type": "application/json", **(headers or {})},
     )
     # The model server is on loopback. Going through an ambient proxy would
     # either fail or, worse, send the user's source code somewhere else.
@@ -58,7 +59,9 @@ def _post(path: str, payload: dict, timeout: float) -> dict:
         raise ModelUnavailable(f"the model server sent malformed JSON: {error}") from error
 
 
-async def infill(prefix: str, suffix: str, *, max_tokens: int, temperature: float) -> Infill:
+async def infill(
+    prefix: str, suffix: str, *, max_tokens: int, temperature: float, source: str = ""
+) -> Infill:
     """Ask for the text that belongs between `prefix` and `suffix`.
 
     Run on a worker thread: the call is blocking, and an inline completion must
@@ -70,13 +73,19 @@ async def infill(prefix: str, suffix: str, *, max_tokens: int, temperature: floa
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    body = await asyncio.to_thread(_post, "/infill", payload, settings.model_timeout_seconds)
+    # Passed as a header rather than in the body: it says who is asking, not
+    # what is being asked, and the model server reads it before parsing.
+    headers = {"X-Request-Source": source} if source else None
+    body = await asyncio.to_thread(
+        _post, "/infill", payload, settings.model_timeout_seconds, headers
+    )
 
     return Infill(
         completion=str(body.get("completion", "")),
         tokens=int(body.get("tokens", 0)),
         model=str(body.get("model", "unknown")),
         seconds=float(body.get("seconds", 0.0)),
+        superseded=bool(body.get("superseded", False)),
     )
 
 

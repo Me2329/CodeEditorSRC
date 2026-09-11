@@ -62,6 +62,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/**
+ * Who is asking, for the lifetime of this tab.
+ *
+ * Per tab rather than per user: two tabs are two carets, and one superseding
+ * the other's completions would be wrong. Regenerated on reload, which is
+ * correct, because the requests from before a reload are gone anyway.
+ */
+const SOURCE = `editor-${Math.random().toString(36).slice(2, 10)}`;
+
 export const api = {
   health: () => request<HealthInfo>('/api/v1/health'),
 
@@ -92,14 +101,21 @@ export const api = {
    * that has to invent text rather than look something up.
    */
   infill: (prefix: string, suffix: string, maxTokens = 64, signal?: AbortSignal) =>
-    request<{ completion: string; tokens: number; model: string; seconds: number }>(
-      '/api/v1/assistant/infill',
-      {
-        method: 'POST',
-        body: JSON.stringify({ prefix, suffix, max_tokens: maxTokens }),
-        signal,
-      },
-    ),
+    request<{
+      completion: string;
+      tokens: number;
+      model: string;
+      seconds: number;
+      superseded?: boolean;
+    }>('/api/v1/assistant/infill', {
+      method: 'POST',
+      // `source` identifies this tab so the model server abandons this tab's
+      // previous request when a newer one arrives. Aborting is not enough on
+      // its own: generation is serialised, so a request nobody wants is not
+      // merely wasted, it is in front of the one that matters.
+      body: JSON.stringify({ prefix, suffix, max_tokens: maxTokens, source: SOURCE }),
+      signal,
+    }),
 
   /** Whether the local model is running, and what it is. */
   modelStatus: () =>

@@ -34,6 +34,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import {
+  order as byRecency,
+  prune as pruneRecent,
+  touch as touchRecent,
+} from '../lib/recent';
 import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
 import {
@@ -201,6 +206,13 @@ export function CodeCraftIDE() {
    * two differ", which is the question behind a copied file that drifted.
    */
   const [comparingWith, setComparingWith] = useState<string | null>(null);
+  /**
+   * The files most recently shown, so the palette offers them first.
+   *
+   * Apart from the tab strip on purpose: tabs are what is open, this is what
+   * was recently open, which includes files since closed.
+   */
+  const [recent, setRecent] = useState<readonly string[]>([]);
   // Set while a back or forward is being applied, so moving the caret as a
   // result of navigating does not record a new place and bury the one we came
   // from.
@@ -209,10 +221,12 @@ export function CodeCraftIDE() {
   // Showing a file opens a tab for it; deleting one closes its tab.
   useEffect(() => {
     if (activeFile) setTabs((current) => openTab(current, activeFile.id));
+    if (activeFile) setRecent((current) => touchRecent(current, activeFile.id));
   }, [activeFile?.id]);
 
   useEffect(() => {
     setTabs((current) => pruneTabs(current, files.map((file) => file.id)));
+    setRecent((current) => pruneRecent(current, files));
     setPlaces((current) => {
       const alive = new Set(files.map((file) => file.id));
       return current.entries.reduce(
@@ -763,6 +777,9 @@ export function CodeCraftIDE() {
 
         try {
           const answer = await api.infill(prefix, suffix, 64, controller.signal);
+          // A superseded request has an empty completion because a newer one
+          // arrived, not because the model had nothing to say.
+          if (answer.superseded) return { items: [] };
           const completion = tidy(answer.completion, suffix);
           if (!worthShowing(completion, suffix)) return { items: [] };
 
@@ -1484,7 +1501,7 @@ export function CodeCraftIDE() {
       <CommandPalette
         mode={paletteMode}
         commands={commands}
-        files={files}
+        files={byRecency(files, recent)}
         symbols={symbols}
         snippets={snippetsFor(activeFile?.language ?? language)}
         onClose={() => setPaletteMode(null)}

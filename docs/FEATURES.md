@@ -618,6 +618,21 @@ way to make a folder is to name a file into one.
 | 421 | NOTE is not counted as outstanding work | or the badge means "comments" rather than "things to fix" |
 | 422 | Clicking one opens its file at its line | across files, not only the open one |
 
+## Superseding, and recent files
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 423 | A newer completion cancels this editor's older one | an obsolete request is not wasted, it is in front of the one that matters |
+| 424 | Only from the same source | two editors, or a completion and a chat, are separate conversations |
+| 425 | Cancelled between tokens | there is nothing to kill, only a loop holding tensors |
+| 426 | A cancelled completion is empty and uncached | half an answer is not the answer to the prompt |
+| 427 | The response says it was superseded | so the editor shows nothing rather than "no suggestion" |
+| 428 | The count appears in the model card | beside the cache numbers, answering the same kind of question |
+| 429 | Each tab identifies itself | two tabs are two carets |
+| 430 | The file palette offers recent files first | the file you want next is nearly always one of the last few |
+| 431 | Files never opened keep their created order | a file with no recency has nothing to sort by |
+| 432 | Recency is separate from the tab strip | tabs are what is open; this includes what has since been closed |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

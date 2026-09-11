@@ -37,6 +37,7 @@ class Handler(BaseHTTPRequestHandler):
     # Set per test: (status, body) or an exception to simulate a hang.
     response: tuple[int, dict] = (200, {})
     seen: dict | None = None
+    seen_headers: dict | None = None
 
     def log_message(self, *args) -> None:  # noqa: A002 - stdlib signature
         return
@@ -56,6 +57,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
         length = int(self.headers.get("Content-Length", "0"))
         Handler.seen = json.loads(self.rfile.read(length) or b"{}")
+        Handler.seen_headers = dict(self.headers)
         self._send()
 
 
@@ -68,6 +70,7 @@ def model_server(monkeypatch):
 
     point_at(monkeypatch, f"http://127.0.0.1:{server.server_address[1]}")
     Handler.seen = None
+    Handler.seen_headers = None
     try:
         yield Handler
     finally:
@@ -118,6 +121,41 @@ async def test_both_halves_reach_the_model(model_server) -> None:
         "max_tokens": 8,
         "temperature": 0.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_the_asking_editor_is_identified_to_the_model(model_server) -> None:
+    """So a client that keeps typing supersedes its own last request.
+
+    A header rather than a body field: it says who is asking, not what is being
+    asked, and the model server reads it before parsing anything.
+    """
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0, source="editor-7")
+
+    assert Handler.seen_headers["X-Request-Source"] == "editor-7"
+    assert "source" not in (Handler.seen or {})
+
+
+@pytest.mark.asyncio
+async def test_no_source_sends_no_header(model_server) -> None:
+    """An empty one would be a key every client shared, superseding each other."""
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert "X-Request-Source" not in Handler.seen_headers
+
+
+@pytest.mark.asyncio
+async def test_a_superseded_completion_is_reported_as_one(model_server) -> None:
+    """The editor should show nothing, rather than "the model had no suggestion"."""
+    model_server.response = (200, {"completion": "", "superseded": True})
+
+    result = await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert result.superseded is True
 
 
 @pytest.mark.asyncio

@@ -610,6 +610,48 @@ def test_the_candidate_count_is_bounded(base_url: str) -> None:
     assert body["candidates"] == 8
 
 
+def test_a_cancelled_completion_returns_nothing(run_directory) -> None:
+    """Half an answer is not the answer to the prompt that was asked."""
+    from codecraft_model.inflight import Ticket
+
+    engine = Engine(run_directory)
+    ticket = Ticket("editor")
+    ticket.cancelled = True
+
+    text, _ = engine.infill("def f(", ")", max_tokens=8, ticket=ticket, use_cache=False)
+
+    assert text == ""
+
+
+def test_a_cancelled_completion_is_not_cached(run_directory) -> None:
+    """Caching it would hand half an answer to the next request that asks."""
+    from codecraft_model.inflight import Ticket
+
+    engine = Engine(run_directory)
+    ticket = Ticket("editor")
+    ticket.cancelled = True
+    engine.infill("def f(", ")", max_tokens=8, temperature=0.0, ticket=ticket)
+
+    assert len(engine.response_cache.entries) == 0
+
+
+def test_cancellations_are_counted_in_the_model_card(run_directory) -> None:
+    from codecraft_model.inflight import Ticket
+
+    engine = Engine(run_directory)
+    ticket = Ticket("editor")
+    ticket.cancelled = True
+    engine.infill("def f(", ")", max_tokens=4, ticket=ticket, use_cache=False)
+
+    assert engine.describe()["superseded_requests"] == 1
+
+
+def test_the_infill_route_says_whether_it_was_superseded(base_url: str) -> None:
+    body = post(f"{base_url}/infill", {"prefix": "def f(", "suffix": ")", "max_tokens": 4})
+
+    assert body["superseded"] is False
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)
