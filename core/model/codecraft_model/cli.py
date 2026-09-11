@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from .config import SIZES, get_size, humanise
@@ -348,6 +349,85 @@ def command_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_finetune(args: argparse.Namespace) -> int:
+    """Teach a base model to answer instead of continuing."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train a base model first", file=sys.stderr)
+        return 1
+
+    examples_path = Path(args.examples)
+    if not examples_path.exists():
+        print(f"no examples at {examples_path}", file=sys.stderr)
+        return 1
+
+    from .instruct import InstructionDataset, load_examples, masked_loss
+    from .train import build_optimizer, learning_rate_at, save_checkpoint
+
+    tokenizer = Tokenizer.load(run / "tokenizer.json")
+    device = resolve_device(args.device)
+    model, payload = load_checkpoint(checkpoint, device)
+    model.train()
+
+    print(f"reading {examples_path}")
+    examples = load_examples(examples_path)
+    if not examples:
+        print("no usable examples", file=sys.stderr)
+        return 1
+
+    dataset = InstructionDataset(examples, tokenizer, max_length=model.config.max_seq_len)
+    print(
+        f"  {len(dataset)} examples"
+        + (f", {dataset.skipped} too long and dropped" if dataset.skipped else "")
+    )
+    if len(dataset) == 0:
+        print("every example was longer than the model's context", file=sys.stderr)
+        return 1
+
+    # A much lower rate than pretraining: fine-tuning is meant to adjust a model
+    # that already works, and a large step undoes what it learned.
+    config = TrainConfig(
+        steps=args.steps,
+        batch_size=args.batch,
+        learning_rate=args.lr,
+        min_learning_rate=args.lr / 10,
+        warmup_steps=min(args.warmup, args.steps // 4),
+    )
+    optimizer = build_optimizer(model, config)
+    generator = np.random.default_rng(args.seed)
+    torch.manual_seed(args.seed)
+
+    print(
+        f"fine-tuning {humanise(model.parameter_count())} parameters for "
+        f"{args.steps} steps at lr {args.lr:g} on {describe_device(device)}"
+    )
+
+    for step in range(args.steps):
+        rate = learning_rate_at(step, config)
+        for group in optimizer.param_groups:
+            group["lr"] = rate
+
+        tokens, labels = dataset.batch(args.batch, generator)
+        # project_all rather than targets: the model would otherwise score the
+        # labels itself, and the whole point is the different mask below.
+        logits, _, _ = model(tokens.to(device), project_all=True)
+        loss = masked_loss(logits, labels.to(device))
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+        optimizer.step()
+
+        if step % max(1, args.steps // 10) == 0 or step == args.steps - 1:
+            print(f"  step {step:>4}/{args.steps}  loss {float(loss):6.3f}  lr {rate:.2e}")
+
+    destination = run / "instruct.pt"
+    save_checkpoint(destination, model, optimizer, payload.get("step", 0), float(loss), config)
+    print(f"\nwritten to {destination}")
+    return 0
+
+
 def command_export(args: argparse.Namespace) -> int:
     """Write a checkpoint in a format that does not execute anything to load."""
     run = Path(args.run)
@@ -667,6 +747,24 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
     add_device(sampler)
     sampler.set_defaults(func=command_sample)
+
+    tuner = subparsers.add_parser(
+        "finetune", help="teach a base model to answer instructions"
+    )
+    tuner.add_argument("--run", required=True)
+    tuner.add_argument("--examples", required=True, help="JSON Lines: prompt, response")
+    tuner.add_argument("--steps", type=int, default=300)
+    tuner.add_argument("--batch", type=int, default=4)
+    tuner.add_argument(
+        "--lr",
+        type=float,
+        default=2e-5,
+        help="much lower than pretraining: a large step undoes what the model learned",
+    )
+    tuner.add_argument("--warmup", type=int, default=20)
+    tuner.add_argument("--seed", type=int, default=1337)
+    add_device(tuner)
+    tuner.set_defaults(func=command_finetune)
 
     exporter = subparsers.add_parser(
         "export", help="write a checkpoint that loads without unpickling"

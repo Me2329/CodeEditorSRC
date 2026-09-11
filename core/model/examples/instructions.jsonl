@@ -1,0 +1,14 @@
+# A small instruction set, enough to show the format and prove the mask works.
+# Real fine-tuning wants thousands of these; this is a dozen.
+{"prompt": "reverse a string in python", "response": "def reverse(text: str) -> str:\n    return text[::-1]\n"}
+{"prompt": "read a file into a list of lines", "response": "def read_lines(path: str) -> list[str]:\n    with open(path, encoding=\"utf-8\") as handle:\n        return handle.read().splitlines()\n"}
+{"prompt": "sum the numbers in a list", "response": "def total(values: list[int]) -> int:\n    return sum(values)\n"}
+{"prompt": "check whether a string is a palindrome", "response": "def is_palindrome(text: str) -> bool:\n    cleaned = \"\".join(c.lower() for c in text if c.isalnum())\n    return cleaned == cleaned[::-1]\n"}
+{"prompt": "count words in a string", "response": "def word_count(text: str) -> int:\n    return len(text.split())\n"}
+{"prompt": "find the largest number in a list", "response": "def largest(values: list[int]) -> int:\n    return max(values)\n"}
+{"prompt": "remove duplicates from a list keeping order", "response": "def unique(values: list[int]) -> list[int]:\n    seen = set()\n    return [v for v in values if not (v in seen or seen.add(v))]\n"}
+{"prompt": "write a function that adds two numbers", "response": "def add(a: int, b: int) -> int:\n    return a + b\n"}
+{"prompt": "open a file and write text to it", "response": "def write(path: str, text: str) -> None:\n    with open(path, \"w\", encoding=\"utf-8\") as handle:\n        handle.write(text)\n"}
+{"prompt": "sort a list of strings alphabetically", "response": "def sort_names(names: list[str]) -> list[str]:\n    return sorted(names)\n"}
+{"prompt": "check if a number is even", "response": "def is_even(value: int) -> bool:\n    return value % 2 == 0\n"}
+{"prompt": "join a list of strings with commas", "response": "def join(parts: list[str]) -> str:\n    return \", \".join(parts)\n"}

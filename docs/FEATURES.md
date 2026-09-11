@@ -408,6 +408,22 @@ are now different things.
 | 296 | Pruning returns the same object when there is nothing to do | no re-render per keystroke |
 | 297 | The entry file is marked in its tab | |
 
+## Instruction fine-tuning
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 298 | Supervised fine-tuning | `finetune --examples instructions.jsonl` |
+| 299 | Loss on the answer only | training on the question teaches it to ask questions |
+| 300 | Labels shifted by one | matching what the model expects everywhere else |
+| 301 | The stop token is scored | the model can only learn to stop if stopping is scored |
+| 302 | One prompt builder for training and inference | they cannot drift apart |
+| 303 | Padding masked out of the loss | the model must not be trained to produce it |
+| 304 | Batches padded to their longest example | not to the maximum |
+| 305 | Over-long examples dropped, not truncated | a half-cut answer teaches it to stop mid-sentence |
+| 306 | Bad JSON lines skipped with a message | one bad line does not lose the set |
+| 307 | `project_all` on the forward pass | full logits without the model scoring them itself |
+| 308 | A much lower learning rate by default | fine-tuning adjusts a model that already works |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

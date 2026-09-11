@@ -251,11 +251,17 @@ class CodeCraftLM(nn.Module):
         targets: torch.Tensor | None = None,
         caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         start_position: int = 0,
+        project_all: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor]]]:
         """Run the model.
 
         Returns the logits, the loss when targets are given, and the updated
         key/value caches.
+
+        `project_all` asks for logits at every position without computing a
+        loss, which is what a caller needs when it scores the output itself
+        against a different mask. Without it, the only way to get full logits is
+        to hand over targets, and then the model scores them too.
         """
         _, seq = tokens.shape
         end = start_position + seq
@@ -279,15 +285,16 @@ class CodeCraftLM(nn.Module):
         x = self.final_norm(x)
 
         loss = None
-        if targets is not None:
+        if targets is not None or project_all:
             logits = self.output_head(x)
+        if targets is not None:
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 targets.reshape(-1),
                 # Padding must not contribute to the loss.
                 ignore_index=0,
             )
-        else:
+        elif not project_all:
             # Generation only needs the last position, and the output head is
             # the largest matrix in the model: projecting the whole sequence
             # would dominate the cost of a step.
