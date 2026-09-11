@@ -87,7 +87,13 @@ import type {
   Symbol as WorkspaceSymbol,
   VirtualFile,
 } from '../lib/types';
-import { createFile, loadWorkspace, saveWorkspace, validateFileName } from '../lib/vfs';
+import {
+  createFile,
+  loadWorkspace,
+  monacoLanguageFor,
+  saveWorkspace,
+  validateFileName,
+} from '../lib/vfs';
 import { AgentPanel } from './AgentPanel';
 import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
@@ -573,6 +579,28 @@ export function CodeCraftIDE() {
     window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     notify('Workspace exported.');
   }, [files, language, notify]);
+
+  /**
+   * Rename a file, which is also how it is moved.
+   *
+   * The folders are part of the name, so renaming `util.py` to `lib/util.py`
+   * moves it into `lib` and there is no separate move operation to write. The
+   * language follows the extension, because a file renamed from `.txt` to
+   * `.py` should be highlighted as Python without being reopened.
+   */
+  const handleRename = useCallback(
+    (fileId: string, name: string) => {
+      setFiles((previous) =>
+        previous.map((file) =>
+          file.id === fileId
+            ? { ...file, name, language: monacoLanguageFor(name) }
+            : file,
+        ),
+      );
+      notify(`Renamed to ${name}`);
+    },
+    [notify],
+  );
 
   /**
    * The same workspace as a zip.
@@ -1482,6 +1510,7 @@ export function CodeCraftIDE() {
           activeFileId={activeFile?.id ?? ''}
           entryName={activeRuntime?.entry ?? ''}
           onSelect={setActiveFileId}
+          onRename={handleRename}
           onCreate={(name) => {
             const file = createFile(name, '');
             setFiles((previous) => [...previous, file]);

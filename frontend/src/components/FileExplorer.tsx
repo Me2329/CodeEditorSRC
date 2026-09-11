@@ -15,6 +15,7 @@ import {
   FileCode,
   Folder,
   FolderTree,
+  Pencil,
   Plus,
   Trash2,
   X,
@@ -32,6 +33,8 @@ interface Props {
   onSelect: (id: string) => void;
   onCreate: (name: string) => void;
   onDelete: (id: string) => void;
+  /** A rename is also a move: the folders are part of the name. */
+  onRename: (id: string, name: string) => void;
 }
 
 export function FileExplorer({
@@ -41,12 +44,30 @@ export function FileExplorer({
   onSelect,
   onCreate,
   onDelete,
+  onRename,
 }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // The file being renamed, and what it is being renamed to.
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const rows = useMemo(() => flatten(buildTree(files), collapsed), [files, collapsed]);
+
+  const submitRename = () => {
+    if (!renaming) return;
+    const problem = validateFileName(renaming.value, files, renaming.id);
+    if (problem) {
+      setRenameError(problem);
+      return;
+    }
+    const trimmed = renaming.value.trim();
+    const before = files.find((file) => file.id === renaming.id);
+    if (before && before.name !== trimmed) onRename(renaming.id, trimmed);
+    setRenaming(null);
+    setRenameError(null);
+  };
 
   const submit = () => {
     if (draft === null) return;
@@ -112,11 +133,48 @@ export function FileExplorer({
           const file = node.file;
           const isActive = file.id === activeFileId;
           const isEntry = file.name === entryName;
+
+          if (renaming?.id === file.id) {
+            return (
+              <div key={file.id} style={indent} className="pr-2">
+                <input
+                  autoFocus
+                  value={renaming.value}
+                  onChange={(event) => {
+                    setRenaming({ id: file.id, value: event.target.value });
+                    setRenameError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') submitRename();
+                    if (event.key === 'Escape') {
+                      setRenaming(null);
+                      setRenameError(null);
+                    }
+                  }}
+                  onBlur={submitRename}
+                  aria-label={`Rename ${file.name}`}
+                  aria-invalid={renameError !== null}
+                  className="w-full rounded border border-indigo-800/60 bg-slate-900 px-2 py-1 text-xs text-slate-100 outline-none focus:border-accent"
+                />
+                {renameError && (
+                  <p role="alert" className="mt-1 px-1 text-[10px] leading-snug text-halt">
+                    {renameError}
+                  </p>
+                )}
+              </div>
+            );
+          }
+
           return (
             <div key={file.id} className="group relative">
               <button
                 type="button"
                 onClick={() => onSelect(file.id)}
+                // The gesture people try first, before looking for a button.
+                onDoubleClick={() => {
+                  setRenaming({ id: file.id, value: file.name });
+                  setRenameError(null);
+                }}
                 aria-current={isActive}
                 style={indent}
                 className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${
@@ -141,16 +199,35 @@ export function FileExplorer({
                 )}
               </button>
 
-              {files.length > 1 && !isEntry && (
-                <button
-                  type="button"
-                  onClick={() => onDelete(file.id)}
-                  className="absolute right-1 top-1/2 hidden -translate-y-1/2 rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-halt group-hover:block"
-                  title={`Delete ${file.name}`}
-                  aria-label={`Delete ${file.name}`}
-                >
-                  <Trash2 className="h-3 w-3" aria-hidden />
-                </button>
+              {/* The entry file is left alone by both, for the same reason:
+                  the runtime looks it up by name, so renaming or deleting it
+                  leaves nothing to run. */}
+              {!isEntry && (
+                <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center group-hover:flex">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenaming({ id: file.id, value: file.name });
+                      setRenameError(null);
+                    }}
+                    className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                    title={`Rename ${file.name}`}
+                    aria-label={`Rename ${file.name}`}
+                  >
+                    <Pencil className="h-3 w-3" aria-hidden />
+                  </button>
+                  {files.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(file.id)}
+                      className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-halt"
+                      title={`Delete ${file.name}`}
+                      aria-label={`Delete ${file.name}`}
+                    >
+                      <Trash2 className="h-3 w-3" aria-hidden />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );

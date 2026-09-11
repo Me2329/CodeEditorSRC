@@ -603,6 +603,43 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Averaging checkpoints
+
+Training walks a noisy path. Late in a run the weights at two nearby steps sit
+on different sides of the same minimum, and the point between them is often a
+little better than either: averaging cancels the part of each that is a step's
+worth of randomness and keeps the part that was learned.
+
+```bash
+codecraft_model average --checkpoints runs/x/model.pt runs/x/latest.pt --out runs/x/soup.pt
+codecraft_model evaluate --run runs/x --checkpoint runs/x/soup.pt
+```
+
+It costs no training, no data and no hyperparameters, one model comes out rather
+than several, and inference costs exactly what it did.
+
+### Measured, and it did not help
+
+The only two distinct checkpoints on disk here are 20 and 40 steps into the
+billion-token run, so that is what was measured:
+
+| | held-out loss | perplexity |
+| --- | --- | --- |
+| step 20 | 7.4786 | 1769.8 |
+| step 40 | 7.3511 | 1557.9 |
+| the average of both | 7.3798 | 1603.3 |
+
+The average sits between them rather than below the better one, and that is the
+expected answer at step 40 rather than a bug. Forty steps in, the weights are
+still travelling in one direction at speed; the difference between the two
+checkpoints is mostly progress, not noise, and averaging a point with a worse
+point earlier on the same road gives a point in between.
+
+Averaging pays off when the checkpoints are jittering around a minimum, not when
+they are still descending. The command prints "evaluate it before using it" for
+exactly this reason, and the table above is why the sentence is there rather
+than a claim that it helps.
+
 ## Measuring a checkpoint
 
 ```bash
@@ -739,7 +776,7 @@ whatever it is shown.
 make test-model
 ```
 
-358 tests: parameter counts against real modules, tokenizer round trips over
+368 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

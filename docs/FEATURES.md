@@ -548,6 +548,20 @@ organised anything.
 There is no "new folder" button, because there is nothing for it to create. The
 way to make a folder is to name a file into one.
 
+## Renaming, and averaging
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 378 | Rename a file from the explorer | double-click the name, or the pencil |
+| 379 | A rename is also a move | the folders are part of the name, so there is no separate move to write |
+| 380 | The language follows the new extension | `.txt` to `.py` highlights as Python without reopening |
+| 381 | A file keeps its own name while being renamed | or changing only the case collides with itself |
+| 382 | The entry file is not renamable or deletable | the runtime looks it up by name, so both leave nothing to run |
+| 383 | `average` combines checkpoints from one run | no training, no data, no hyperparameters |
+| 384 | Unequal weights | for leaning on the best checkpoint and smoothing it with its neighbours |
+| 385 | Different architectures are refused | the point between two basins is worse than both |
+| 386 | `evaluate --checkpoint` measures any file | a soup, a fine-tune, an adapter-merged model |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

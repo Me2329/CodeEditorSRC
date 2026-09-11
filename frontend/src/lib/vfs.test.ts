@@ -41,6 +41,23 @@ describe('validateFileName', () => {
     expect(validateFileName(`a${String.fromCharCode(10)}b.py`, existing)).not.toBeNull();
     expect(validateFileName(`a${String.fromCharCode(0)}b.py`, existing)).not.toBeNull();
   });
+
+  it('lets a file being renamed keep its own name', () => {
+    // A rename that ends where it started, or that only changes the case, must
+    // not collide with the file it is renaming.
+    expect(validateFileName('main.py', existing, existing[0]!.id)).toBeNull();
+    expect(validateFileName('Main.py', existing, existing[0]!.id)).toBeNull();
+  });
+
+  it('still rejects a name another file already has', () => {
+    const two = [createFile('main.py', ''), createFile('util.py', '')];
+
+    expect(validateFileName('util.py', two, two[0]!.id)).toContain('already exists');
+  });
+
+  it('a rename into a folder is an ordinary name', () => {
+    expect(validateFileName('pkg/main.py', existing, existing[0]!.id)).toBeNull();
+  });
 });
 
 describe('createFile', () => {

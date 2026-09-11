@@ -83,7 +83,18 @@ const CONTROL_CHARACTERS = new RegExp('[\\u0000-\\u001f\\u007f]');
  * Validate a workspace-relative file name using the same rule the gateway and
  * the supervisor apply, so the editor rejects a bad name before a round trip.
  */
-export function validateFileName(name: string, existing: readonly VirtualFile[]): string | null {
+/**
+ * Why a name cannot be used, or null.
+ *
+ * `exceptId` is the file being renamed. Without it a rename that changes only
+ * the capitalisation, or that ends where it started because the user thought
+ * better of it, collides with the file it is renaming.
+ */
+export function validateFileName(
+  name: string,
+  existing: readonly VirtualFile[],
+  exceptId?: string,
+): string | null {
   const trimmed = name.trim();
   if (!trimmed) return 'Name cannot be empty.';
   if (trimmed.length > 255) return 'Name must be 255 characters or fewer.';
@@ -96,7 +107,7 @@ export function validateFileName(name: string, existing: readonly VirtualFile[])
     if (!part) return 'Name cannot contain an empty path segment.';
     if (part === '.' || part === '..') return 'Name cannot escape the workspace.';
   }
-  if (existing.some((file) => file.name === trimmed)) {
+  if (existing.some((file) => file.name === trimmed && file.id !== exceptId)) {
     return `"${trimmed}" already exists in this workspace.`;
   }
   return null;

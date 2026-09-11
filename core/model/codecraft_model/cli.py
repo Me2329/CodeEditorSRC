@@ -505,6 +505,54 @@ def command_finetune(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_average(args: argparse.Namespace) -> int:
+    """Average several checkpoints of one run into one."""
+    from .average import average_checkpoints
+    from .train import save_checkpoint
+
+    paths = [Path(name) for name in args.checkpoints]
+    missing = [path for path in paths if not path.exists()]
+    if missing:
+        print(f"no checkpoint at {missing[0]}", file=sys.stderr)
+        return 1
+    if len(paths) < 2:
+        print("averaging needs at least two checkpoints", file=sys.stderr)
+        return 1
+
+    weights = None
+    if args.weights:
+        if len(args.weights) != len(paths):
+            print(
+                f"{len(args.weights)} weights for {len(paths)} checkpoints",
+                file=sys.stderr,
+            )
+            return 1
+        weights = args.weights
+
+    try:
+        state, config, record = average_checkpoints(paths, weights)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    model = CodeCraftLM(config)
+    model.load_state_dict(state)
+
+    for source in record["sources"]:
+        loss = source["val_loss"]
+        print(
+            f"  {Path(source['path']).name:<20} weight {source['weight']:.2f}"
+            + (f"  step {source['step']}" if source["step"] is not None else "")
+            + (f"  val loss {loss:.3f}" if isinstance(loss, float) else "")
+        )
+
+    destination = Path(args.out)
+    save_checkpoint(destination, model, None, 0, float("nan"), TrainConfig())
+    print(f"\naveraged into {destination}")
+    print("  evaluate it before using it: averaging usually helps and sometimes does not")
+    return 0
+
+
 def command_export(args: argparse.Namespace) -> int:
     """Write a checkpoint in a format that does not execute anything to load."""
     run = Path(args.run)
@@ -546,7 +594,10 @@ def command_export(args: argparse.Namespace) -> int:
 def command_evaluate(args: argparse.Namespace) -> int:
     """Measure a checkpoint, rather than reading samples and forming a view."""
     run = Path(args.run)
-    checkpoint = run / "model.pt"
+    # Any checkpoint, not only the run's own: a soup, a fine-tune or an
+    # adapter-merged model is measured against the same held-out data, which is
+    # the only way to say whether it is better.
+    checkpoint = Path(args.checkpoint) if args.checkpoint else run / "model.pt"
     if not checkpoint.exists():
         print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
         return 1
@@ -556,8 +607,8 @@ def command_evaluate(args: argparse.Namespace) -> int:
     device = resolve_device(args.device)
     model, payload = load_checkpoint(checkpoint, device)
     print(
-        f"{humanise(model.parameter_count())} parameters, step {payload['step']}, "
-        f"on {describe_device(device)}\n"
+        f"{checkpoint.name}: {humanise(model.parameter_count())} parameters, "
+        f"step {payload['step']}, on {describe_device(device)}\n"
     )
 
     if args.quantize:
@@ -879,6 +930,25 @@ def main(argv: list[str] | None = None) -> int:
     add_device(tuner)
     tuner.set_defaults(func=command_finetune)
 
+    averager = subparsers.add_parser(
+        "average", help="average several checkpoints of one run into one"
+    )
+    averager.add_argument(
+        "--checkpoints",
+        nargs="+",
+        required=True,
+        help="two or more checkpoints from the same run",
+    )
+    averager.add_argument("--out", required=True)
+    averager.add_argument(
+        "--weights",
+        nargs="+",
+        type=float,
+        default=None,
+        help="relative weights, one per checkpoint; equal by default",
+    )
+    averager.set_defaults(func=command_average)
+
     exporter = subparsers.add_parser(
         "export", help="write a checkpoint that loads without unpickling"
     )
@@ -893,6 +963,11 @@ def main(argv: list[str] | None = None) -> int:
         "evaluate", help="measure held-out perplexity and throughput"
     )
     evaluator.add_argument("--run", required=True)
+    evaluator.add_argument(
+        "--checkpoint",
+        default=None,
+        help="a specific checkpoint to measure, instead of the run's model.pt",
+    )
     evaluator.add_argument("--batches", type=int, default=50)
     evaluator.add_argument("--batch", type=int, default=8)
     evaluator.add_argument("--block", type=int, default=512)
