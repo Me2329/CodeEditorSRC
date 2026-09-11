@@ -528,6 +528,26 @@ history lives in the browser alongside the workspace.
 | 368 | Verified by unzipping with Python's zipfile | not only against the writer's own reader |
 | 369 | An empty workspace still makes a valid archive | 22 bytes of end-of-directory record |
 
+## A file tree that is a tree
+
+The explorer called itself a file tree and rendered one flat row per file. That
+worked for the six files a demo has and stopped working the moment anyone
+organised anything.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 370 | Files nest by their names | `lib/util.py` appears inside `lib` |
+| 371 | Folders are derived, not stored | one appears when a file is named into it, and goes with the last such file |
+| 372 | Folders collapse and remember | nested contents hide with their parent |
+| 373 | Folders before files, then alphabetical | a list that interleaves them is harder to scan |
+| 374 | Numbers sort as numbers | `part2.py` before `part10.py`, which bytes do not do |
+| 375 | Case does not decide the order | `alpha.py` before `Beta.py` |
+| 376 | Rows are flattened before rendering | so keyboard navigation works on a list rather than a shape |
+| 377 | Revealing a file opens the way to it | and leaves unrelated folders closed |
+
+There is no "new folder" button, because there is nothing for it to create. The
+way to make a folder is to name a file into one.
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

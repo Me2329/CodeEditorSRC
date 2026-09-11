@@ -1,9 +1,27 @@
-/** Workspace file tree with inline creation, rename and delete. */
+/**
+ * Workspace file tree with inline creation and delete.
+ *
+ * A real tree, derived from the names: a file called `lib/util.py` appears
+ * inside a folder called `lib`. Folders have no existence of their own, so one
+ * appears when a file is named as being inside it and goes when the last such
+ * file does. That is why there is no "new folder" button: the way to make a
+ * folder is to name a file into one.
+ */
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { FileCode, FolderTree, Plus, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  FileCode,
+  Folder,
+  FolderTree,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useMemo, useState } from 'react';
 
+import { buildTree, flatten, toggle } from '../lib/tree';
 import { validateFileName } from '../lib/vfs';
 import type { VirtualFile } from '../lib/types';
 
@@ -26,6 +44,9 @@ export function FileExplorer({
 }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+
+  const rows = useMemo(() => flatten(buildTree(files), collapsed), [files, collapsed]);
 
   const submit = () => {
     if (draft === null) return;
@@ -61,7 +82,34 @@ export function FileExplorer({
       </header>
 
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2 font-mono text-xs">
-        {files.map((file) => {
+        {rows.map(({ node, depth }) => {
+          // Indentation carries the nesting; a tree drawn with lines costs more
+          // width than a 224px panel has to spare.
+          const indent = { paddingLeft: `${depth * 12 + 8}px` };
+
+          if (node.kind === 'folder') {
+            const isCollapsed = collapsed.has(node.path);
+            return (
+              <button
+                key={`folder:${node.path}`}
+                type="button"
+                onClick={() => setCollapsed((current) => toggle(current, node.path))}
+                aria-expanded={!isCollapsed}
+                style={indent}
+                className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-slate-400 transition-colors hover:bg-slate-800/40 hover:text-slate-200"
+              >
+                {isCollapsed ? (
+                  <ChevronRight className="h-3 w-3 shrink-0 text-slate-600" aria-hidden />
+                ) : (
+                  <ChevronDown className="h-3 w-3 shrink-0 text-slate-600" aria-hidden />
+                )}
+                <Folder className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+                <span className="truncate">{node.name}</span>
+              </button>
+            );
+          }
+
+          const file = node.file;
           const isActive = file.id === activeFileId;
           const isEntry = file.name === entryName;
           return (
@@ -70,17 +118,19 @@ export function FileExplorer({
                 type="button"
                 onClick={() => onSelect(file.id)}
                 aria-current={isActive}
-                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                style={indent}
+                className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${
                   isActive
                     ? 'border border-indigo-800/50 bg-indigo-950/60 text-indigo-200'
                     : 'border border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
+                title={file.name}
               >
                 <FileCode
                   className={`h-3.5 w-3.5 shrink-0 ${isEntry ? 'text-run' : 'text-slate-500'}`}
                   aria-hidden
                 />
-                <span className="truncate">{file.name}</span>
+                <span className="truncate">{node.name}</span>
                 {isEntry && (
                   <span
                     className="ml-auto shrink-0 rounded bg-emerald-950/60 px-1 text-[9px] uppercase tracking-wide text-run"
