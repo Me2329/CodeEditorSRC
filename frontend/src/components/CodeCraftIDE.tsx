@@ -42,6 +42,16 @@ import {
 } from '../lib/snippets';
 import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
 import {
+  EMPTY as NO_PLACES,
+  back as goBack,
+  canGoBack,
+  canGoForward,
+  current as currentPlace,
+  forget as forgetPlaces,
+  forward as goForward,
+  visit as visitPlace,
+} from '../lib/navigation';
+import {
   EMPTY as NO_TABS,
   close as closeTab,
   cycle as cycleTab,
@@ -144,6 +154,9 @@ export function CodeCraftIDE() {
   // Read by the snippet provider, which is registered once and would otherwise
   // capture whatever the tab size was at mount.
   const tabSizeRef = useRef(DEFAULT_PREFERENCES.tabSize);
+  // The cursor listener is attached once at mount, so it reads the current file
+  // through a ref rather than closing over the one that was showing then.
+  const activeFileIdRef = useRef('');
   // The extension API is built once and must see current state, so it reads
   // these rather than closing over a render's values.
   const filesRef = useRef<VirtualFile[]>([]);
@@ -164,6 +177,19 @@ export function CodeCraftIDE() {
    */
   const [tabs, setTabs] = useState(NO_TABS);
 
+  /**
+   * Where the caret has been, so there is a way back.
+   *
+   * Following a symbol into another file or jumping to a search hit moves you
+   * somewhere you did not choose to be, and going back by hand means
+   * remembering which file and roughly which line, which nobody does.
+   */
+  const [places, setPlaces] = useState(NO_PLACES);
+  // Set while a back or forward is being applied, so moving the caret as a
+  // result of navigating does not record a new place and bury the one we came
+  // from.
+  const navigatingRef = useRef(false);
+
   // Showing a file opens a tab for it; deleting one closes its tab.
   useEffect(() => {
     if (activeFile) setTabs((current) => openTab(current, activeFile.id));
@@ -171,6 +197,13 @@ export function CodeCraftIDE() {
 
   useEffect(() => {
     setTabs((current) => pruneTabs(current, files.map((file) => file.id)));
+    setPlaces((current) => {
+      const alive = new Set(files.map((file) => file.id));
+      return current.entries.reduce(
+        (state, place) => (alive.has(place.fileId) ? state : forgetPlaces(state, place.fileId)),
+        current,
+      );
+    });
   }, [files]);
 
   // Closing the tab that was showing has to move the editor too.
@@ -290,6 +323,7 @@ export function CodeCraftIDE() {
 
   activeFileNameRef.current = activeFile?.name ?? '';
   tabSizeRef.current = preferences.tabSize;
+  activeFileIdRef.current = activeFile?.id ?? '';
   filesRef.current = files;
 
   // Persist the workspace so a refresh does not discard work in progress.
@@ -586,6 +620,35 @@ export function CodeCraftIDE() {
     editor.focus();
   }, []);
 
+  /**
+   * Go to a remembered place.
+   *
+   * The flag is cleared on a timer rather than immediately: switching files
+   * makes Monaco move the caret itself as the model loads, and that movement
+   * must not be recorded either.
+   */
+  const handleNavigate = useCallback(
+    (direction: 'back' | 'forward') => {
+      const moved = direction === 'back' ? goBack(places) : goForward(places);
+      const target = currentPlace(moved);
+      if (moved === places || !target) return;
+
+      setPlaces(moved);
+      navigatingRef.current = true;
+      setActiveFileId(target.fileId);
+      window.setTimeout(() => {
+        const editor = editorRef.current;
+        if (editor) {
+          editor.revealLineInCenter(target.line);
+          editor.setPosition({ lineNumber: target.line, column: target.column });
+          editor.focus();
+        }
+        navigatingRef.current = false;
+      }, 60);
+    },
+    [places],
+  );
+
   const handleGoToSymbol = useCallback(
     (symbol: WorkspaceSymbol) => {
       const target = files.find((file) => file.name === symbol.file);
@@ -736,6 +799,19 @@ export function CodeCraftIDE() {
       // so both are tracked as they change.
       editor.onDidChangeCursorPosition((event) => {
         setCaret({ line: event.position.lineNumber, column: event.position.column });
+
+        // Applying a back or forward moves the caret too; recording that would
+        // bury the place we just came from under the place we just went to.
+        if (navigatingRef.current) return;
+        const fileId = activeFileIdRef.current;
+        if (!fileId) return;
+        setPlaces((current) =>
+          visitPlace(current, {
+            fileId,
+            line: event.position.lineNumber,
+            column: event.position.column,
+          }),
+        );
       });
       editor.onDidChangeCursorSelection(() => {
         const model = editor.getModel();
@@ -1194,6 +1270,22 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'navigate.back',
+        title: 'Go back',
+        category: 'Navigate',
+        shortcut: 'Alt+Left',
+        when: () => canGoBack(places),
+        run: () => handleNavigate('back'),
+      },
+      {
+        id: 'navigate.forward',
+        title: 'Go forward',
+        category: 'Navigate',
+        shortcut: 'Alt+Right',
+        when: () => canGoForward(places),
+        run: () => handleNavigate('forward'),
+      },
+      {
         id: 'edit.snippet',
         title: 'Insert a snippet',
         category: 'Edit',
@@ -1259,6 +1351,12 @@ export function CodeCraftIDE() {
       language,
       applyTextAction,
       tabs,
+      activeFile,
+      history,
+      handleRestore,
+      places,
+      handleNavigate,
+      handleInsertSnippet,
     ],
   );
 

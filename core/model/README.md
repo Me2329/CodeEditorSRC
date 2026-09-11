@@ -600,6 +600,23 @@ Decode is slower quantized, because dequantization happens per forward pass:
 this trades compute for memory rather than being faster. It exists so a model
 that would not otherwise fit can be served at all.
 
+## Resuming a run
+
+`--max-hours` stops a run on the clock and writes a checkpoint; `--resume`
+continues it. The architecture for a resumed run comes from the checkpoint, not
+from `--size`.
+
+That is not a nicety. The flag naming the size was given on the *first* run, and
+leaving it off the second is the natural thing to do, so the resume rebuilt the
+default preset and tried to load 6.5M parameters into it. The failure was forty
+lines of `size mismatch for blocks.3.feed_forward.up_proj.weight`, which says
+what happened only if you already know what happened.
+
+A `--size` passed to a resume is now ignored with a sentence saying so, rather
+than being silently obeyed or silently dropped. `--dropout` and `--context` are
+training knobs rather than parameter shapes, so they still apply: raising
+dropout on a resume is the usual reason to want one.
+
 ## Making it stop looping
 
 A small model decoded greedily walks into a phrase and stays there. The FIM
@@ -683,7 +700,7 @@ whatever it is shown.
 make test-model
 ```
 
-332 tests: parameter counts against real modules, tokenizer round trips over
+335 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

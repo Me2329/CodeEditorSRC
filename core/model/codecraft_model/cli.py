@@ -37,7 +37,7 @@ from .data import (
     sample_corpus,
     stream_dataset,
 )
-from .model import CodeCraftLM
+from .model import CodeCraftLM, ModelConfig
 from .tokenizer import Tokenizer
 from .train import TrainConfig, load_checkpoint, train
 
@@ -240,9 +240,28 @@ def command_train(args: argparse.Namespace) -> int:
     tokenizer = Tokenizer.load(tokenizer_path)
     metadata = json.loads((run / "meta.json").read_text(encoding="utf-8"))
 
-    # The vocabulary comes from the tokenizer that was actually trained, not
-    # from the preset: a mismatch would index outside the embedding table.
-    config = get_size(args.size).with_vocab(tokenizer.vocab_size)
+    resume_path = run / "latest.pt"
+    resuming = args.resume and resume_path.exists()
+
+    if resuming:
+        # The architecture comes from the checkpoint, never from --size.
+        # Rebuilding from the flag is how a resume turns into forty lines of
+        # size mismatches: the default preset is not the one that was trained,
+        # and the flag that says so was given on the first run, not this one.
+        payload = torch.load(resume_path, map_location="cpu", weights_only=False)
+        config = ModelConfig.from_dict(payload["model_config"])
+        del payload
+        if args.size is not None and get_size(args.size).with_vocab(
+            tokenizer.vocab_size
+        ).d_model != config.d_model:
+            print(
+                f"  note: --size {args.size} is ignored; the checkpoint's own "
+                f"architecture (d_model {config.d_model}) is what its weights fit"
+            )
+    else:
+        # The vocabulary comes from the tokenizer that was actually trained, not
+        # from the preset: a mismatch would index outside the embedding table.
+        config = get_size(args.size or "micro").with_vocab(tokenizer.vocab_size)
 
     overrides: dict = {}
     if args.context is not None:
@@ -253,8 +272,9 @@ def command_train(args: argparse.Namespace) -> int:
         config = config.__class__(**{**config.to_dict(), **overrides})
 
     model = CodeCraftLM(config)
+    described = "resumed" if resuming else f"'{args.size or 'micro'}'"
     print(
-        f"model '{args.size}': {humanise(model.parameter_count())} parameters, "
+        f"model {described}: {humanise(model.parameter_count())} parameters, "
         f"vocab {config.vocab_size}, context {config.max_seq_len}, "
         f"dropout {config.dropout}"
     )
@@ -296,7 +316,7 @@ def command_train(args: argparse.Namespace) -> int:
         train_config,
         output_dir=run,
         device=device,
-        resume_from=run / "latest.pt" if args.resume else None,
+        resume_from=resume_path if resuming else None,
     )
 
     print(f"\ncheckpoint written to {run / 'model.pt'}")
@@ -689,7 +709,15 @@ def main(argv: list[str] | None = None) -> int:
 
     trainer = subparsers.add_parser("train", help="train a model")
     trainer.add_argument("--run", required=True)
-    trainer.add_argument("--size", default="micro", choices=sorted(SIZES))
+    trainer.add_argument(
+        "--size",
+        default=None,
+        choices=sorted(SIZES),
+        help=(
+            "architecture preset (default: micro). Ignored when resuming, "
+            "where the architecture comes from the checkpoint"
+        ),
+    )
     trainer.add_argument("--steps", type=int, default=2000)
     trainer.add_argument("--batch", type=int, default=16)
     trainer.add_argument("--block", type=int, default=256, help="tokens per window")

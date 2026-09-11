@@ -121,6 +121,8 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'tabs.next', keys: 'mod+Tab' },
   { command: 'tabs.previous', keys: 'mod+shift+Tab' },
   { command: 'edit.format', keys: 'mod+shift+i', when: 'editor' },
+  { command: 'navigate.back', keys: 'alt+ArrowLeft' },
+  { command: 'navigate.forward', keys: 'alt+ArrowRight' },
 ];
 
 /**

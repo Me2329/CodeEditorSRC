@@ -112,6 +112,87 @@ def test_the_model_is_sized_for_the_tokenizer_that_was_trained(
     assert f"vocab {tokenizer.vocab_size}" in reported
 
 
+def test_resuming_takes_the_architecture_from_the_checkpoint(
+    tmp_path, sources, capsys
+) -> None:
+    """Otherwise a resume rebuilds the default preset and fails to load.
+
+    The flag that named the size was given on the first run, not on the one that
+    continues it, and the failure is forty lines of size mismatches rather than
+    a sentence saying what happened.
+    """
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    main(
+        [
+            "train", "--run", str(run), "--size", "tiny", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--threads", "2",
+        ]
+    )
+    trained = json.loads((run / "training.json").read_text())["parameters"]
+    capsys.readouterr()
+
+    # No --size this time, which is the whole point.
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--steps", "4", "--batch", "2",
+                "--block", "32", "--warmup", "1", "--eval-every", "2",
+                "--resume", "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    reported = capsys.readouterr().out
+    assert "model resumed" in reported
+    assert "resuming from step 2" in reported
+    assert json.loads((run / "training.json").read_text())["parameters"] == trained
+
+
+def test_a_size_given_on_a_resume_says_it_is_ignored(tmp_path, sources, capsys) -> None:
+    """Silently ignoring a flag is worse than refusing it; saying so is better
+    than either."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    main(
+        [
+            "train", "--run", str(run), "--size", "tiny", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--threads", "2",
+        ]
+    )
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "4",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--resume", "--threads", "2",
+        ]
+    )
+
+    assert "--size micro is ignored" in capsys.readouterr().out
+
+
+def test_resume_without_a_checkpoint_just_trains(tmp_path, sources) -> None:
+    """Asking to continue something that was never started is not an error."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--steps", "2", "--batch", "2",
+                "--block", "32", "--warmup", "1", "--eval-every", "2",
+                "--resume", "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+
 def test_context_and_dropout_can_be_overridden(tmp_path, sources, capsys) -> None:
     run = tmp_path / "run"
     main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])

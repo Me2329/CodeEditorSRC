@@ -488,6 +488,18 @@ history lives in the browser alongside the workspace.
 | 343 | Four tokens by default for infill | two forbids a second run of indentation, which is worse than the loop |
 | 344 | Exposed over HTTP on both routes | `no_repeat_ngram`, off by default for chat |
 
+## Back and forward
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 345 | A navigation stack across files | Alt+Left and Alt+Right, with palette entries |
+| 346 | Only jumps are recorded | another file, or ten lines away in this one |
+| 347 | A small move updates the current place | so going back lands where you were, not ten lines above |
+| 348 | Browser semantics | going somewhere new from the middle discards what was ahead |
+| 349 | Bounded at fifty places | the far end is older than anything anyone is looking for |
+| 350 | Navigating does not record itself | or the place you came from is buried by the one you went to |
+| 351 | Deleting a file drops its places | and the current position follows what it was pointing at |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
