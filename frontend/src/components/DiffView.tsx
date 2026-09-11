@@ -18,9 +18,12 @@ interface Props {
   after: string;
   onAccept?: () => void;
   onReject?: () => void;
+  /** Dismiss the view without judging the change, for a comparison rather than
+   *  a proposal. */
+  onClose?: () => void;
 }
 
-export function DiffView({ name, before, after, onAccept, onReject }: Props) {
+export function DiffView({ name, before, after, onAccept, onReject, onClose }: Props) {
   const [copied, setCopied] = useState(false);
 
   const { hunks, stats, unified } = useMemo(() => {
@@ -59,6 +62,16 @@ export function DiffView({ name, before, after, onAccept, onReject }: Props) {
             {copied ? 'Copied' : 'Copy'}
           </button>
 
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-1 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-200"
+            >
+              <X className="h-3 w-3" aria-hidden />
+              Close
+            </button>
+          )}
           {onReject && (
             <button
               type="button"

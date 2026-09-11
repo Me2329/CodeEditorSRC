@@ -603,6 +603,32 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Stopping on text
+
+A stop token works when the model was trained to emit one. Everything else needs
+stopping on what the text says: an editor wants a completion to end at the next
+blank line, a chat client wants generation to stop before the model writes the
+user's next turn.
+
+```bash
+curl -s localhost:8940/generate -d '{"prompt": "def f():", "stop": ["\n\n"]}'
+```
+
+The difficulty is that tokens are not characters. A stop sequence of two
+newlines can arrive as one token, as two, or as the tail of one and the head of
+the next, so a check that looks at each delta on its own misses it about as
+often as it catches it. The text is accumulated and matched across the joins.
+
+That creates the second problem: a streaming caller must never be shown text
+that turns out to be the beginning of a stop sequence, because there is no way
+to take it back. So the last few characters are held back until they are known
+not to be, and released when the generation ends without matching. The cost is
+that a long stop sequence delays the stream by its own length, which is why the
+server caps them at 64 characters and eight of them.
+
+Both `stop` and `stop_sequences` are accepted, because the second is what a
+Messages client sends and the first is what most other APIs call it.
+
 ## Running out of context
 
 A generation stops when the window fills. That is the default and it is the
@@ -807,7 +833,7 @@ whatever it is shown.
 make test-model
 ```
 
-376 tests: parameter counts against real modules, tokenizer round trips over
+396 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

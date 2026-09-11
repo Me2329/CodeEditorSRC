@@ -501,6 +501,56 @@ def test_an_ordinary_run_supports_infill(run_directory) -> None:
     assert Engine(run_directory).describe()["infill"] is True
 
 
+def test_generation_stops_on_text(run_directory) -> None:
+    """A stop token works when the model was trained to emit one; this is for
+    everything else."""
+    engine = Engine(run_directory)
+    text, _ = engine.complete("def ", max_tokens=40, temperature=0.0, stop=["e"])
+
+    assert "e" not in text
+
+
+def test_a_stop_sequence_is_not_included_in_the_answer(run_directory) -> None:
+    engine = Engine(run_directory)
+    text, _ = engine.complete("def ", max_tokens=40, temperature=0.0, stop=["a", "e", "i"])
+
+    assert not any(vowel in text for vowel in "aei")
+
+
+def test_stop_sequences_come_from_either_field_name(base_url: str) -> None:
+    """`stop_sequences` is what a Messages client sends; `stop` is what most
+    other APIs call it."""
+    from codecraft_model.serve import _stop_sequences
+
+    assert _stop_sequences({"stop_sequences": ["a"]}) == ["a"]
+    assert _stop_sequences({"stop": ["b"]}) == ["b"]
+    assert _stop_sequences({"stop": "c"}) == ["c"]
+
+
+def test_unusable_stop_sequences_are_dropped_rather_than_refused(base_url: str) -> None:
+    from codecraft_model.serve import _stop_sequences
+
+    assert _stop_sequences({"stop": [1, "", None, "keep"]}) == ["keep"]
+    assert _stop_sequences({"stop": 5}) == []
+
+
+def test_stop_sequences_are_bounded(base_url: str) -> None:
+    """Each is searched for after every token, on every request."""
+    from codecraft_model.serve import _stop_sequences
+
+    assert len(_stop_sequences({"stop": [f"s{index}" for index in range(50)]})) == 8
+    assert len(_stop_sequences({"stop": ["x" * 500]})[0]) == 64
+
+
+def test_the_infill_route_takes_stop_sequences(base_url: str) -> None:
+    body = post(
+        f"{base_url}/infill",
+        {"prefix": "def f(", "suffix": ")", "max_tokens": 20, "temperature": 0, "stop": ["e"]},
+    )
+
+    assert "e" not in body["completion"]
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

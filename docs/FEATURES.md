@@ -588,6 +588,19 @@ way to make a folder is to name a file into one.
 | 401 | The last decode step is no longer computed | its logits were never read |
 | 402 | A checkpoint older than the FIM markers refuses infill | with a sentence, instead of an IndexError from inside the embedding |
 
+## Stopping on text, and comparing files
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 403 | Stop sequences on both routes | for a model with no stop token of its own |
+| 404 | Matched across the joins between tokens | a sequence can arrive as one token, two, or the tail of one |
+| 405 | Text that might be a stop is held back | a streaming caller cannot take back what it has shown |
+| 406 | Held-back text is released if nothing matched | |
+| 407 | `stop` and `stop_sequences` both accepted | one is what a Messages client sends, the other what most APIs call it |
+| 408 | Eight sequences, 64 characters each | every one is searched for after every token |
+| 409 | Compare the open file with another | for the copy that drifted, rather than the version that changed |
+| 410 | The diff view closes without judging | a comparison is not a proposal to accept or discard |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

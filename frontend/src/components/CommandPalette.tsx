@@ -14,7 +14,7 @@ import { formatShortcut, rank, type Command } from '../lib/commands';
 import type { Snippet } from '../lib/snippets';
 import type { Symbol as WorkspaceSymbol, VirtualFile } from '../lib/types';
 
-export type PaletteMode = 'commands' | 'files' | 'symbols' | 'snippets';
+export type PaletteMode = 'commands' | 'files' | 'symbols' | 'snippets' | 'compare';
 
 interface Props {
   mode: PaletteMode | null;
@@ -32,6 +32,7 @@ interface Props {
   onOpenFile: (id: string) => void;
   onGoToSymbol: (symbol: WorkspaceSymbol) => void;
   onInsertSnippet: (snippet: Snippet) => void;
+  onCompareFile: (fileId: string) => void;
 }
 
 const PLACEHOLDERS: Record<PaletteMode, string> = {
@@ -39,6 +40,7 @@ const PLACEHOLDERS: Record<PaletteMode, string> = {
   files: 'Go to file…',
   symbols: 'Go to symbol…',
   snippets: 'Insert a snippet…',
+  compare: 'Compare the open file with…',
 };
 
 /** How many results to render. Beyond this the list stops being scannable. */
@@ -54,6 +56,7 @@ export function CommandPalette({
   onOpenFile,
   onGoToSymbol,
   onInsertSnippet,
+  onCompareFile,
 }: Props) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
@@ -80,7 +83,8 @@ export function CommandPalette({
           activate: match.item.run,
         }));
     }
-    if (mode === 'files') {
+    if (mode === 'files' || mode === 'compare') {
+      const choose = mode === 'compare' ? onCompareFile : onOpenFile;
       return rank(files, query, (file) => file.name)
         .slice(0, MAX_RESULTS)
         .map((match) => ({
@@ -89,7 +93,7 @@ export function CommandPalette({
           secondary: match.item.language,
           trailing: '',
           icon: FileCode,
-          activate: () => onOpenFile(match.item.id),
+          activate: () => choose(match.item.id),
         }));
     }
     if (mode === 'snippets') {
@@ -114,7 +118,10 @@ export function CommandPalette({
         icon: Hash,
         activate: () => onGoToSymbol(match.item),
       }));
-  }, [mode, commands, files, symbols, snippets, query, onOpenFile, onGoToSymbol, onInsertSnippet]);
+  }, [
+    mode, commands, files, symbols, snippets, query,
+    onOpenFile, onGoToSymbol, onInsertSnippet, onCompareFile,
+  ]);
 
   // Clamp the cursor when the result set shrinks under it.
   useEffect(() => {

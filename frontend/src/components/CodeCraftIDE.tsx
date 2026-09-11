@@ -192,6 +192,14 @@ export function CodeCraftIDE() {
    * remembering which file and roughly which line, which nobody does.
    */
   const [places, setPlaces] = useState(NO_PLACES);
+  /**
+   * The file the open one is being compared against.
+   *
+   * Two files rather than two versions of one: the local history panel already
+   * answers "what did this look like before", and this answers "how do these
+   * two differ", which is the question behind a copied file that drifted.
+   */
+  const [comparingWith, setComparingWith] = useState<string | null>(null);
   // Set while a back or forward is being applied, so moving the caret as a
   // result of navigating does not record a new place and bury the one we came
   // from.
@@ -1329,6 +1337,13 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'edit.compare',
+        title: 'Compare this file with another',
+        category: 'Navigate',
+        when: () => files.length > 1 && activeFile !== null,
+        run: () => setPaletteMode('compare'),
+      },
+      {
         id: 'workspace.exportZip',
         title: 'Download the workspace as a zip',
         category: 'Workspace',
@@ -1466,6 +1481,11 @@ export function CodeCraftIDE() {
         onOpenFile={setActiveFileId}
         onGoToSymbol={handleGoToSymbol}
         onInsertSnippet={handleInsertSnippet}
+        onCompareFile={(fileId) => {
+          setComparingWith(fileId);
+          setBottomTab('diff');
+          setPaletteMode(null);
+        }}
       />
       <SettingsPanel
         open={settingsOpen}
@@ -1677,7 +1697,14 @@ export function CodeCraftIDE() {
                 }}
               />
             ) : bottomTab === 'diff' ? (
-              reviewing && agentEdits[reviewing] !== undefined ? (
+              comparingWith && activeFile ? (
+                <DiffView
+                  name={`${files.find((file) => file.id === comparingWith)?.name ?? '?'} → ${activeFile.name}`}
+                  before={files.find((file) => file.id === comparingWith)?.content ?? ''}
+                  after={activeFile.content}
+                  onClose={() => setComparingWith(null)}
+                />
+              ) : reviewing && agentEdits[reviewing] !== undefined ? (
                 <DiffView
                   name={reviewing}
                   before={agentEdits[reviewing]!}

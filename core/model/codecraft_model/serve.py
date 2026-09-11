@@ -32,6 +32,7 @@ import torch
 
 from .cache import PrefixCache, ResponseCache
 from .config import humanise
+from .stopping import StopWatcher
 from .device import (
     architecture_warning,
     autocast_dtype,
@@ -179,6 +180,7 @@ class Engine:
         min_p: float | None = None,
         repetition_penalty: float = 1.1,
         no_repeat_ngram: int = 0,
+        stop: list[str] | None = None,
     ):
         """Yield (text_delta, token_id) pairs for `prompt`.
 
@@ -187,6 +189,11 @@ class Engine:
         than being decoded per token, because a multi-byte character can span
         two tokens and decoding each alone would emit a replacement character
         for text that is perfectly valid a moment later.
+
+        `stop` ends generation on text rather than on a token. A delta may be
+        empty for a second reason once it is given: text that could still turn
+        out to be the start of a stop sequence is held back until it is known
+        not to be.
         """
         ids = self.tokenizer.encode(prompt)
         # Leave room to answer: a prompt that fills the context has nowhere to
@@ -203,6 +210,8 @@ class Engine:
             enabled=self.amp_dtype is not None,
         ):
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            watcher = StopWatcher(stop or ())
+            halted = False
 
             for token_id in self.model.generate(
                 tokens.to(self.device),
@@ -216,15 +225,28 @@ class Engine:
                 stop_tokens={self.end_token},
             ):
                 piece = self.tokenizer.vocab.get(token_id)
-                yield (decoder.decode(piece) if piece is not None else ""), token_id
+                text = decoder.decode(piece) if piece is not None else ""
+                safe, hit = watcher.feed(text)
+                # Yielded even when empty, so a caller counting tokens still
+                # sees every one of them.
+                yield safe, token_id
+                if hit:
+                    halted = True
+                    break
 
             # Flush whatever the decoder was holding. A generation that stops
             # mid-character would otherwise drop those bytes silently. The id is
             # -1 because this text belongs to no single token, which is how
             # callers know not to count it as one.
-            tail = decoder.decode(b"", final=True)
-            if tail:
-                yield tail, FLUSH_TOKEN
+            if not halted:
+                tail = decoder.decode(b"", final=True)
+                if tail:
+                    safe, _ = watcher.feed(tail)
+                    if safe:
+                        yield safe, FLUSH_TOKEN
+                held = watcher.flush()
+                if held:
+                    yield held, FLUSH_TOKEN
 
     def infill(
         self,
@@ -241,6 +263,7 @@ class Engine:
         # because code repeats short sequences legitimately and forbidding a
         # second run of indentation would be worse than the loop.
         no_repeat_ngram: int = 4,
+        stop: list[str] | None = None,
         use_cache: bool = True,
     ) -> tuple[str, int]:
         """Write what goes between `prefix` and `suffix`.
@@ -276,6 +299,7 @@ class Engine:
             top_p=top_p,
             repetition_penalty=repetition_penalty,
             no_repeat_ngram=no_repeat_ngram,
+            stop=tuple(stop) if stop else (),
         )
         if use_cache:
             remembered = self.response_cache.get(key)
@@ -296,7 +320,7 @@ class Engine:
             prefix_caches, reused = reuse if reuse else (None, 0)
 
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
-            pieces: list[str] = []
+            watcher = StopWatcher(stop or ())
             count = 0
 
             for token_id in self.model.generate(
@@ -324,11 +348,13 @@ class Engine:
                 count += 1
                 piece = self.tokenizer.vocab.get(token_id)
                 if piece is not None:
-                    pieces.append(decoder.decode(piece))
+                    _, hit = watcher.feed(decoder.decode(piece))
+                    if hit:
+                        break
+            else:
+                watcher.feed(decoder.decode(b"", final=True))
 
-            pieces.append(decoder.decode(b"", final=True))
-
-        completion = "".join(pieces)
+        completion = watcher.text
         if use_cache:
             self.response_cache.put(key, completion)
         return completion, count
@@ -380,6 +406,29 @@ def render_messages(system: str | list | None, messages: list[dict]) -> str:
 
     parts.append("<|assistant|>")
     return "\n".join(parts)
+
+
+def _stop_sequences(body: dict) -> list[str]:
+    """Read stop sequences from either name, and bound what they can cost.
+
+    `stop_sequences` is what a Messages client sends and `stop` is what most
+    other APIs call it; accepting both costs one line and saves the caller
+    finding out which this is. Non-strings are dropped rather than refused,
+    because a client that sends a number here meant a string.
+
+    Bounded in count and in length: every stop sequence is searched for in the
+    text after every token, and a caller that sends two hundred of them is
+    paying for that on every step of every request.
+    """
+    raw = body.get("stop_sequences", body.get("stop", []))
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    kept = [item for item in raw if isinstance(item, str) and item]
+    # A long stop sequence also delays streaming, because that much text has to
+    # be held back until it is known not to be the start of one.
+    return [item[:64] for item in kept[:8]]
 
 
 def _flatten_content(content) -> str:
@@ -521,6 +570,7 @@ class Handler(BaseHTTPRequestHandler):
             "repetition_penalty": float(body.get("repetition_penalty", 1.1)),
             "min_p": body.get("min_p"),
             "no_repeat_ngram": max(0, min(int(body.get("no_repeat_ngram", 0)), 16)),
+            "stop": _stop_sequences(body),
         }
 
     def _handle_generate(self) -> None:
@@ -590,6 +640,7 @@ class Handler(BaseHTTPRequestHandler):
             max_tokens=max(1, min(int(body.get("max_tokens", 64)), 512)),
             temperature=float(body.get("temperature", 0.2)),
             no_repeat_ngram=max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
+            stop=_stop_sequences(body),
         )
         self._send_json(
             200,
