@@ -348,6 +348,44 @@ def command_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_export(args: argparse.Namespace) -> int:
+    """Write a checkpoint in a format that does not execute anything to load."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .export import export_model
+
+    model, payload = load_checkpoint(checkpoint)
+    if args.quantize:
+        from .quantize import quantize_model
+
+        measured = quantize_model(model)
+        print(f"quantized to int8 ({measured.compression:.2f}x smaller)")
+
+    destination = Path(args.out) if args.out else run / "model.cclm"
+    header = export_model(
+        model,
+        destination,
+        metadata={
+            "step": payload.get("step"),
+            "val_loss": payload.get("val_loss"),
+            "parameters": model.parameter_count(),
+        },
+    )
+
+    size = destination.stat().st_size
+    print(
+        f"wrote {destination} ({size / 1e6:.1f}MB)\n"
+        f"  {len(header['tensors'])} tensors, "
+        f"{humanise(model.parameter_count())} parameters\n"
+        f"  header is JSON; loading reads bytes and reshapes, and evaluates nothing"
+    )
+    return 0
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     """Measure a checkpoint, rather than reading samples and forming a view."""
     run = Path(args.run)
@@ -629,6 +667,16 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
     add_device(sampler)
     sampler.set_defaults(func=command_sample)
+
+    exporter = subparsers.add_parser(
+        "export", help="write a checkpoint that loads without unpickling"
+    )
+    exporter.add_argument("--run", required=True)
+    exporter.add_argument("--out", default=None, help="defaults to model.cclm in the run")
+    exporter.add_argument(
+        "--quantize", action="store_true", help="export int8 weights instead"
+    )
+    exporter.set_defaults(func=command_export)
 
     evaluator = subparsers.add_parser(
         "evaluate", help="measure held-out perplexity and throughput"

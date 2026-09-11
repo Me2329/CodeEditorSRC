@@ -372,6 +372,21 @@ would, and every one can be switched off from the Extensions panel.
 | 274 | Every shipped binding is checked against a real command | a dead shortcut fails the build |
 | 275 | Platform notation for display | `Ctrl+Shift+P` or `⌘⇧P` |
 
+## Checkpoint format
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 276 | A checkpoint format with nothing to execute | JSON header, raw bytes, no pickle |
+| 277 | Header readable with the standard library | verified, not asserted |
+| 278 | 64-byte tensor alignment | memory-map and slice without copying |
+| 279 | Bit-identical round trip | not close: the same |
+| 280 | bfloat16 carried despite numpy lacking it | through an unsigned view |
+| 281 | Header read without touching the weights | asking what a file is should not cost gigabytes |
+| 282 | Unknown dtypes refused | rather than silently widening the format |
+| 283 | Implausible header lengths refused | a corrupt length is not handed to read() |
+| 284 | Truncated files reported by tensor name | |
+| 285 | Int8 export | `export --quantize` |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

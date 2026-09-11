@@ -481,6 +481,35 @@ The boundaries that genuinely hold in this project are the sandbox and agent
 plan mode, and they protect your machine from code rather than filtering text.
 [MODEL_CARD.md](MODEL_CARD.md) sets all of this out properly.
 
+## A checkpoint that loads without unpickling
+
+```bash
+python -m codecraft_model export --run runs/big
+python -m codecraft_model export --run runs/big --quantize
+```
+
+`torch.save` uses pickle, and unpickling runs code. That is fine for a file you
+produced and wrong for one you downloaded, which is what a model checkpoint
+usually is. `weights_only=True` narrows the problem without changing the
+format's shape: it is still a pickle, and the guarantee is a denylist someone
+else maintains.
+
+This format has nothing in it to execute. Eight bytes of magic, an eight-byte
+length, a JSON header, then raw tensor bytes aligned to 64 so a reader can
+memory-map and slice without copying. Loading is a read and a reshape.
+
+The header is readable with the standard library alone:
+
+```python
+magic = file.read(8)
+(length,) = struct.unpack("<Q", file.read(8))
+header = json.loads(file.read(length))
+```
+
+Verified against the billion-token checkpoint: every weight is bit-identical
+and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
+that one also carries optimiser state.
+
 ## Measuring a checkpoint
 
 ```bash
