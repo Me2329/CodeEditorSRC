@@ -217,6 +217,45 @@ def write_dataset(
     return metadata
 
 
+def fim_transform(
+    tokens: list[int],
+    tokenizer: Tokenizer,
+    generator: np.random.Generator,
+    *,
+    probability: float = 0.5,
+) -> list[int]:
+    """Rewrite a document as prefix, suffix, middle, some of the time.
+
+    A causal model only ever learns to continue text, so left-to-right is all
+    it can do unless the training data teaches otherwise. This rearrangement is
+    the whole trick: put both sides of a hole in the context first, then the
+    text that fills it. The model is still only predicting the next token, but
+    the tokens it has seen now include what comes after the caret.
+
+    Only half of documents are transformed by default. A model trained purely on
+    the rearranged form gets worse at ordinary continuation, which is still the
+    common case, so both shapes have to be in the mix.
+    """
+    if len(tokens) < 8 or generator.random() >= probability:
+        return tokens
+
+    # Two cut points, sorted, so the middle is a genuine span rather than a
+    # suffix of the document.
+    first, second = sorted(generator.integers(0, len(tokens), size=2).tolist())
+    if first == second:
+        return tokens
+
+    prefix, middle, suffix = tokens[:first], tokens[first:second], tokens[second:]
+    return [
+        tokenizer.fim_prefix,
+        *prefix,
+        tokenizer.fim_suffix,
+        *suffix,
+        tokenizer.fim_middle,
+        *middle,
+    ]
+
+
 def stream_dataset(
     sources: Iterable[tuple[str, str]],
     tokenizer: Tokenizer,
@@ -224,6 +263,8 @@ def stream_dataset(
     *,
     validation_fraction: float = 0.05,
     max_tokens: int | None = None,
+    fim_probability: float = 0.0,
+    seed: int = 1337,
     progress: bool = False,
 ) -> dict:
     """Encode a stream of (path, text) straight to disk, one file at a time.
@@ -244,12 +285,24 @@ def stream_dataset(
     total_tokens = 0
     total_characters = 0
     files = 0
+    rearranged = 0
+    generator = np.random.default_rng(seed)
     started = time.time()
 
     with combined.open("wb") as handle:
         for path, text in sources:
             marked = f"{FILE_MARKER}{Path(path).name}\n{text}\n"
-            encoded = np.array(tokenizer.encode(marked), dtype=dtype)
+            ids = tokenizer.encode(marked)
+
+            if fim_probability > 0:
+                transformed = fim_transform(
+                    ids, tokenizer, generator, probability=fim_probability
+                )
+                if transformed is not ids:
+                    rearranged += 1
+                ids = transformed
+
+            encoded = np.array(ids, dtype=dtype)
             encoded.tofile(handle)
 
             files += 1
@@ -296,6 +349,8 @@ def stream_dataset(
         "characters": total_characters,
         "characters_per_token": round(total_characters / total_tokens, 3),
         "bytes_on_disk": total_tokens * dtype.itemsize,
+        "fim_probability": fim_probability,
+        "fim_documents": rearranged,
     }
     (directory / "meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata

@@ -152,6 +152,7 @@ def command_prepare(args: argparse.Namespace) -> int:
         run,
         validation_fraction=args.val_fraction,
         max_tokens=args.max_tokens,
+        fim_probability=args.fim,
         progress=True,
     )
     shutil.rmtree(workspace, ignore_errors=True)
@@ -163,6 +164,11 @@ def command_prepare(args: argparse.Namespace) -> int:
         f"{time.time() - started:.1f}s\n"
         f"  {metadata['bytes_on_disk'] / 1e9:.2f}GB on disk as tokens"
     )
+    if metadata["fim_documents"]:
+        print(
+            f"  {metadata['fim_documents']:,} documents rearranged for "
+            "fill-in-the-middle"
+        )
     return 0
 
 
@@ -341,6 +347,33 @@ def command_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_infill(args: argparse.Namespace) -> int:
+    """Complete at a caret, with the code on both sides of it."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .serve import Engine
+
+    engine = Engine(run, args.device)
+    prefix = Path(args.prefix_file).read_text(encoding="utf-8") if args.prefix_file else args.prefix
+    suffix = Path(args.suffix_file).read_text(encoding="utf-8") if args.suffix_file else args.suffix
+
+    text, count = engine.infill(
+        prefix,
+        suffix,
+        max_tokens=args.tokens,
+        temperature=args.temperature,
+    )
+
+    print(f"# {count} tokens on {describe_device(engine.device)}\n")
+    # The caret is marked so it is obvious what the model contributed.
+    print(f"{prefix}\033[1;32m{text}\033[0m{suffix}")
+    return 0
+
+
 def command_serve(args: argparse.Namespace) -> int:
     from .serve import serve
 
@@ -439,6 +472,16 @@ def main(argv: list[str] | None = None) -> int:
         help="take every nth file for the sample, so it spans the whole tree",
     )
     prepare.add_argument(
+        "--fim",
+        type=float,
+        default=0.0,
+        metavar="P",
+        help=(
+            "rewrite this fraction of documents as prefix/suffix/middle, which is "
+            "what teaches the model to complete at a caret rather than only at the end"
+        ),
+    )
+    prepare.add_argument(
         "--allow-dir",
         nargs="+",
         default=None,
@@ -501,6 +544,19 @@ def main(argv: list[str] | None = None) -> int:
     sampler.add_argument("--repetition-penalty", type=float, default=1.1)
     add_device(sampler)
     sampler.set_defaults(func=command_sample)
+
+    infill = subparsers.add_parser(
+        "infill", help="complete between a prefix and a suffix"
+    )
+    infill.add_argument("--run", required=True)
+    infill.add_argument("--prefix", default="def parse(text):\n    ")
+    infill.add_argument("--suffix", default="\n    return result\n")
+    infill.add_argument("--prefix-file", default=None, help="read the prefix from a file")
+    infill.add_argument("--suffix-file", default=None, help="read the suffix from a file")
+    infill.add_argument("--tokens", type=int, default=64)
+    infill.add_argument("--temperature", type=float, default=0.2)
+    add_device(infill)
+    infill.set_defaults(func=command_infill)
 
     server = subparsers.add_parser("serve", help="serve the model over HTTP")
     server.add_argument("--run", required=True)

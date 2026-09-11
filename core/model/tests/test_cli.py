@@ -7,6 +7,7 @@ import json
 import pytest
 
 from codecraft_model.cli import main
+from codecraft_model.tokenizer import Tokenizer
 
 
 @pytest.fixture
@@ -106,9 +107,9 @@ def test_the_model_is_sized_for_the_tokenizer_that_was_trained(
         ]
     )
     reported = capsys.readouterr().out
-    learned = len(json.loads((run / "tokenizer.json").read_text())["merges"])
+    tokenizer = Tokenizer.load(run / "tokenizer.json")
 
-    assert f"vocab {learned + 262}" in reported
+    assert f"vocab {tokenizer.vocab_size}" in reported
 
 
 def test_context_and_dropout_can_be_overridden(tmp_path, sources, capsys) -> None:

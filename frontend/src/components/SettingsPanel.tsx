@@ -130,6 +130,18 @@ export function SettingsPanel({ open, preferences, onChange, onReset, onClose }:
           </Section>
 
           <Section
+            title="Assistance"
+            note="Inline suggestions come from the local model. With no model running, nothing appears and nothing breaks."
+          >
+            <Toggle
+              label="Inline completion"
+              hint="Grey text ahead of the caret; Tab accepts"
+              checked={preferences.inlineCompletion}
+              onChange={(value) => onChange('inlineCompletion', value)}
+            />
+          </Section>
+
+          <Section
             title="Execution limits"
             note="Requested, not granted: the server clamps every value to its own ceiling."
           >

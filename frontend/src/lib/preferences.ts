@@ -163,6 +163,8 @@ export interface Preferences {
   fontLigatures: boolean;
   /** Re-run static analysis as you type. */
   liveAnalysis: boolean;
+  /** Grey-text suggestions ahead of the caret, from the local model. */
+  inlineCompletion: boolean;
   /** Show whitespace characters. */
   renderWhitespace: boolean;
   /** Hide every panel but the editor. */
@@ -183,6 +185,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   rulerColumn: 0,
   fontLigatures: true,
   liveAnalysis: true,
+  inlineCompletion: true,
   renderWhitespace: false,
   zenMode: false,
   wallSeconds: 10,
@@ -214,6 +217,7 @@ export function normalisePreferences(raw: unknown): Preferences {
     rulerColumn: number(source.rulerColumn, DEFAULT_PREFERENCES.rulerColumn, 0, 200),
     fontLigatures: flag(source.fontLigatures, DEFAULT_PREFERENCES.fontLigatures),
     liveAnalysis: flag(source.liveAnalysis, DEFAULT_PREFERENCES.liveAnalysis),
+    inlineCompletion: flag(source.inlineCompletion, DEFAULT_PREFERENCES.inlineCompletion),
     renderWhitespace: flag(source.renderWhitespace, DEFAULT_PREFERENCES.renderWhitespace),
     zenMode: flag(source.zenMode, DEFAULT_PREFERENCES.zenMode),
     wallSeconds: number(source.wallSeconds, DEFAULT_PREFERENCES.wallSeconds, 1, 120),

@@ -268,6 +268,32 @@ would, and every one can be switched off from the Extensions panel.
 | 200 | Extension commands merged into the command palette | one list rather than two that drift |
 | 201 | Format command bound to the language's formatter | hidden when no formatter is registered |
 
+## Fill in the middle
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 202 | Fill-in-the-middle tokens | appended past the merges, so existing corpora stay readable |
+| 203 | FIM training transform | `prepare --fim 0.5`, rearranging a fraction of documents |
+| 204 | Both shapes kept in the mix | a model trained only on FIM gets worse at ordinary continuation |
+| 205 | `encode_infill` with a context budget | trims from the outside in, keeping the text nearest the caret |
+| 206 | `infill` engine API | low temperature and a small budget, unlike chat |
+| 207 | Generation stops at a structural marker | otherwise it runs on past the hole |
+| 208 | `POST /infill` on the model server | |
+| 209 | `codecraft_model infill` command | marks the model's contribution in colour |
+| 210 | Gateway route to the local model | `POST /api/v1/assistant/infill` |
+| 211 | Model reached over HTTP, not imported | a deployment that only runs code carries no PyTorch |
+| 212 | Standard-library HTTP client | one POST does not justify a dependency |
+| 213 | Loopback calls bypass any ambient proxy | source code must not leave the machine |
+| 214 | Model absence is a described state, not an error | 503, and the editor shows nothing |
+| 215 | `GET /api/v1/assistant/model` | whether the model is running, and what it is |
+| 216 | Monaco inline completion provider | grey text ahead of the caret, Tab accepts |
+| 217 | Suppressed mid-identifier and in comments | where a suggestion competes rather than helps |
+| 218 | Duplicate suffix text trimmed | a model repeating the line below would duplicate on accept |
+| 219 | Suggestions capped at six lines | a one-line hole is not filled with twenty |
+| 220 | Bracket-only suggestions suppressed | the editor already inserted those |
+| 221 | Requests cancelled when the user types | a stale request outlives its relevance |
+| 222 | Inline completion is a preference | off means no requests at all |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

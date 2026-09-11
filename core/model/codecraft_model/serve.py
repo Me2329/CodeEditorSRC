@@ -156,6 +156,63 @@ class Engine:
             if tail:
                 yield tail, FLUSH_TOKEN
 
+    def infill(
+        self,
+        prefix: str,
+        suffix: str,
+        *,
+        max_tokens: int = 64,
+        temperature: float = 0.2,
+        top_k: int | None = 40,
+        top_p: float | None = 0.95,
+        repetition_penalty: float = 1.05,
+    ) -> tuple[str, int]:
+        """Write what goes between `prefix` and `suffix`.
+
+        This is what an editor needs at a caret: there is almost always code on
+        both sides, and a completion that ignores the right-hand side will
+        cheerfully redeclare a variable that already exists two lines down.
+
+        The defaults differ from chat on purpose. Temperature is low because an
+        inline suggestion should be the likely continuation rather than an
+        interesting one, and the budget is small because a suggestion nobody
+        asked for should not be a paragraph.
+        """
+        ids = self.tokenizer.encode_infill(
+            prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
+        )
+        tokens = torch.tensor([ids], dtype=torch.long, device=self.device)
+
+        with self.lock, torch.autocast(
+            device_type=self.device.type,
+            dtype=self.amp_dtype,
+            enabled=self.amp_dtype is not None,
+        ):
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            pieces: list[str] = []
+            count = 0
+
+            for token_id in self.model.generate(
+                tokens,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                # A model that has finished the middle says so; without these it
+                # would run on into whatever it thinks follows the suffix.
+                stop_tokens={self.end_token, self.tokenizer.fim_prefix,
+                             self.tokenizer.fim_suffix, self.tokenizer.fim_middle},
+            ):
+                count += 1
+                piece = self.tokenizer.vocab.get(token_id)
+                if piece is not None:
+                    pieces.append(decoder.decode(piece))
+
+            pieces.append(decoder.decode(b"", final=True))
+
+        return "".join(pieces), count
+
     def complete(self, prompt: str, **options) -> tuple[str, int]:
         """Non-streaming generation. Returns the text and the token count."""
         pieces: list[str] = []
@@ -313,6 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_messages()
             elif self.path.rstrip("/") == "/generate":
                 self._handle_generate()
+            elif self.path.rstrip("/") == "/infill":
+                self._handle_infill()
             else:
                 self._send_error(404, "not_found_error", f"no route for POST {self.path}")
         except (BrokenPipeError, ConnectionResetError):
@@ -373,6 +432,37 @@ class Handler(BaseHTTPRequestHandler):
             "done", {"tokens": count, "seconds": round(time.time() - started, 3)}
         )
         self._end_stream()
+
+    def _handle_infill(self) -> None:
+        """Complete at a caret, with the code on both sides of it."""
+        body = self._read_body()
+        if body is None:
+            return
+
+        prefix = body.get("prefix")
+        suffix = body.get("suffix", "")
+        if not isinstance(prefix, str) or not isinstance(suffix, str):
+            self._send_error(
+                400, "invalid_request_error", "'prefix' and 'suffix' must be strings"
+            )
+            return
+
+        started = time.time()
+        text, count = self.engine.infill(
+            prefix,
+            suffix,
+            max_tokens=max(1, min(int(body.get("max_tokens", 64)), 512)),
+            temperature=float(body.get("temperature", 0.2)),
+        )
+        self._send_json(
+            200,
+            {
+                "model": self.engine.name,
+                "completion": text,
+                "tokens": count,
+                "seconds": round(time.time() - started, 3),
+            },
+        )
 
     def _handle_messages(self) -> None:
         body = self._read_body()

@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, st
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 
-from .. import assistant
+from .. import assistant, modelclient
 from ..schemas import SourceFile
 
 logger = logging.getLogger("codecraft.assistant")
@@ -48,6 +48,19 @@ class CompletionRequest(BaseModel):
 
 class SymbolsRequest(BaseModel):
     workspace: WorkspaceContext
+
+
+class InfillRequest(BaseModel):
+    """A caret, with the code on both sides of it."""
+
+    prefix: str = ""
+    suffix: str = ""
+    # Small on purpose: an inline suggestion should be a line or two, not an
+    # essay the user has to read before deciding.
+    max_tokens: int = Field(default=64, ge=1, le=512)
+    # Low on purpose: a suggestion should be the likely continuation rather
+    # than an interesting one.
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
 
 
 @router.post("/api/v1/assistant/complete")
@@ -341,3 +354,46 @@ async def agent_socket(websocket: WebSocket) -> None:
                 task.cancel()
         if websocket.client_state is WebSocketState.CONNECTED:
             await websocket.close()
+
+
+@router.post("/api/v1/assistant/infill")
+async def infill(payload: InfillRequest) -> dict:
+    """Complete at the caret, using the code after it as well as before it.
+
+    Served by the local model rather than the index engine: this is the one
+    request that genuinely needs a language model, because it has to invent
+    text rather than look one up.
+    """
+    if not payload.prefix and not payload.suffix:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "one of prefix or suffix must be non-empty"
+        )
+
+    try:
+        result = await modelclient.infill(
+            payload.prefix,
+            payload.suffix,
+            max_tokens=payload.max_tokens,
+            temperature=payload.temperature,
+        )
+    except modelclient.ModelUnavailable as exc:
+        # 503 rather than 500: the editor treats this as "no suggestion" and
+        # carries on, which is the right behaviour when the model is simply not
+        # running.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+    return {
+        "completion": result.completion,
+        "tokens": result.tokens,
+        "model": result.model,
+        "seconds": result.seconds,
+    }
+
+
+@router.get("/api/v1/assistant/model")
+async def model_health() -> dict:
+    """Whether the local model is running, and what it is."""
+    try:
+        return {"available": True, **await modelclient.health()}
+    except modelclient.ModelUnavailable as exc:
+        return {"available": False, "reason": str(exc)}

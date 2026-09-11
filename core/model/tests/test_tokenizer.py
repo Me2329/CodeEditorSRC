@@ -8,6 +8,7 @@ from codecraft_model.tokenizer import (
     BYTE_OFFSET,
     N_SPECIAL,
     PRETOKEN_PATTERN,
+    TRAILING_SPECIALS,
     Tokenizer,
     _merge_pair,
 )
@@ -29,7 +30,7 @@ def tokenizer() -> Tokenizer:
 def test_untrained_tokenizer_still_covers_every_byte() -> None:
     """With no merges at all, the byte vocabulary alone must round trip."""
     plain = Tokenizer([])
-    assert plain.vocab_size == N_SPECIAL + 256
+    assert plain.vocab_size == N_SPECIAL + 256 + len(TRAILING_SPECIALS)
     text = "raw ☃ bytes\t\r\n"
     assert plain.decode(plain.encode(text)) == text
 
@@ -70,8 +71,10 @@ def test_more_merges_compress_further() -> None:
     assert len(large.encode(text)) <= len(small.encode(text))
 
 
-def test_vocab_size_accounts_for_specials_and_bytes(tokenizer: Tokenizer) -> None:
-    assert tokenizer.vocab_size == N_SPECIAL + 256 + len(tokenizer.merges)
+def test_vocab_size_accounts_for_specials_bytes_and_merges(tokenizer: Tokenizer) -> None:
+    assert tokenizer.vocab_size == (
+        N_SPECIAL + 256 + len(tokenizer.merges) + len(TRAILING_SPECIALS)
+    )
 
 
 def test_every_id_is_inside_the_vocabulary(tokenizer: Tokenizer) -> None:
@@ -159,3 +162,74 @@ def test_merge_pair_replaces_every_occurrence() -> None:
 def test_merge_pair_does_not_overlap() -> None:
     """Merging (1,1) in [1,1,1] must consume a pair, not reuse a symbol."""
     assert _merge_pair([1, 1, 1], (1, 1), 99) == [99, 1]
+
+
+# ------------------------------------------------------- fill in the middle
+
+
+def test_fim_markers_sit_past_the_merges(tokenizer: Tokenizer) -> None:
+    """Appended rather than inserted, so existing token streams stay valid.
+
+    Putting them beside the other specials would shift BYTE_OFFSET and renumber
+    every byte and merge, invalidating a corpus that took half an hour to build.
+    """
+    assert tokenizer.fim_prefix == tokenizer.first_trailing_id
+    assert tokenizer.fim_middle > max(tokenizer.vocab)
+    assert tokenizer.fim_middle < tokenizer.vocab_size
+
+
+def test_the_byte_offset_is_unchanged_by_the_new_tokens() -> None:
+    """The property that keeps already-encoded corpora readable."""
+    assert BYTE_OFFSET == N_SPECIAL == 6
+
+
+def test_an_infill_prompt_has_all_three_sections(tokenizer: Tokenizer) -> None:
+    ids = tokenizer.encode_infill("def f():\n    ", "\n    return result\n")
+
+    assert ids[0] == tokenizer.fim_prefix
+    assert tokenizer.fim_suffix in ids
+    # The middle marker comes last: everything after it is what the model writes.
+    assert ids[-1] == tokenizer.fim_middle
+
+
+def test_infill_keeps_both_halves_in_order(tokenizer: Tokenizer) -> None:
+    ids = tokenizer.encode_infill("BEFORE", "AFTER")
+    separator = ids.index(tokenizer.fim_suffix)
+
+    assert tokenizer.decode(ids[:separator]) == "BEFORE"
+    assert tokenizer.decode(ids[separator:]) == "AFTER"
+
+
+def test_an_empty_suffix_still_produces_the_three_part_shape(tokenizer: Tokenizer) -> None:
+    """So the model never has to infer its section from a missing marker."""
+    ids = tokenizer.encode_infill("def f(", "")
+
+    assert ids[0] == tokenizer.fim_prefix
+    assert ids[-1] == tokenizer.fim_middle
+    assert tokenizer.fim_suffix in ids
+
+
+def test_infill_trims_to_the_context_budget(tokenizer: Tokenizer) -> None:
+    """The text nearest the caret is what the completion has to agree with."""
+    ids = tokenizer.encode_infill("x" * 4000, "y" * 4000, max_context=64)
+    assert len(ids) <= 64
+
+
+def test_trimming_keeps_the_text_closest_to_the_caret(tokenizer: Tokenizer) -> None:
+    prefix = "START" + ("filler " * 400) + "NEAREST"
+    ids = tokenizer.encode_infill(prefix, "", max_context=48)
+    kept = tokenizer.decode(ids)
+
+    assert "NEAREST" in kept
+    assert "START" not in kept
+
+
+def test_the_markers_decode_to_nothing(tokenizer: Tokenizer) -> None:
+    """They are structure, not text, so they must not appear in the output."""
+    ids = tokenizer.encode_infill("a", "b")
+    assert tokenizer.decode(ids) == "ab"
+
+
+def test_an_unknown_special_name_is_refused(tokenizer: Tokenizer) -> None:
+    with pytest.raises(KeyError):
+        tokenizer.special_id("<|not_a_token|>")

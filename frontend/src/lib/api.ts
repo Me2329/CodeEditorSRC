@@ -85,6 +85,28 @@ export const api = {
       body: JSON.stringify({ workspace, prefix, limit }),
     }),
 
+  /**
+   * Text for the caret, given the code on both sides of it.
+   *
+   * Served by the local model rather than the index: this is the one request
+   * that has to invent text rather than look something up.
+   */
+  infill: (prefix: string, suffix: string, maxTokens = 64, signal?: AbortSignal) =>
+    request<{ completion: string; tokens: number; model: string; seconds: number }>(
+      '/api/v1/assistant/infill',
+      {
+        method: 'POST',
+        body: JSON.stringify({ prefix, suffix, max_tokens: maxTokens }),
+        signal,
+      },
+    ),
+
+  /** Whether the local model is running, and what it is. */
+  modelStatus: () =>
+    request<{ available: boolean; model?: string; parameters?: number; reason?: string }>(
+      '/api/v1/assistant/model',
+    ),
+
   /** Every declaration in the workspace, for outline and go-to-symbol. */
   symbols: (workspace: WorkspaceContext) =>
     request<{ items: WorkspaceSymbol[] }>('/api/v1/assistant/symbols', {

@@ -76,6 +76,21 @@ class Settings:
         )
     )
 
+    # --- local model -------------------------------------------------------
+    # CodeCraft LM runs as its own process. The gateway reaches it over HTTP so
+    # a deployment that only runs code never has to carry PyTorch.
+    model_url: str = field(
+        default_factory=lambda: os.getenv("CODECRAFT_MODEL_URL", "http://127.0.0.1:8940")
+    )
+    # An inline completion the user did not ask for is worth very little if it
+    # arrives after they have typed the next line, so the budget is tight.
+    model_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("CODECRAFT_MODEL_TIMEOUT", "8"))
+    )
+    model_probe_seconds: float = field(
+        default_factory=lambda: float(os.getenv("CODECRAFT_MODEL_PROBE_TIMEOUT", "1.5"))
+    )
+
     # --- limits ------------------------------------------------------------
     default_wall_seconds: int = field(default_factory=lambda: _env_int("CODECRAFT_WALL_SECONDS", 10))
     default_cpu_seconds: int = field(default_factory=lambda: _env_int("CODECRAFT_CPU_SECONDS", 5))

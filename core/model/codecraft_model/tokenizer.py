@@ -55,6 +55,23 @@ SPECIAL_TOKENS: dict[str, int] = {
 N_SPECIAL = len(SPECIAL_TOKENS)
 BYTE_OFFSET = N_SPECIAL  # the 256 byte tokens follow the specials
 
+# Fill-in-the-middle markers, which is what lets the model complete code with
+# text on both sides of the caret rather than only before it.
+#
+# These live at the END of the vocabulary, after the merges, rather than
+# alongside the specials at the start. Inserting them at the start would shift
+# BYTE_OFFSET and renumber every byte and merge, silently invalidating every
+# tokenizer already trained and every token stream already encoded. Appending
+# costs nothing and keeps a billion-token corpus readable.
+TRAILING_SPECIALS: tuple[str, ...] = (
+    "<|fim_prefix|>",
+    "<|fim_suffix|>",
+    "<|fim_middle|>",
+    # Emitted when a suffix is empty, so the three-part shape is always present
+    # and the model never has to infer which section it is in from absence.
+    "<|fim_pad|>",
+)
+
 
 class Tokenizer:
     """A trained byte-level BPE tokenizer."""
@@ -86,10 +103,65 @@ class Tokenizer:
 
     @property
     def vocab_size(self) -> int:
+        return N_SPECIAL + 256 + len(self.merges) + len(TRAILING_SPECIALS)
+
+    @property
+    def first_trailing_id(self) -> int:
+        """Where the appended specials start, just past the last merge."""
         return N_SPECIAL + 256 + len(self.merges)
 
     def special_id(self, name: str) -> int:
-        return self.specials[name]
+        if name in self.specials:
+            return self.specials[name]
+        if name in TRAILING_SPECIALS:
+            return self.first_trailing_id + TRAILING_SPECIALS.index(name)
+        raise KeyError(f"unknown special token {name!r}")
+
+    @property
+    def fim_prefix(self) -> int:
+        return self.special_id("<|fim_prefix|>")
+
+    @property
+    def fim_suffix(self) -> int:
+        return self.special_id("<|fim_suffix|>")
+
+    @property
+    def fim_middle(self) -> int:
+        return self.special_id("<|fim_middle|>")
+
+    # ------------------------------------------------------ fill in the middle
+
+    def encode_infill(
+        self, prefix: str, suffix: str, *, max_context: int | None = None
+    ) -> list[int]:
+        """Build a prompt asking the model to write what goes between two halves.
+
+        The prefix-suffix-middle ordering is what makes this work with a causal
+        model: both sides of the hole are in the context before the model is
+        asked to produce anything, so it can condition on the code that follows
+        the caret as well as the code before it.
+
+        `max_context` trims from the outside in. The text nearest the caret is
+        what the completion has to agree with, so the far ends are what goes.
+        """
+        prefix_ids = self.encode(prefix)
+        suffix_ids = self.encode(suffix)
+
+        if max_context is not None:
+            # Three marker tokens, plus room to actually answer.
+            budget = max(0, max_context - 3)
+            half = budget // 2
+            if len(prefix_ids) + len(suffix_ids) > budget:
+                prefix_ids = prefix_ids[-max(half, budget - len(suffix_ids)) :]
+                suffix_ids = suffix_ids[: max(0, budget - len(prefix_ids))]
+
+        return [
+            self.fim_prefix,
+            *prefix_ids,
+            self.fim_suffix,
+            *suffix_ids,
+            self.fim_middle,
+        ]
 
     # --------------------------------------------------------------- training
 
@@ -253,9 +325,11 @@ class Tokenizer:
 
     def decode(self, tokens: list[int]) -> str:
         pieces: list[bytes] = []
+        first_trailing = self.first_trailing_id
         for token in tokens:
-            # Special tokens carry no text of their own.
-            if token < BYTE_OFFSET:
+            # Special tokens carry no text of their own, at either end of the
+            # vocabulary.
+            if token < BYTE_OFFSET or token >= first_trailing:
                 continue
             piece = self.vocab.get(token)
             if piece is not None:

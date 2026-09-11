@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
+import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import { ApiError, api } from '../lib/api';
 import type { Command } from '../lib/commands';
 import {
@@ -100,6 +101,8 @@ export function CodeCraftIDE() {
   const [stdin, setStdin] = useState('');
   const [argsText, setArgsText] = useState('');
   const [statusNote, setStatusNote] = useState('');
+  // Monaco is assigned to a ref on mount, which does not re-render. This does.
+  const [monacoReady, setMonacoReady] = useState(false);
 
   const importRef = useRef<HTMLInputElement>(null);
   // Read inside a stable callback, so applying an agent edit does not need to
@@ -488,10 +491,57 @@ export function CodeCraftIDE() {
   );
 
 
+  /**
+   * Inline completion, as grey text ahead of the caret.
+   *
+   * Registered once per Monaco instance rather than per render: the provider
+   * reads current state through refs, so re-registering on every keystroke
+   * would leak providers for no benefit.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !preferences.inlineCompletion) return;
+
+    const provider = monaco.languages.registerInlineCompletionsProvider('*', {
+      provideInlineCompletions: async (model, position, _context, token) => {
+        const offset = model.getOffsetAt(position);
+        const { prefix, suffix } = contextAround(model.getValue(), offset);
+
+        // Most keystrokes are not a moment worth interrupting.
+        if (!shouldRequest(prefix, suffix)) return { items: [] };
+
+        const controller = new AbortController();
+        // Monaco cancels as soon as the user types again; without this the
+        // request outlives its own relevance and burns a model slot.
+        token.onCancellationRequested(() => controller.abort());
+
+        try {
+          const answer = await api.infill(prefix, suffix, 64, controller.signal);
+          const completion = tidy(answer.completion, suffix);
+          if (!worthShowing(completion, suffix)) return { items: [] };
+
+          return {
+            items: [{ insertText: completion, range: new monaco.Range(
+              position.lineNumber, position.column, position.lineNumber, position.column,
+            ) }],
+          };
+        } catch {
+          // No model running, or the request was cancelled. Either way the
+          // editor shows nothing, which is the correct quiet failure.
+          return { items: [] };
+        }
+      },
+      freeInlineCompletions: () => {},
+    });
+
+    return () => provider.dispose();
+  }, [monacoReady, preferences.inlineCompletion]);
+
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor;
       monacoRef.current = monaco;
+      setMonacoReady(true);
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => handleRun());
 
       // The assistant answers about where the caret is and what is selected,

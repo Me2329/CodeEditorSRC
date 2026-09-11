@@ -15,6 +15,7 @@ from codecraft_model.data import (
     build_corpus,
     collect_sources,
     encode_corpus,
+    fim_transform,
     iter_sources,
     sample_corpus,
     stream_dataset,
@@ -187,9 +188,9 @@ def test_a_stride_spreads_the_sample_across_the_tree(tree) -> None:
     assert len(every_other) < len(every)
 
 
-def test_streaming_a_dataset_writes_the_same_files_as_the_batch_path(tree) -> None:
+def test_streaming_a_dataset_writes_the_same_files_as_the_batch_path(tree, tmp_path_factory) -> None:
     tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
-    directory = tree / "run"
+    directory = tmp_path_factory.mktemp('run')
 
     metadata = stream_dataset(iter_sources([tree]), tokenizer, directory)
 
@@ -199,18 +200,18 @@ def test_streaming_a_dataset_writes_the_same_files_as_the_batch_path(tree) -> No
     assert metadata["characters_per_token"] > 1
 
 
-def test_streaming_leaves_no_intermediate_file_behind(tree) -> None:
+def test_streaming_leaves_no_intermediate_file_behind(tree, tmp_path_factory) -> None:
     """The combined stream exists only until the split point is known."""
     tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
-    directory = tree / "run"
+    directory = tmp_path_factory.mktemp('run')
     stream_dataset(iter_sources([tree]), tokenizer, directory)
 
     assert not (directory / "tokens.bin").exists()
 
 
-def test_streamed_tokens_are_readable_as_a_dataset(tree) -> None:
+def test_streamed_tokens_are_readable_as_a_dataset(tree, tmp_path_factory) -> None:
     tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
-    directory = tree / "run"
+    directory = tmp_path_factory.mktemp('run')
     metadata = stream_dataset(iter_sources([tree]), tokenizer, directory)
 
     dataset = TokenDataset(directory / "train.bin", metadata["dtype"])
@@ -224,21 +225,91 @@ def test_streaming_an_empty_tree_says_so(tmp_path) -> None:
         stream_dataset(iter_sources([tmp_path / "nothing"]), tokenizer, tmp_path / "run")
 
 
-def test_a_token_budget_stops_the_stream(tree) -> None:
-    """So a corpus can target a size rather than consume everything offered."""
+def test_a_token_budget_stops_the_stream(tree, tmp_path_factory) -> None:
+    """So a corpus can target a size rather than consume everything offered.
+
+    Both runs write outside the scanned tree. Writing into it would make the
+    second scan read the first run's metadata as a source file, which is a real
+    way to poison a corpus as well as a test.
+    """
     tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
 
-    unbounded = stream_dataset(iter_sources([tree]), tokenizer, tree / "all")
+    unbounded = stream_dataset(
+        iter_sources([tree]), tokenizer, tmp_path_factory.mktemp('all')
+    )
     bounded = stream_dataset(
-        iter_sources([tree]), tokenizer, tree / "capped", max_tokens=50
+        iter_sources([tree]), tokenizer, tmp_path_factory.mktemp('capped'), max_tokens=50
     )
 
     assert bounded["total_tokens"] < unbounded["total_tokens"]
 
 
-def test_the_metadata_records_what_it_costs_on_disk(tree) -> None:
+def test_the_metadata_records_what_it_costs_on_disk(tree, tmp_path_factory) -> None:
     tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
-    metadata = stream_dataset(iter_sources([tree]), tokenizer, tree / "run")
+    metadata = stream_dataset(
+        iter_sources([tree]), tokenizer, tmp_path_factory.mktemp('run')
+    )
 
     # uint16 for any vocabulary that fits in 16 bits.
     assert metadata["bytes_on_disk"] == metadata["total_tokens"] * 2
+
+
+# ------------------------------------------------------- fill in the middle
+
+
+def test_fim_rearranges_a_document_into_three_parts() -> None:
+    """Prefix and suffix before the middle: both sides of the hole first."""
+    tokenizer = Tokenizer.train("def parse(text): return text\n" * 50, 300)
+    tokens = tokenizer.encode("def parse(text): return text.strip()\n")
+
+    rearranged = fim_transform(
+        tokens, tokenizer, np.random.default_rng(0), probability=1.0
+    )
+
+    assert rearranged[0] == tokenizer.fim_prefix
+    assert tokenizer.fim_suffix in rearranged
+    assert tokenizer.fim_middle in rearranged
+    # Nothing is lost: the same tokens, in a different order, plus markers.
+    assert sorted(t for t in rearranged if t < tokenizer.first_trailing_id) == sorted(tokens)
+
+
+def test_fim_leaves_most_documents_alone_at_the_default_rate() -> None:
+    """A model trained only on the rearranged form gets worse at continuation."""
+    tokenizer = Tokenizer.train("abc def ghi " * 200, 300)
+    # Long enough to be a candidate: very short documents are always skipped.
+    tokens = tokenizer.encode("abc def ghi " * 12)
+    assert len(tokens) >= 8
+    generator = np.random.default_rng(0)
+
+    outcomes = [
+        fim_transform(tokens, tokenizer, generator, probability=0.5) is not tokens
+        for _ in range(200)
+    ]
+    assert 60 < sum(outcomes) < 140
+
+
+def test_fim_skips_documents_too_short_to_cut() -> None:
+    tokenizer = Tokenizer.train("abc " * 100, 300)
+    short = tokenizer.encode("ab")
+    assert fim_transform(short, tokenizer, np.random.default_rng(0), probability=1.0) is short
+
+
+def test_a_corpus_can_be_built_with_fim(tree, tmp_path_factory) -> None:
+    tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
+    metadata = stream_dataset(
+        iter_sources([tree]),
+        tokenizer,
+        tmp_path_factory.mktemp('fim'),
+        fim_probability=1.0,
+    )
+
+    assert metadata["fim_probability"] == 1.0
+    assert metadata["fim_documents"] == metadata["files"]
+
+
+def test_fim_is_off_by_default(tree, tmp_path_factory) -> None:
+    tokenizer = Tokenizer.train(build_corpus(collect_sources([tree])), 320)
+    metadata = stream_dataset(
+        iter_sources([tree]), tokenizer, tmp_path_factory.mktemp('plain')
+    )
+    assert metadata["fim_documents"] == 0

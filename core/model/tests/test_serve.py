@@ -321,3 +321,62 @@ def test_a_client_that_disconnects_mid_stream_does_not_break_the_server(
 
     # The next request proves the server and the generation lock both survived.
     assert get(f"{base_url}/health")["status"] == "ok"
+
+
+# ------------------------------------------------------- fill in the middle
+
+
+def test_infill_writes_between_the_two_halves(run_directory) -> None:
+    """The budget is respected and the result is text.
+
+    The count is not asserted to be non-zero: these weights are random, and a
+    greedy step that lands on a stop marker immediately is a property of an
+    untrained model rather than of this code.
+    """
+    engine = Engine(run_directory)
+    text, count = engine.infill("def parse(text):\n    ", "\n    return result\n",
+                                max_tokens=16, temperature=0.0)
+
+    assert isinstance(text, str)
+    assert 0 <= count <= 16
+
+
+def test_infill_stops_at_a_structural_marker(run_directory) -> None:
+    """Without this the model runs on past the hole it was asked to fill."""
+    engine = Engine(run_directory)
+    text, _ = engine.infill("a", "b", max_tokens=64, temperature=0.0)
+
+    for marker in ("<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>"):
+        assert marker not in text
+
+
+def test_infill_with_an_empty_suffix_still_works(run_directory) -> None:
+    """The caret at the end of a file is the ordinary completion case."""
+    engine = Engine(run_directory)
+    text, _ = engine.infill("def parse(", "", max_tokens=8, temperature=0.0)
+    assert isinstance(text, str)
+
+
+def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
+    engine = Engine(run_directory)
+    text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)
+    assert isinstance(text, str)
+
+
+def test_the_infill_route_completes(base_url: str) -> None:
+    body = post(f"{base_url}/infill", {"prefix": "def f(", "suffix": "):\n    pass\n",
+                                       "max_tokens": 12})
+    assert body["tokens"] <= 12
+    assert isinstance(body["completion"], str)
+    assert body["model"].startswith("codecraft-")
+
+
+def test_the_infill_route_defaults_the_suffix_to_empty(base_url: str) -> None:
+    body = post(f"{base_url}/infill", {"prefix": "def f(", "max_tokens": 8})
+    assert isinstance(body["completion"], str)
+
+
+def test_the_infill_route_rejects_a_missing_prefix(base_url: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        post(f"{base_url}/infill", {"suffix": "x"})
+    assert raised.value.code == 400
