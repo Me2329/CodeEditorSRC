@@ -441,6 +441,33 @@ def test_the_caches_are_reported(run_directory) -> None:
     assert described["cache"]["responses"] == 1
 
 
+def test_an_adapter_is_merged_before_serving(run_directory, tmp_path) -> None:
+    """A fine-tuned adapter has to be servable, or training one is a hobby."""
+    from codecraft_model.lora import LoRAConfig, apply_lora, save_adapter
+    from codecraft_model.train import load_checkpoint
+
+    model, _ = load_checkpoint(run_directory / "model.pt")
+    config = LoRAConfig(rank=4)
+    apply_lora(model, config)
+    adapter = tmp_path / "adapter.pt"
+    save_adapter(adapter, model, config)
+
+    engine = Engine(run_directory, adapter=adapter)
+
+    assert engine.describe()["adapter"]["rank"] == 4
+    # Merged, so nothing downstream needs to know an adapter was ever involved.
+    assert not any("lora" in name for name in engine.model.state_dict())
+
+
+def test_an_adapter_that_is_not_there_says_so(run_directory, tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="no adapter"):
+        Engine(run_directory, adapter=tmp_path / "missing.pt")
+
+
+def test_serving_without_an_adapter_reports_none(run_directory) -> None:
+    assert Engine(run_directory).describe()["adapter"] is None
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

@@ -337,10 +337,23 @@ def command_sample(args: argparse.Namespace) -> int:
     tokenizer = Tokenizer.load(run / "tokenizer.json")
     model, payload = load_checkpoint(checkpoint, device)
 
+    adapter_note = ""
+    if getattr(args, "adapter", None):
+        from .lora import load_adapter, merge_lora
+
+        adapter_path = Path(args.adapter)
+        if not adapter_path.exists():
+            print(f"no adapter at {adapter_path}", file=sys.stderr)
+            return 1
+        lora_config = load_adapter(adapter_path, model)
+        merge_lora(model)
+        model.to(device)
+        adapter_note = f", adapter rank {lora_config.rank}"
+
     print(
         f"# {humanise(model.parameter_count())} parameters, "
         f"step {payload['step']}, val loss {payload['val_loss']:.3f}, "
-        f"on {describe_device(device)}\n"
+        f"on {describe_device(device)}{adapter_note}\n"
     )
 
     tokens = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long, device=device)
@@ -405,13 +418,31 @@ def command_finetune(args: argparse.Namespace) -> int:
         print("every example was longer than the model's context", file=sys.stderr)
         return 1
 
+    lora_config = None
+    if args.lora:
+        from .lora import LoRAConfig, apply_lora, describe as describe_lora
+
+        lora_config = LoRAConfig(
+            rank=args.lora,
+            alpha=args.lora_alpha if args.lora_alpha is not None else args.lora * 2,
+        )
+        apply_lora(model, lora_config)
+        measured = describe_lora(model)
+        print(
+            f"  adapter rank {lora_config.rank} on {measured['adapters']} projections: "
+            f"{humanise(measured['trainable'])} trainable of "
+            f"{humanise(measured['total'])} ({measured['fraction'] * 100:.1f}%)"
+        )
+
     # A much lower rate than pretraining: fine-tuning is meant to adjust a model
-    # that already works, and a large step undoes what it learned.
+    # that already works, and a large step undoes what it learned. An adapter
+    # takes a larger rate: it starts at zero and has far fewer numbers to move.
+    learning_rate = args.lr * 10 if args.lora and args.lr == 2e-5 else args.lr
     config = TrainConfig(
         steps=args.steps,
         batch_size=args.batch,
-        learning_rate=args.lr,
-        min_learning_rate=args.lr / 10,
+        learning_rate=learning_rate,
+        min_learning_rate=learning_rate / 10,
         warmup_steps=min(args.warmup, args.steps // 4),
     )
     optimizer = build_optimizer(model, config)
@@ -420,7 +451,7 @@ def command_finetune(args: argparse.Namespace) -> int:
 
     print(
         f"fine-tuning {humanise(model.parameter_count())} parameters for "
-        f"{args.steps} steps at lr {args.lr:g} on {describe_device(device)}"
+        f"{args.steps} steps at lr {config.learning_rate:g} on {describe_device(device)}"
     )
 
     for step in range(args.steps):
@@ -440,10 +471,36 @@ def command_finetune(args: argparse.Namespace) -> int:
         optimizer.step()
 
         if step % max(1, args.steps // 10) == 0 or step == args.steps - 1:
-            print(f"  step {step:>4}/{args.steps}  loss {float(loss):6.3f}  lr {rate:.2e}")
+            print(f"  step {step:>4}/{args.steps}  loss {loss.item():6.3f}  lr {rate:.2e}")
+
+    if lora_config is not None:
+        from .lora import merge_lora, save_adapter
+
+        adapter_path = run / "adapter.pt"
+        size = save_adapter(
+            adapter_path,
+            model,
+            lora_config,
+            metadata={
+                "base_step": payload.get("step"),
+                "examples": len(dataset),
+                "steps": args.steps,
+                "loss": loss.item(),
+            },
+        )
+        print(f"\nadapter written to {adapter_path} ({size / 1000:.0f}KB)")
+
+        if not args.merge:
+            print("  the base checkpoint is untouched; --merge also writes a whole one")
+            return 0
+
+        # Folding it in produces an ordinary checkpoint, servable by code that
+        # knows nothing about adapters.
+        merge_lora(model)
+        print("  merged into the weights")
 
     destination = run / "instruct.pt"
-    save_checkpoint(destination, model, optimizer, payload.get("step", 0), float(loss), config)
+    save_checkpoint(destination, model, optimizer, payload.get("step", 0), loss.item(), config)
     print(f"\nwritten to {destination}")
     return 0
 
@@ -594,6 +651,7 @@ def command_serve(args: argparse.Namespace) -> int:
         port=args.port,
         device=args.device,
         quantize=args.quantize,
+        adapter=Path(args.adapter) if args.adapter else None,
     )
 
 
@@ -761,6 +819,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sampler = subparsers.add_parser("sample", help="generate from a checkpoint")
     sampler.add_argument("--run", required=True)
+    sampler.add_argument(
+        "--adapter",
+        default=None,
+        help="a low-rank adapter to apply to the checkpoint before sampling",
+    )
     sampler.add_argument("--prompt", default="def ")
     sampler.add_argument("--tokens", type=int, default=200)
     sampler.add_argument("--temperature", type=float, default=0.8)
@@ -791,6 +854,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     tuner.add_argument("--warmup", type=int, default=20)
     tuner.add_argument("--seed", type=int, default=1337)
+    tuner.add_argument(
+        "--lora",
+        type=int,
+        default=0,
+        metavar="RANK",
+        help=(
+            "train a low-rank adapter of this rank instead of the whole model: "
+            "a fraction of the parameters, a file of a few hundred kilobytes, "
+            "and the base checkpoint left untouched"
+        ),
+    )
+    tuner.add_argument(
+        "--lora-alpha",
+        type=float,
+        default=None,
+        help="adapter scaling; defaults to twice the rank",
+    )
+    tuner.add_argument(
+        "--merge",
+        action="store_true",
+        help="fold the adapter into the weights and write a whole checkpoint too",
+    )
     add_device(tuner)
     tuner.set_defaults(func=command_finetune)
 
@@ -841,6 +926,11 @@ def main(argv: list[str] | None = None) -> int:
         "--quantize",
         action="store_true",
         help="int8 weights: roughly 2.3x smaller overall, for a model that would not otherwise fit",
+    )
+    server.add_argument(
+        "--adapter",
+        default=None,
+        help="a low-rank adapter to merge into the checkpoint before serving",
     )
     add_device(server)
     server.set_defaults(func=command_serve)

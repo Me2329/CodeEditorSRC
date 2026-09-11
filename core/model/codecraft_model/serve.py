@@ -55,7 +55,14 @@ FLUSH_TOKEN = -1
 class Engine:
     """A loaded checkpoint, ready to answer requests."""
 
-    def __init__(self, run: Path, device: str | None = None, *, quantize: bool = False) -> None:
+    def __init__(
+        self,
+        run: Path,
+        device: str | None = None,
+        *,
+        quantize: bool = False,
+        adapter: Path | None = None,
+    ) -> None:
         checkpoint = run / "model.pt"
         tokenizer_path = run / "tokenizer.json"
         for path in (checkpoint, tokenizer_path):
@@ -76,6 +83,21 @@ class Engine:
         self.run = run
         self.tokenizer = Tokenizer.load(tokenizer_path)
         self.model, self.payload = load_checkpoint(checkpoint, self.device)
+
+        self.adapter = None
+        if adapter is not None:
+            from .lora import load_adapter, merge_lora
+
+            if not adapter.exists():
+                raise FileNotFoundError(f"no adapter at {adapter}")
+            lora_config = load_adapter(adapter, self.model)
+            # Merged rather than served through the adapter modules. The result
+            # is numerically identical and every request afterwards runs through
+            # ordinary linear layers, so serving costs nothing for having been
+            # fine-tuned this way.
+            merge_lora(self.model)
+            self.model.to(self.device)
+            self.adapter = {"path": str(adapter), "rank": lora_config.rank}
 
         self.quantization = None
         if quantize:
@@ -116,6 +138,7 @@ class Engine:
             "d_model": config.d_model,
             "trained_steps": self.payload.get("step"),
             "val_loss": self.payload.get("val_loss"),
+            "adapter": self.adapter,
             "quantized": self.quantization is not None,
             "weight_bytes": (
                 self.quantization.quantized_bytes if self.quantization else None
@@ -676,13 +699,14 @@ def build_server(
     device: str | None = None,
     *,
     quantize: bool = False,
+    adapter: Path | None = None,
 ) -> ModelServer:
     """Load the checkpoint and bind the socket, without serving yet.
 
     Split out from `serve` so tests can bind port 0 and drive the server on a
     thread of their own.
     """
-    return ModelServer((host, port), Engine(run, device, quantize=quantize))
+    return ModelServer((host, port), Engine(run, device, quantize=quantize, adapter=adapter))
 
 
 def serve(
@@ -692,9 +716,10 @@ def serve(
     port: int = 8940,
     device: str | None = None,
     quantize: bool = False,
+    adapter: Path | None = None,
 ) -> int:
     try:
-        server = build_server(run, host, port, device, quantize=quantize)
+        server = build_server(run, host, port, device, quantize=quantize, adapter=adapter)
     except FileNotFoundError as error:
         print(f"error: {error}")
         return 1
@@ -708,6 +733,11 @@ def serve(
         + (
             f", int8 weights ({server.engine.quantization.compression:.1f}x smaller)"
             if server.engine.quantization
+            else ""
+        )
+        + (
+            f", adapter rank {server.engine.adapter['rank']} merged in"
+            if server.engine.adapter
             else ""
         )
         + "\n"

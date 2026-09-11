@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import { zipFiles } from '../lib/zip';
 import {
   matching as matchingSnippets,
   reindent,
@@ -571,6 +572,28 @@ export function CodeCraftIDE() {
     // Revoking immediately can cancel the download in some browsers.
     window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     notify('Workspace exported.');
+  }, [files, language, notify]);
+
+  /**
+   * The same workspace as a zip.
+   *
+   * The JSON export exists to come back into this editor; this one exists to
+   * leave it. A zip is what every operating system already opens, what a
+   * colleague can read without being told what this is, and what a build system
+   * can consume. Written here rather than by a library: an archive of stored
+   * entries is three record types and a checksum.
+   */
+  const handleExportZip = useCallback(() => {
+    const archive = zipFiles(
+      files.map((file) => ({ name: file.name, content: file.content })),
+    );
+    const url = URL.createObjectURL(new Blob([archive], { type: 'application/zip' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `codecraft-${language}-workspace.zip`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    notify(`Exported ${files.length} ${files.length === 1 ? 'file' : 'files'} as a zip.`);
   }, [files, language, notify]);
 
   const handleImportFile = useCallback(
@@ -1270,6 +1293,13 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'workspace.exportZip',
+        title: 'Download the workspace as a zip',
+        category: 'Workspace',
+        when: () => files.length > 0,
+        run: handleExportZip,
+      },
+      {
         id: 'navigate.back',
         title: 'Go back',
         category: 'Navigate',
@@ -1344,6 +1374,7 @@ export function CodeCraftIDE() {
       preferences,
       updatePreference,
       handleExport,
+      handleExportZip,
       files,
       notify,
       extensionCommands,

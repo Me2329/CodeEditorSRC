@@ -500,6 +500,34 @@ history lives in the browser alongside the workspace.
 | 350 | Navigating does not record itself | or the place you came from is buried by the one you went to |
 | 351 | Deleting a file drops its places | and the current position follows what it was pointing at |
 
+## Low-rank adapters
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 352 | `finetune --lora 8` trains an adapter instead of the model | 1.1% of the parameters on the demo checkpoint |
+| 353 | The adapter file is a few tens of kilobytes | 63KB against a 15.8MB checkpoint |
+| 354 | The base checkpoint is untouched | so several adapters can share one model |
+| 355 | An untrained adapter is exactly the base model | B starts at zero, so training begins with no discontinuity |
+| 356 | Freezing happens inside apply, not in the caller | an adapter over an unfrozen model is full fine-tuning with extra steps |
+| 357 | `--merge` folds it into the weights | producing an ordinary checkpoint |
+| 358 | Merging is numerically exact | tested against the unmerged model |
+| 359 | Merging unfreezes what applying froze | or the merged model reports the adapter's parameter count |
+| 360 | `serve --adapter` and `sample --adapter` | merged on load, so serving costs nothing |
+| 361 | Adapter shape mismatches are refused | rather than loading and giving wrong answers |
+| 362 | Alpha over rank | so raising the rank does not also raise the correction |
+
+## Downloading the workspace
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 363 | Export as a real zip | what every operating system already opens |
+| 364 | Written by hand, no library | stored entries are three record types and a checksum |
+| 365 | CRC-32 checked against an independent implementation | a checksum that agrees only with itself is one no unzip accepts |
+| 366 | UTF-8 names and content | flagged, so readers do not guess a codepage |
+| 367 | Entry names cannot climb out of the extract directory | `../../etc/passwd` becomes `etc/passwd` |
+| 368 | Verified by unzipping with Python's zipfile | not only against the writer's own reader |
+| 369 | An empty workspace still makes a valid archive | 22 bytes of end-of-directory record |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -535,6 +535,45 @@ stop. It did not learn the task. That is exactly what twelve examples on an
 kind of self-deception here. Instruction tuning wants thousands of examples,
 and the format is what this code provides.
 
+## Fine-tuning without a second copy of the model
+
+Full fine-tuning updates every weight. The optimiser then holds two more copies
+of the model, the result is another checkpoint the same size as the first, and a
+machine with room to serve a model may have no room to train one.
+
+A low-rank adapter replaces the update with a product of two thin matrices. A
+weight of shape (out, in) is corrected by B @ A, with A of shape (rank, in) and
+B of shape (out, rank), so the trainable count is proportional to the rank
+rather than to the layer.
+
+```bash
+codecraft_model finetune --run runs/demo --examples examples/instructions.jsonl --lora 8
+codecraft_model serve --run runs/demo --adapter runs/demo/adapter.pt
+```
+
+Measured on the demo checkpoint at rank 8, adapting the query and value
+projections of every block:
+
+| | full | adapter |
+| --- | --- | --- |
+| Trainable parameters | 1.3M | 14.3K (1.1%) |
+| File written | 15.8MB | 63KB |
+| Base checkpoint | replaced | untouched |
+
+Two properties make this practical rather than merely small. B starts at zero,
+so an adapter that has learned nothing is *exactly* the base model and training
+begins with no discontinuity. And the correction is linear, so a trained adapter
+folds into the base weights and is served by code that knows nothing about
+adapters: `--adapter` merges on load, and the merged model gives the same
+numbers to within floating-point noise. Both are tests rather than claims.
+
+Freezing happens inside `apply_lora` rather than being left to the caller. An
+adapter over an unfrozen model is full fine-tuning with extra steps, and the
+symptom is a run that looks fine and a checkpoint that is wrong. Merging
+unfreezes again, for the mirror-image reason: a merged model that is still
+frozen reports the parameter count of whatever the adapter touched, and a later
+full fine-tune would silently train four projections and nothing else.
+
 ## A checkpoint that loads without unpickling
 
 ```bash
@@ -700,7 +739,7 @@ whatever it is shown.
 make test-model
 ```
 
-335 tests: parameter counts against real modules, tokenizer round trips over
+358 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
