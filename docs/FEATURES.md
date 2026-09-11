@@ -643,6 +643,20 @@ way to make a folder is to name a file into one.
 | 436 | What a call did is returned, not stored on the engine | the engine is shared between request threads |
 | 437 | A cached answer says it was cached | |
 
+## Split editing, and serving a moving target
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 438 | A second editor beside the first | both editable, both writing to the same workspace |
+| 439 | It opens on the file you had before | which is almost always the one you want beside this one |
+| 440 | Its header picks another file | and closes the split |
+| 441 | One set of options for both panes | so the split has no settings of its own to drift |
+| 442 | What the split does not do is written down | jump, restore and insert a snippet act on the left pane |
+| 443 | `serve --reload` picks up a new checkpoint | for watching a run improve without restarting |
+| 444 | A change is acted on only once the file settles | torch.save writes in place, so a growing file is half a checkpoint |
+| 445 | The new engine is built before it is swapped in | a request in flight finishes against the weights it started with |
+| 446 | A checkpoint that will not load leaves the old one running | stale weights beat a server that stops |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

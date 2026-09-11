@@ -28,6 +28,7 @@ import {
   Upload,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -213,6 +214,16 @@ export function CodeCraftIDE() {
    * was recently open, which includes files since closed.
    */
   const [recent, setRecent] = useState<readonly string[]>([]);
+  /**
+   * A second editor beside the first, showing another file.
+   *
+   * Both are editable and both write to the same workspace. What the split does
+   * not do is move the editor-level commands: jump to line, restore a revision
+   * and insert a snippet all act on the left-hand pane, because they are driven
+   * from panels that belong to it. Editing in the right-hand pane works and is
+   * saved; being the target of those commands is the part that is missing.
+   */
+  const [splitFileId, setSplitFileId] = useState<string | null>(null);
   // Set while a back or forward is being applied, so moving the caret as a
   // result of navigating does not record a new place and bury the one we came
   // from.
@@ -227,6 +238,9 @@ export function CodeCraftIDE() {
   useEffect(() => {
     setTabs((current) => pruneTabs(current, files.map((file) => file.id)));
     setRecent((current) => pruneRecent(current, files));
+    setSplitFileId((current) =>
+      current && files.some((file) => file.id === current) ? current : null,
+    );
     setPlaces((current) => {
       const alive = new Set(files.map((file) => file.id));
       return current.entries.reduce(
@@ -280,6 +294,7 @@ export function CodeCraftIDE() {
    * terminal comes back the moment another file is showing.
    */
   const isMarkdown = preferences.markdownPreview && activeFile?.language === 'markdown';
+  const splitFile = files.find((file) => file.id === splitFileId) ?? null;
 
   /**
    * TODO and FIXME notes across the workspace.
@@ -289,6 +304,34 @@ export function CodeCraftIDE() {
    * would keep an incremental list correct.
    */
   const todos = useMemo(() => scanWorkspace(files), [files]);
+
+  /** One set of options for both panes, so the split is not a second editor
+   *  with settings of its own to drift. */
+  const editorOptions = useMemo(
+    () => ({
+      fontSize: preferences.fontSize,
+      fontFamily: '"Fira Code", "JetBrains Mono", monospace',
+      fontLigatures: preferences.fontLigatures,
+      minimap: { enabled: preferences.minimap, scale: 1 },
+      lineNumbers: (preferences.lineNumbers ? 'on' : 'off') as 'on' | 'off',
+      wordWrap: (preferences.wordWrap ? 'on' : 'off') as 'on' | 'off',
+      tabSize: preferences.tabSize,
+      renderWhitespace: (preferences.renderWhitespace ? 'all' : 'selection') as 'all' | 'selection',
+      rulers: preferences.rulerColumn > 0 ? [preferences.rulerColumn] : [],
+      scrollBeyondLastLine: false,
+      automaticLayout: true,
+      padding: { top: 12, bottom: 12 },
+      smoothScrolling: true,
+      cursorBlinking: 'smooth' as const,
+      cursorSmoothCaretAnimation: 'on' as const,
+      bracketPairColorization: { enabled: true },
+      stickyScroll: { enabled: true },
+      linkedEditing: true,
+      formatOnPaste: true,
+      suggestSelection: 'first' as const,
+    }),
+    [preferences],
+  );
 
   // ------------------------------------------------------------------ startup
   useEffect(() => {
@@ -1364,6 +1407,23 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'view.split',
+        title: splitFileId ? 'Close the split editor' : 'Open a file beside this one',
+        category: 'View',
+        when: () => files.length > 1,
+        run: () => {
+          if (splitFileId) {
+            setSplitFileId(null);
+            return;
+          }
+          // The file you had open before this one is almost always the one you
+          // want beside it, so it opens without asking and the header changes it.
+          const beside = recent.find((id) => id !== activeFile?.id);
+          if (beside) setSplitFileId(beside);
+          else setPaletteMode('split');
+        },
+      },
+      {
         id: 'edit.compare',
         title: 'Compare this file with another',
         category: 'Navigate',
@@ -1465,6 +1525,8 @@ export function CodeCraftIDE() {
       handleRestore,
       places,
       handleNavigate,
+      splitFileId,
+      recent,
       handleInsertSnippet,
     ],
   );
@@ -1508,6 +1570,10 @@ export function CodeCraftIDE() {
         onOpenFile={setActiveFileId}
         onGoToSymbol={handleGoToSymbol}
         onInsertSnippet={handleInsertSnippet}
+        onSplitFile={(fileId) => {
+          setSplitFileId(fileId);
+          setPaletteMode(null);
+        }}
         onCompareFile={(fileId) => {
           setComparingWith(fileId);
           setBottomTab('diff');
@@ -1592,42 +1658,66 @@ export function CodeCraftIDE() {
             onReorder={(fileId, to) => setTabs((current) => moveTab(current, fileId, to))}
           />
           {activeFile ? (
-            <Editor
-              key={activeFile.id}
-              height="100%"
-              language={activeFile.language}
-              theme={themeById(preferences.theme).monacoBase}
-              value={activeFile.content}
-              onChange={handleEditorChange}
-              onMount={handleEditorMount}
-              loading={
-                <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                  Loading editor…
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <Editor
+                  key={activeFile.id}
+                  height="100%"
+                  language={activeFile.language}
+                  theme={themeById(preferences.theme).monacoBase}
+                  value={activeFile.content}
+                  onChange={handleEditorChange}
+                  onMount={handleEditorMount}
+                  loading={
+                    <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                      Loading editor…
+                    </div>
+                  }
+                  options={editorOptions}
+                />
+              </div>
+
+              {splitFile && (
+                <div className="flex min-w-0 flex-1 flex-col border-l border-slate-800/80">
+                  <header className="flex h-7 shrink-0 items-center justify-between border-b border-slate-800/80 bg-charcoal px-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaletteMode('split')}
+                      className="min-w-0 truncate font-mono text-[11px] text-slate-400 transition-colors hover:text-slate-200"
+                      title="Show another file here"
+                    >
+                      {splitFile.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSplitFileId(null)}
+                      aria-label="Close the split"
+                      className="shrink-0 rounded p-0.5 text-slate-600 transition-colors hover:bg-slate-800 hover:text-slate-200"
+                    >
+                      <X className="h-3 w-3" aria-hidden />
+                    </button>
+                  </header>
+                  <div className="min-h-0 flex-1">
+                    <Editor
+                      key={`split:${splitFile.id}`}
+                      height="100%"
+                      language={splitFile.language}
+                      theme={themeById(preferences.theme).monacoBase}
+                      value={splitFile.content}
+                      onChange={(value) => {
+                        if (value === undefined) return;
+                        setFiles((previous) =>
+                          previous.map((file) =>
+                            file.id === splitFile.id ? { ...file, content: value } : file,
+                          ),
+                        );
+                      }}
+                      options={editorOptions}
+                    />
+                  </div>
                 </div>
-              }
-              options={{
-                fontSize: preferences.fontSize,
-                fontFamily: '"Fira Code", "JetBrains Mono", monospace',
-                fontLigatures: preferences.fontLigatures,
-                minimap: { enabled: preferences.minimap, scale: 1 },
-                lineNumbers: preferences.lineNumbers ? 'on' : 'off',
-                wordWrap: preferences.wordWrap ? 'on' : 'off',
-                tabSize: preferences.tabSize,
-                renderWhitespace: preferences.renderWhitespace ? 'all' : 'selection',
-                rulers: preferences.rulerColumn > 0 ? [preferences.rulerColumn] : [],
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                padding: { top: 12, bottom: 12 },
-                smoothScrolling: true,
-                cursorBlinking: 'smooth',
-                cursorSmoothCaretAnimation: 'on',
-                bracketPairColorization: { enabled: true },
-                stickyScroll: { enabled: true },
-                linkedEditing: true,
-                formatOnPaste: true,
-                suggestSelection: 'first',
-              }}
-            />
+              )}
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center text-xs text-slate-500">
               Loading workspace…

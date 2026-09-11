@@ -40,6 +40,7 @@ from .device import (
     resolve_device,
 )
 from .inflight import Supersede, Ticket
+from .reload import Watcher
 from .stopping import StopWatcher
 from .tokenizer import Tokenizer
 from .train import load_checkpoint
@@ -902,6 +903,47 @@ class ModelServer(ThreadingHTTPServer):
         # Generation is serialised, so a request nobody wants is not merely
         # wasted, it is in front of the one that matters.
         self.supersede = Supersede()
+        self._reloader: threading.Thread | None = None
+        self._stop_reloading = threading.Event()
+
+    def watch_checkpoint(self, seconds: float = 5.0) -> None:
+        """Reload the engine when the checkpoint on disk is replaced.
+
+        For watching a run improve without restarting what you are testing
+        with. The new engine is built completely before it is swapped in, so a
+        request in flight finishes against the weights it started with and the
+        next one gets the new ones. A failed load leaves the old engine in
+        place: a server that keeps answering with slightly stale weights is
+        better than one that stops.
+        """
+
+        def loop() -> None:
+            watcher = Watcher(self.engine.run / "model.pt")
+            while not self._stop_reloading.wait(seconds):
+                if not watcher.poll():
+                    continue
+                try:
+                    replacement = Engine(self.engine.run, str(self.engine.device))
+                except Exception as error:  # noqa: BLE001 - any failure means keep the old one
+                    print(f"reload failed, keeping the running model: {error}")
+                    continue
+
+                previous = self.engine
+                self.engine = replacement
+                print(
+                    f"reloaded at step {replacement.payload.get('step')}, "
+                    f"val loss {replacement.payload.get('val_loss'):.3f} "
+                    f"(was step {previous.payload.get('step')})"
+                )
+
+        self._reloader = threading.Thread(target=loop, daemon=True, name="reload")
+        self._reloader.start()
+
+    def server_close(self) -> None:
+        self._stop_reloading.set()
+        if self._reloader is not None:
+            self._reloader.join(timeout=2)
+        super().server_close()
 
 
 def build_server(
@@ -912,13 +954,17 @@ def build_server(
     *,
     quantize: bool = False,
     adapter: Path | None = None,
+    reload_seconds: float = 0.0,
 ) -> ModelServer:
     """Load the checkpoint and bind the socket, without serving yet.
 
     Split out from `serve` so tests can bind port 0 and drive the server on a
     thread of their own.
     """
-    return ModelServer((host, port), Engine(run, device, quantize=quantize, adapter=adapter))
+    server = ModelServer((host, port), Engine(run, device, quantize=quantize, adapter=adapter))
+    if reload_seconds > 0:
+        server.watch_checkpoint(reload_seconds)
+    return server
 
 
 def serve(
@@ -929,9 +975,13 @@ def serve(
     device: str | None = None,
     quantize: bool = False,
     adapter: Path | None = None,
+    reload_seconds: float = 0.0,
 ) -> int:
     try:
-        server = build_server(run, host, port, device, quantize=quantize, adapter=adapter)
+        server = build_server(
+            run, host, port, device, quantize=quantize, adapter=adapter,
+            reload_seconds=reload_seconds,
+        )
     except FileNotFoundError as error:
         print(f"error: {error}")
         return 1
@@ -957,6 +1007,11 @@ def serve(
         f"  POST /v1/messages   Messages-compatible, set ANTHROPIC_BASE_URL to this\n"
         f"  POST /generate      native prompt completion\n"
         f"  GET  /health        model card\n"
+        + (
+            f"  watching {run / 'model.pt'} every {reload_seconds:g}s\n"
+            if reload_seconds > 0
+            else ""
+        )
     )
 
     try:

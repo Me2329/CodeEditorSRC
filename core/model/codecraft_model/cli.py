@@ -709,6 +709,7 @@ def command_serve(args: argparse.Namespace) -> int:
         device=args.device,
         quantize=args.quantize,
         adapter=Path(args.adapter) if args.adapter else None,
+        reload_seconds=args.reload,
     )
 
 
@@ -1018,6 +1019,16 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="CPU threads to serve with; leave unset to take every core",
+    )
+    server.add_argument(
+        "--reload",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "poll the checkpoint this often and load it again when training "
+            "replaces it; 0 never reloads"
+        ),
     )
     add_device(server)
     server.set_defaults(func=command_serve)

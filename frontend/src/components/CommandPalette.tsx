@@ -14,7 +14,13 @@ import { formatShortcut, rank, type Command } from '../lib/commands';
 import type { Snippet } from '../lib/snippets';
 import type { Symbol as WorkspaceSymbol, VirtualFile } from '../lib/types';
 
-export type PaletteMode = 'commands' | 'files' | 'symbols' | 'snippets' | 'compare';
+export type PaletteMode =
+  | 'commands'
+  | 'files'
+  | 'symbols'
+  | 'snippets'
+  | 'compare'
+  | 'split';
 
 interface Props {
   mode: PaletteMode | null;
@@ -33,6 +39,7 @@ interface Props {
   onGoToSymbol: (symbol: WorkspaceSymbol) => void;
   onInsertSnippet: (snippet: Snippet) => void;
   onCompareFile: (fileId: string) => void;
+  onSplitFile: (fileId: string) => void;
 }
 
 const PLACEHOLDERS: Record<PaletteMode, string> = {
@@ -41,6 +48,7 @@ const PLACEHOLDERS: Record<PaletteMode, string> = {
   symbols: 'Go to symbol…',
   snippets: 'Insert a snippet…',
   compare: 'Compare the open file with…',
+  split: 'Open beside this one…',
 };
 
 /** How many results to render. Beyond this the list stops being scannable. */
@@ -57,6 +65,7 @@ export function CommandPalette({
   onGoToSymbol,
   onInsertSnippet,
   onCompareFile,
+  onSplitFile,
 }: Props) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
@@ -83,8 +92,9 @@ export function CommandPalette({
           activate: match.item.run,
         }));
     }
-    if (mode === 'files' || mode === 'compare') {
-      const choose = mode === 'compare' ? onCompareFile : onOpenFile;
+    if (mode === 'files' || mode === 'compare' || mode === 'split') {
+      const choose =
+        mode === 'compare' ? onCompareFile : mode === 'split' ? onSplitFile : onOpenFile;
       return rank(files, query, (file) => file.name)
         .slice(0, MAX_RESULTS)
         .map((match) => ({
@@ -120,7 +130,7 @@ export function CommandPalette({
       }));
   }, [
     mode, commands, files, symbols, snippets, query,
-    onOpenFile, onGoToSymbol, onInsertSnippet, onCompareFile,
+    onOpenFile, onGoToSymbol, onInsertSnippet, onCompareFile, onSplitFile,
   ]);
 
   // Clamp the cursor when the result set shrinks under it.

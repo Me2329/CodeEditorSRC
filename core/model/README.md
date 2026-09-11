@@ -603,6 +603,29 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Serving a model that is still training
+
+Training writes a new checkpoint whenever the validation loss improves. A server
+started before that keeps the old weights until somebody restarts it, so the
+obvious way to watch a run get better is to keep restarting the thing you are
+testing with.
+
+```bash
+codecraft_model serve --run runs/fim --reload 5
+```
+
+Watching the file is easy; doing it safely is the part worth writing down. A
+checkpoint being written is a checkpoint that is half there, and `torch.save`
+writes in place rather than atomically, so the only signal available from
+outside is that the file has stopped changing. A change is therefore acted on
+only after the file has looked identical for a whole poll interval, which costs
+one interval of latency and removes the entire class of problem.
+
+The new engine is built completely before it is swapped in, so a request in
+flight finishes against the weights it started with. A checkpoint that fails to
+load leaves the old engine running: a server answering with slightly stale
+weights is better than one that stops.
+
 ## Running the whole chain
 
 Every piece above was tested on its own. Running them together found two things
@@ -924,7 +947,7 @@ whatever it is shown.
 make test-model
 ```
 
-426 tests: parameter counts against real modules, tokenizer round trips over
+437 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

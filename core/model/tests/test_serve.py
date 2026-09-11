@@ -711,6 +711,60 @@ def test_a_cached_answer_says_it_was_cached(run_directory) -> None:
     assert report["cached"] is True
 
 
+def test_a_replaced_checkpoint_is_picked_up(run_directory, tmp_path) -> None:
+    """For watching a run improve without restarting what you test with."""
+    import shutil
+    import time as clock
+
+    from codecraft_model.serve import build_server
+
+    run = tmp_path / "watched"
+    run.mkdir()
+    for name in ("tokenizer.json", "meta.json", "model.pt"):
+        shutil.copy(run_directory / name, run / name)
+
+    server = build_server(run, "127.0.0.1", 0, reload_seconds=0.05)
+    try:
+        before = server.engine
+        torch.manual_seed(7)
+        config = before.model.config
+        save_checkpoint(run / "model.pt", CodeCraftLM(config), None, 99, 1.25, TrainConfig())
+
+        deadline = clock.time() + 5
+        while server.engine is before and clock.time() < deadline:
+            clock.sleep(0.05)
+
+        assert server.engine is not before
+        assert server.engine.payload["step"] == 99
+    finally:
+        server.server_close()
+
+
+def test_a_checkpoint_that_will_not_load_leaves_the_old_one_running(
+    run_directory, tmp_path, capsys
+) -> None:
+    """A server answering with slightly stale weights beats one that stops."""
+    import shutil
+    import time as clock
+
+    from codecraft_model.serve import build_server
+
+    run = tmp_path / "broken"
+    run.mkdir()
+    for name in ("tokenizer.json", "meta.json", "model.pt"):
+        shutil.copy(run_directory / name, run / name)
+
+    server = build_server(run, "127.0.0.1", 0, reload_seconds=0.05)
+    try:
+        before = server.engine
+        (run / "model.pt").write_bytes(b"not a checkpoint at all")
+        clock.sleep(0.5)
+
+        assert server.engine is before
+    finally:
+        server.server_close()
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)
