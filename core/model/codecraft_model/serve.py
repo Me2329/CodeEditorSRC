@@ -138,6 +138,7 @@ class Engine:
         top_p: float | None = 0.95,
         min_p: float | None = None,
         repetition_penalty: float = 1.1,
+        no_repeat_ngram: int = 0,
     ):
         """Yield (text_delta, token_id) pairs for `prompt`.
 
@@ -171,6 +172,7 @@ class Engine:
                 top_p=top_p,
                 min_p=min_p,
                 repetition_penalty=repetition_penalty,
+                no_repeat_ngram=no_repeat_ngram,
                 stop_tokens={self.end_token},
             ):
                 piece = self.tokenizer.vocab.get(token_id)
@@ -194,6 +196,11 @@ class Engine:
         top_k: int | None = 40,
         top_p: float | None = 0.95,
         repetition_penalty: float = 1.05,
+        # Measured on the FIM checkpoint: without this a small model walks into
+        # "\n#\n#\n#" and spends its whole budget there. Four rather than two,
+        # because code repeats short sequences legitimately and forbidding a
+        # second run of indentation would be worse than the loop.
+        no_repeat_ngram: int = 4,
         use_cache: bool = True,
     ) -> tuple[str, int]:
         """Write what goes between `prefix` and `suffix`.
@@ -226,6 +233,7 @@ class Engine:
             top_k=top_k,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            no_repeat_ngram=no_repeat_ngram,
         )
         if use_cache:
             remembered = self.response_cache.get(key)
@@ -256,6 +264,7 @@ class Engine:
                 top_k=top_k,
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
+                no_repeat_ngram=no_repeat_ngram,
                 # A model that has finished the middle says so; without these it
                 # would run on into whatever it thinks follows the suffix.
                 stop_tokens={self.end_token, self.tokenizer.fim_prefix,
@@ -469,6 +478,7 @@ class Handler(BaseHTTPRequestHandler):
             "top_p": body.get("top_p", 0.95),
             "repetition_penalty": float(body.get("repetition_penalty", 1.1)),
             "min_p": body.get("min_p"),
+            "no_repeat_ngram": max(0, min(int(body.get("no_repeat_ngram", 0)), 16)),
         }
 
     def _handle_generate(self) -> None:
@@ -533,6 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             suffix,
             max_tokens=max(1, min(int(body.get("max_tokens", 64)), 512)),
             temperature=float(body.get("temperature", 0.2)),
+            no_repeat_ngram=max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
         )
         self._send_json(
             200,

@@ -405,3 +405,65 @@ def test_no_prefix_cache_is_the_ordinary_path(model: CodeCraftLM) -> None:
     tokens = torch.randint(1, CONFIG.vocab_size, (1, 6))
 
     assert len(_greedy(model, tokens)) == 6
+
+
+# ------------------------------------------------------------- repeat control
+
+
+def test_an_ngram_already_produced_is_not_produced_again() -> None:
+    """The direct check on the helper, without a model in the way."""
+    from codecraft_model.model import _ngram_bans
+
+    # "1 2 3" has been produced, and the last two tokens are "2 3"... the only
+    # continuation that would repeat a 3-gram is what followed "2 3" before.
+    assert _ngram_bans([1, 2, 3, 2, 3], 3) == [2]
+
+
+def test_nothing_is_banned_before_there_is_an_ngram() -> None:
+    from codecraft_model.model import _ngram_bans
+
+    assert _ngram_bans([1, 2], 3) == []
+    assert _ngram_bans([1, 2, 3], 0) == []
+
+
+def test_every_repeat_of_the_context_is_banned() -> None:
+    """Two different tokens have followed the same pair, so both are out."""
+    from codecraft_model.model import _ngram_bans
+
+    assert sorted(_ngram_bans([1, 2, 5, 1, 2, 7, 1, 2], 3)) == [5, 7]
+
+
+def test_a_loop_is_broken_by_banning_its_ngram(model: CodeCraftLM) -> None:
+    """An untrained model is a loop generator, which makes it the right subject.
+
+    Greedy decoding with nothing to stop it produces the same token forever. The
+    ban is what makes the output stop being one token repeated.
+    """
+    tokens = torch.randint(1, CONFIG.vocab_size, (1, 6))
+
+    looping = list(model.generate(tokens, max_new_tokens=8, temperature=0.0))
+    broken = list(
+        model.generate(tokens, max_new_tokens=8, temperature=0.0, no_repeat_ngram=2)
+    )
+
+    assert len(set(looping)) == 1
+    assert len(set(broken)) > 1
+
+
+def test_the_prompt_is_exempt_from_the_ban(model: CodeCraftLM) -> None:
+    """A completion that cannot reuse a phrase from the file is worse than a loop.
+
+    Repeating the surrounding idiom is most of what an inline suggestion is for,
+    so only what this call generated counts. The observable form of that: at the
+    first step nothing has been generated, so the ban cannot forbid anything
+    whatever the prompt contains.
+    """
+    # A prompt that repeats, which is where a ban over the prompt would bite.
+    tokens = torch.tensor([[7, 9, 7, 9, 7, 9]])
+
+    free = list(model.generate(tokens, max_new_tokens=1, temperature=0.0))
+    banned = list(
+        model.generate(tokens, max_new_tokens=1, temperature=0.0, no_repeat_ngram=2)
+    )
+
+    assert banned == free

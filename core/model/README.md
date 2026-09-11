@@ -600,6 +600,38 @@ Decode is slower quantized, because dequantization happens per forward pass:
 this trades compute for memory rather than being faster. It exists so a model
 that would not otherwise fit can be served at all.
 
+## Making it stop looping
+
+A small model decoded greedily walks into a phrase and stays there. The FIM
+checkpoint, asked to complete `result[key] = `, writes `\n#\n#\n#\n#` and spends
+its whole budget on it.
+
+A repetition penalty does not fix this. It scales the score of every token seen
+before, and each token in `\n#` stays plausible on its own. What fixes it is
+forbidding the *continuation*: a token that would repeat an n-gram this
+generation has already produced is removed from the distribution.
+
+Measured on the same four prompts, with greedy decoding:
+
+| | what it writes |
+| --- | --- |
+| Off | `\n#\n#\n#\n#\n#\n#` |
+| n=2 | `\n#\n\ndef _coffset(value):\n    """Return a string for a list of` |
+| n=3 | `\n#\n# The value is a string, and the value is not a string.` |
+| n=4 | `\n#\n#\n\ndef _coffset(value):\n    """Return a string for a` |
+
+The loop is gone at every setting. Four is the default for infill: two forbids a
+second run of indentation, and code legitimately repeats short sequences.
+
+Only what this call generated counts. Applying the ban across the prompt as well
+is the usual implementation and it is wrong here, because repeating an idiom
+from the file being completed is most of what an inline suggestion is for.
+
+This does not make the checkpoint good. It still answers a caret inside a
+dictionary assignment by starting a new function, which is what an hour of
+training on a 6.5M-parameter model buys. The loop was a decoding problem and is
+fixed; the rest is a model problem and is not.
+
 ## Serving the same question twice
 
 An editor at a caret asks almost the same question on every keystroke. The
@@ -651,7 +683,7 @@ whatever it is shown.
 make test-model
 ```
 
-327 tests: parameter counts against real modules, tokenizer round trips over
+332 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

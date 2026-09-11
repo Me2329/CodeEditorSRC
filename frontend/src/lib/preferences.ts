@@ -165,6 +165,9 @@ export interface Preferences {
   liveAnalysis: boolean;
   /** Grey-text suggestions ahead of the caret, from the local model. */
   inlineCompletion: boolean;
+  /** Offer snippets in the completion list. Unlike the model's suggestions,
+   *  these work with nothing running. */
+  snippets: boolean;
   /** Shortcut overrides, as written text against a command id. */
   keybindings: Record<string, string>;
   /** Show whitespace characters. */
@@ -188,6 +191,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fontLigatures: true,
   liveAnalysis: true,
   inlineCompletion: true,
+  snippets: true,
   keybindings: {},
   renderWhitespace: false,
   zenMode: false,
@@ -221,6 +225,7 @@ export function normalisePreferences(raw: unknown): Preferences {
     fontLigatures: flag(source.fontLigatures, DEFAULT_PREFERENCES.fontLigatures),
     liveAnalysis: flag(source.liveAnalysis, DEFAULT_PREFERENCES.liveAnalysis),
     inlineCompletion: flag(source.inlineCompletion, DEFAULT_PREFERENCES.inlineCompletion),
+    snippets: flag(source.snippets, DEFAULT_PREFERENCES.snippets),
     // Only string values survive: a hand-edited file cannot install a binding
     // the resolver would choke on.
     keybindings: Object.fromEntries(

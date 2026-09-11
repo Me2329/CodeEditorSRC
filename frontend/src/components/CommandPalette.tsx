@@ -7,28 +7,38 @@
  */
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { FileCode, Hash, Search, Terminal } from 'lucide-react';
+import { Braces, FileCode, Hash, Search, Terminal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { formatShortcut, rank, type Command } from '../lib/commands';
+import type { Snippet } from '../lib/snippets';
 import type { Symbol as WorkspaceSymbol, VirtualFile } from '../lib/types';
 
-export type PaletteMode = 'commands' | 'files' | 'symbols';
+export type PaletteMode = 'commands' | 'files' | 'symbols' | 'snippets';
 
 interface Props {
   mode: PaletteMode | null;
   commands: Command[];
   files: VirtualFile[];
   symbols: WorkspaceSymbol[];
+  /**
+   * Snippets for the language on screen.
+   *
+   * Typing a prefix in the editor finds a snippet you already know about; this
+   * is for the ones you do not, which is most of them the first time.
+   */
+  snippets: Snippet[];
   onClose: () => void;
   onOpenFile: (id: string) => void;
   onGoToSymbol: (symbol: WorkspaceSymbol) => void;
+  onInsertSnippet: (snippet: Snippet) => void;
 }
 
 const PLACEHOLDERS: Record<PaletteMode, string> = {
   commands: 'Type a command…',
   files: 'Go to file…',
   symbols: 'Go to symbol…',
+  snippets: 'Insert a snippet…',
 };
 
 /** How many results to render. Beyond this the list stops being scannable. */
@@ -39,9 +49,11 @@ export function CommandPalette({
   commands,
   files,
   symbols,
+  snippets,
   onClose,
   onOpenFile,
   onGoToSymbol,
+  onInsertSnippet,
 }: Props) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
@@ -80,6 +92,18 @@ export function CommandPalette({
           activate: () => onOpenFile(match.item.id),
         }));
     }
+    if (mode === 'snippets') {
+      return rank(snippets, query, (snippet) => `${snippet.prefix} ${snippet.label} ${snippet.description}`)
+        .slice(0, MAX_RESULTS)
+        .map((match) => ({
+          key: `${match.item.languages[0]}:${match.item.prefix}`,
+          primary: match.item.label,
+          secondary: match.item.description,
+          trailing: match.item.prefix,
+          icon: Braces,
+          activate: () => onInsertSnippet(match.item),
+        }));
+    }
     return rank(symbols, query, (symbol) => `${symbol.name} ${symbol.file}`)
       .slice(0, MAX_RESULTS)
       .map((match) => ({
@@ -90,7 +114,7 @@ export function CommandPalette({
         icon: Hash,
         activate: () => onGoToSymbol(match.item),
       }));
-  }, [mode, commands, files, symbols, query, onOpenFile, onGoToSymbol]);
+  }, [mode, commands, files, symbols, snippets, query, onOpenFile, onGoToSymbol, onInsertSnippet]);
 
   // Clamp the cursor when the result set shrinks under it.
   useEffect(() => {

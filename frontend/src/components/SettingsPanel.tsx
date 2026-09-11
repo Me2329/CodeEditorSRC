@@ -139,6 +139,12 @@ export function SettingsPanel({ open, preferences, onChange, onReset, onClose }:
               checked={preferences.inlineCompletion}
               onChange={(value) => onChange('inlineCompletion', value)}
             />
+            <Toggle
+              label="Snippets"
+              hint="Shapes in the completion list; these need no model"
+              checked={preferences.snippets}
+              onChange={(value) => onChange('snippets', value)}
+            />
           </Section>
 
           <Section

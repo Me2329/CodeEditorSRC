@@ -464,6 +464,30 @@ history lives in the browser alongside the workspace.
 | 329 | A trimmed prompt refuses a cached prefix | its keys belong to different positions |
 | 330 | Reuse verified on logits, not sampled tokens | an untrained model emits the same token either way |
 
+## Snippets
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 331 | A snippet library for twelve languages | Python, C, C++, JavaScript, TypeScript, Rust, Go, Java, shell, HTML, CSS, SQL, Markdown |
+| 332 | Offered in the completion list as you type | prefix matching, not fuzzy: a list that reorders under you is unreadable |
+| 333 | Tab stops, defaults and mirrors | `${1:name}` twice fills both from one typing |
+| 334 | A palette mode for browsing them | typing a prefix finds what you know; this is for what you do not |
+| 335 | Bodies re-indented to your tab size | and to the caret's own indentation, so one inserted inside a function is not flush left |
+| 336 | Every body validated by a test | an unclosed placeholder would insert `${1:` into someone's source |
+| 337 | One prefix per snippet per language | two snippets fighting over `for` is a bug, not a preference |
+| 338 | Consecutive tab stops enforced | a gap makes Tab land somewhere the author did not intend |
+| 339 | A toggle in settings | |
+| 340 | They work with no model running | which is the point of having them alongside inline completion |
+
+## Repeat control
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 341 | An n-gram already generated cannot be generated again | what stops `\n#\n#\n#` |
+| 342 | The prompt is exempt | a completion that cannot reuse a phrase from the file is worse than a loop |
+| 343 | Four tokens by default for infill | two forbids a second run of indentation, which is worse than the loop |
+| 344 | Exposed over HTTP on both routes | `no_repeat_ngram`, off by default for chat |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -34,6 +34,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import {
+  matching as matchingSnippets,
+  reindent,
+  type Snippet,
+  snippetsFor,
+} from '../lib/snippets';
 import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
 import {
   EMPTY as NO_TABS,
@@ -135,6 +141,9 @@ export function CodeCraftIDE() {
   // Read inside a stable callback, so applying an agent edit does not need to
   // re-subscribe every time the active file changes.
   const activeFileNameRef = useRef('');
+  // Read by the snippet provider, which is registered once and would otherwise
+  // capture whatever the tab size was at mount.
+  const tabSizeRef = useRef(DEFAULT_PREFERENCES.tabSize);
   // The extension API is built once and must see current state, so it reads
   // these rather than closing over a render's values.
   const filesRef = useRef<VirtualFile[]>([]);
@@ -280,6 +289,7 @@ export function CodeCraftIDE() {
   }, []);
 
   activeFileNameRef.current = activeFile?.name ?? '';
+  tabSizeRef.current = preferences.tabSize;
   filesRef.current = files;
 
   // Persist the workspace so a refresh does not discard work in progress.
@@ -632,6 +642,88 @@ export function CodeCraftIDE() {
 
     return () => provider.dispose();
   }, [monacoReady, preferences.inlineCompletion]);
+
+  /**
+   * Insert a snippet at the caret, placeholders and all.
+   *
+   * Monaco expands snippet syntax through a controller on the editor rather
+   * than through a public method, so it is reached by name. Falling back to a
+   * plain edit keeps the text correct when that name ever changes: the
+   * placeholders would appear literally, which is visible and fixable, rather
+   * than nothing happening at all.
+   */
+  const handleInsertSnippet = useCallback(
+    (snippet: Snippet) => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      const position = editor?.getPosition();
+      if (!editor || !model || !position) return;
+
+      const line = model.getLineContent(position.lineNumber);
+      const leading = line.slice(0, line.length - line.trimStart().length);
+      const body = reindent(snippet.body, preferences.tabSize, leading);
+
+      const controller = editor.getContribution('snippetController2') as
+        | { insert?: (text: string) => void }
+        | null;
+
+      if (controller?.insert) {
+        controller.insert(body);
+      } else {
+        editor.executeEdits('codecraft-snippet', [
+          { range: new (monacoRef.current!.Range)(
+              position.lineNumber, position.column, position.lineNumber, position.column,
+            ), text: body },
+        ]);
+      }
+      editor.focus();
+    },
+    [preferences.tabSize],
+  );
+
+  /**
+   * Snippets in the completion list.
+   *
+   * Separate from inline completion and from the model: these are shapes that
+   * are always right, they cost nothing to offer, and they work with no model
+   * running at all. Registered once, reading the language through a ref for the
+   * same reason the inline provider does.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !preferences.snippets) return;
+
+    const provider = monaco.languages.registerCompletionItemProvider('*', {
+      provideCompletionItems: (model, position) => {
+        const word = model.getWordUntilPosition(position);
+        const line = model.getLineContent(position.lineNumber);
+        // What the snippet's continuation lines have to line up with.
+        const leading = line.slice(0, line.length - line.trimStart().length);
+
+        const range = new monaco.Range(
+          position.lineNumber,
+          word.startColumn,
+          position.lineNumber,
+          word.endColumn,
+        );
+
+        return {
+          suggestions: matchingSnippets(model.getLanguageId(), word.word).map((entry) => ({
+            label: entry.prefix,
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            detail: entry.description,
+            documentation: { value: '```\n' + reindent(entry.body, tabSizeRef.current) + '\n```' },
+            insertText: reindent(entry.body, tabSizeRef.current, leading),
+            insertTextRules:
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+          })),
+        };
+      },
+    });
+
+    return () => provider.dispose();
+  }, [monacoReady, preferences.snippets]);
 
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -1102,6 +1194,13 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'edit.snippet',
+        title: 'Insert a snippet',
+        category: 'Edit',
+        when: () => snippetsFor(activeFile?.language ?? language).length > 0,
+        run: () => setPaletteMode('snippets'),
+      },
+      {
         id: 'view.history',
         title: 'Show local history',
         category: 'View',
@@ -1197,9 +1296,11 @@ export function CodeCraftIDE() {
         commands={commands}
         files={files}
         symbols={symbols}
+        snippets={snippetsFor(activeFile?.language ?? language)}
         onClose={() => setPaletteMode(null)}
         onOpenFile={setActiveFileId}
         onGoToSymbol={handleGoToSymbol}
+        onInsertSnippet={handleInsertSnippet}
       />
       <SettingsPanel
         open={settingsOpen}

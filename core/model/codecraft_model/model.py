@@ -335,6 +335,7 @@ class CodeCraftLM(nn.Module):
         top_p: float | None = 0.95,
         min_p: float | None = None,
         repetition_penalty: float = 1.1,
+        no_repeat_ngram: int = 0,
         stop_tokens: set[int] | None = None,
         prefix_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         prefix_length: int = 0,
@@ -351,6 +352,10 @@ class CodeCraftLM(nn.Module):
         `on_prefill` is handed the caches and their length once the prompt has
         been read, which is the moment worth remembering: the prompt is what the
         next request will share, and the tokens generated after it are not.
+
+        `no_repeat_ngram` forbids repeating an n-gram this call has already
+        produced, which is what stops a small model looping on a phrase. Zero
+        turns it off.
         """
         self.eval()
         stop_tokens = stop_tokens or set()
@@ -380,6 +385,8 @@ class CodeCraftLM(nn.Module):
         if on_prefill is not None:
             on_prefill(caches, position)
 
+        produced: list[int] = []
+
         for _ in range(max_new_tokens):
             next_logits = logits[:, -1, :].float()
 
@@ -387,6 +394,14 @@ class CodeCraftLM(nn.Module):
                 next_logits = _apply_repetition_penalty(
                     next_logits, generated, repetition_penalty
                 )
+
+            banned = _ngram_bans(produced, no_repeat_ngram)
+            if banned:
+                # Cloned first: the logits are a view of the model's own output
+                # under no_grad, and writing through it would corrupt the tensor
+                # the next step reads.
+                next_logits = next_logits.clone()
+                next_logits[:, banned] = float("-inf")
 
             if temperature <= 0:
                 next_token = torch.argmax(next_logits, dim=-1, keepdim=True)
@@ -402,6 +417,7 @@ class CodeCraftLM(nn.Module):
             yield token_id
 
             generated.append(token_id)
+            produced.append(token_id)
             if position >= self.config.max_seq_len:
                 # The context is full. Stopping is honest; silently dropping the
                 # oldest tokens would invalidate every cached key.
@@ -411,6 +427,31 @@ class CodeCraftLM(nn.Module):
                 next_token, caches=caches, start_position=position
             )
             position += 1
+
+
+def _ngram_bans(produced: list[int], size: int) -> list[int]:
+    """Tokens that would repeat an n-gram this generation has already produced.
+
+    The repetition penalty discourages tokens seen before; this forbids a
+    specific continuation. They catch different things. A penalty scales every
+    occurrence of a token and a small model will still walk into ", value,
+    value, value" because each individual token stays plausible. Banning the
+    completion of an n-gram already produced breaks the cycle exactly.
+
+    Only what this call generated is considered. Code legitimately repeats
+    itself, and a completion that cannot reuse a phrase from the file it is
+    completing is worse than one that loops: repeating the surrounding idiom is
+    most of what an inline suggestion is for.
+    """
+    if size <= 0 or len(produced) < size:
+        return []
+
+    context = tuple(produced[len(produced) - size + 1 :]) if size > 1 else ()
+    banned = []
+    for start in range(len(produced) - size + 1):
+        if tuple(produced[start : start + size - 1]) == context:
+            banned.append(produced[start + size - 1])
+    return banned
 
 
 def _apply_repetition_penalty(
