@@ -652,6 +652,65 @@ def test_the_infill_route_says_whether_it_was_superseded(base_url: str) -> None:
     assert body["superseded"] is False
 
 
+def test_a_stop_sequence_is_reported_as_the_reason(base_url: str) -> None:
+    """A client cannot tell "it finished" from "you cut it off" otherwise."""
+    question = {"messages": [{"role": "user", "content": "write"}], "max_tokens": 40,
+                "temperature": 0}
+
+    # The weights are random, so what it writes is arbitrary. Asking once tells
+    # us a character it will actually produce, which is what makes this a test
+    # of the reporting rather than of the model.
+    written = post(f"{base_url}/v1/messages", question)["content"][0]["text"]
+    marker = written[len(written) // 2]
+
+    body = post(f"{base_url}/v1/messages", {**question, "stop_sequences": [marker]})
+
+    assert body["stop_reason"] == "stop_sequence"
+    assert body["stop_sequence"] == marker
+    assert marker not in body["content"][0]["text"]
+
+
+def test_running_out_of_budget_is_reported_as_length(base_url: str) -> None:
+    body = post(
+        f"{base_url}/v1/messages",
+        {"messages": [{"role": "user", "content": "write"}], "max_tokens": 4},
+    )
+
+    assert body["stop_reason"] in {"max_tokens", "end_turn"}
+    assert body["stop_sequence"] is None
+
+
+def test_the_stop_fields_take_precedence_in_order() -> None:
+    from codecraft_model.serve import _stop_fields
+
+    # A stop sequence that matched on the last allowed token is still a stop
+    # sequence, not a budget that ran out.
+    assert _stop_fields("END", 10, 10)["stop_reason"] == "stop_sequence"
+    assert _stop_fields(None, 10, 10)["stop_reason"] == "max_tokens"
+    assert _stop_fields(None, 3, 10)["stop_reason"] == "end_turn"
+
+
+def test_a_report_says_what_happened_without_shared_state(run_directory) -> None:
+    """The engine is shared between request threads; "what the last call did"
+    belongs to whichever call finished most recently, not to the one asking."""
+    engine = Engine(run_directory)
+    report: dict = {}
+    engine.infill("def f(", ")", max_tokens=6, temperature=0.0, report=report, use_cache=False)
+
+    assert report["cached"] is False
+    assert report["superseded"] is False
+    assert report["confidence"] < 0
+
+
+def test_a_cached_answer_says_it_was_cached(run_directory) -> None:
+    engine = Engine(run_directory)
+    engine.infill("def g(", ")", max_tokens=6, temperature=0.0)
+    report: dict = {}
+    engine.infill("def g(", ")", max_tokens=6, temperature=0.0, report=report)
+
+    assert report["cached"] is True
+
+
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:
     engine = Engine(run_directory)
     text, _ = engine.infill("x " * 5000, "y " * 5000, max_tokens=4, temperature=0.0)

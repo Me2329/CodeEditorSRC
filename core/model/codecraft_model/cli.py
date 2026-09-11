@@ -696,6 +696,12 @@ def command_infill(args: argparse.Namespace) -> int:
 def command_serve(args: argparse.Namespace) -> int:
     from .serve import serve
 
+    # Serving on a CPU box usually shares it with something else: an editor, a
+    # build, or the training run that produced the checkpoint. Left alone,
+    # PyTorch takes every core and all of them slow down together.
+    if args.threads and resolve_device(args.device).type == "cpu":
+        torch.set_num_threads(args.threads)
+
     return serve(
         Path(args.run),
         host=args.host,
@@ -1006,6 +1012,12 @@ def main(argv: list[str] | None = None) -> int:
         "--adapter",
         default=None,
         help="a low-rank adapter to merge into the checkpoint before serving",
+    )
+    server.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to serve with; leave unset to take every core",
     )
     add_device(server)
     server.set_defaults(func=command_serve)

@@ -197,6 +197,7 @@ class Engine:
         repetition_penalty: float = 1.1,
         no_repeat_ngram: int = 0,
         stop: list[str] | None = None,
+        report: dict | None = None,
     ):
         """Yield (text_delta, token_id) pairs for `prompt`.
 
@@ -210,6 +211,12 @@ class Engine:
         empty for a second reason once it is given: text that could still turn
         out to be the start of a stop sequence is held back until it is known
         not to be.
+
+        `report` is filled in with what happened, which the caller needs and the
+        return value has no room for. Passed in rather than kept on the engine:
+        the engine is shared between request threads, and an attribute holding
+        "what the last call did" belongs to whichever call finished most
+        recently, not to the one asking.
         """
         ids = self.tokenizer.encode(prompt)
         # Leave room to answer: a prompt that fills the context has nowhere to
@@ -264,6 +271,9 @@ class Engine:
                 if held:
                     yield held, FLUSH_TOKEN
 
+            if report is not None:
+                report["stop"] = watcher.matched
+
     def infill(
         self,
         prefix: str,
@@ -282,6 +292,7 @@ class Engine:
         stop: list[str] | None = None,
         use_cache: bool = True,
         ticket: Ticket | None = None,
+        report: dict | None = None,
     ) -> tuple[str, int]:
         """Write what goes between `prefix` and `suffix`.
 
@@ -321,6 +332,8 @@ class Engine:
         if use_cache:
             remembered = self.response_cache.get(key)
             if remembered is not None:
+                if report is not None:
+                    report.update(cached=True, confidence=None, stop=None, superseded=False)
                 return remembered, 0
 
         ids = self.tokenizer.encode_infill(
@@ -378,9 +391,15 @@ class Engine:
                 watcher.feed(decoder.decode(b"", final=True))
 
         completion = watcher.text
-        self.last_confidence = (
-            sum(logprobs) / len(logprobs) if logprobs else float("-inf")
-        )
+        confidence = sum(logprobs) / len(logprobs) if logprobs else float("-inf")
+        self.last_confidence = confidence
+        if report is not None:
+            report.update(
+                cached=False,
+                confidence=confidence,
+                stop=watcher.matched,
+                superseded=bool(ticket is not None and ticket.cancelled),
+            )
         # A half-finished answer is not the answer to this prompt, and caching
         # it would hand it to the next request that asks the same question.
         if ticket is not None and ticket.cancelled:
@@ -412,17 +431,23 @@ class Engine:
         best_text = ""
         best_score = float("-inf")
         total = 0
+        outer = options.pop("report", None)
 
         for _ in range(candidates):
             # Caching is off: identical requests would otherwise return the same
             # remembered answer every time and the sampling would do nothing.
+            scored: dict = {}
             text, count = self.infill(
-                prefix, suffix, temperature=temperature, use_cache=False, **options
+                prefix, suffix, temperature=temperature, use_cache=False,
+                report=scored, **options,
             )
             total += count
-            if self.last_confidence > best_score and text.strip():
-                best_score, best_text = self.last_confidence, text
+            confidence = scored.get("confidence", float("-inf"))
+            if confidence > best_score and text.strip():
+                best_score, best_text = confidence, text
 
+        if outer is not None:
+            outer.update(cached=False, confidence=best_score, stop=None, superseded=False)
         return best_text, total
 
     def _remember_prefill(self, ids: list[int], caches, length: int) -> None:
@@ -436,7 +461,11 @@ class Engine:
             self.prefix_cache.store(ids, caches)
 
     def complete(self, prompt: str, **options) -> tuple[str, int]:
-        """Non-streaming generation. Returns the text and the token count."""
+        """Non-streaming generation. Returns the text and the token count.
+
+        Anything else worth knowing goes into `report`, which is passed straight
+        through to `stream`.
+        """
         pieces: list[str] = []
         count = 0
         for delta, token_id in self.stream(prompt, **options):
@@ -472,6 +501,21 @@ def render_messages(system: str | list | None, messages: list[dict]) -> str:
 
     parts.append("<|assistant|>")
     return "\n".join(parts)
+
+
+def _stop_fields(matched: str | None, count: int, budget: int) -> dict:
+    """The two fields a Messages client reads to know why generation ended.
+
+    Three reasons, in the order they take precedence: a stop sequence matched,
+    the budget ran out, or the model stopped on its own. Reporting `end_turn`
+    for all three, which this did until the whole chain was run end to end,
+    means a client cannot tell "it finished" from "you cut it off".
+    """
+    if matched is not None:
+        return {"stop_reason": "stop_sequence", "stop_sequence": matched}
+    if count >= budget:
+        return {"stop_reason": "max_tokens", "stop_sequence": None}
+    return {"stop_reason": "end_turn", "stop_sequence": None}
 
 
 def _stop_sequences(body: dict) -> list[str]:
@@ -763,7 +807,8 @@ class Handler(BaseHTTPRequestHandler):
         input_tokens = len(self.engine.tokenizer.encode(prompt))
 
         if not body.get("stream"):
-            text, count = self.engine.complete(prompt, **options)
+            report: dict = {}
+            text, count = self.engine.complete(prompt, report=report, **options)
             self._send_json(
                 200,
                 {
@@ -772,10 +817,7 @@ class Handler(BaseHTTPRequestHandler):
                     "role": "assistant",
                     "model": self.engine.name,
                     "content": [{"type": "text", "text": text}],
-                    # A generator that runs out of budget stopped for length;
-                    # one that stopped early hit the end-of-text token.
-                    "stop_reason": "max_tokens" if count >= options["max_tokens"] else "end_turn",
-                    "stop_sequence": None,
+                    **_stop_fields(report.get("stop"), count, options["max_tokens"]),
                     "usage": {"input_tokens": input_tokens, "output_tokens": count},
                 },
             )
@@ -816,7 +858,8 @@ class Handler(BaseHTTPRequestHandler):
 
         count = 0
         last_ping = time.time()
-        for delta, token_id in self.engine.stream(prompt, **options):
+        report: dict = {}
+        for delta, token_id in self.engine.stream(prompt, report=report, **options):
             if token_id != FLUSH_TOKEN:
                 count += 1
             if not delta:
@@ -840,10 +883,7 @@ class Handler(BaseHTTPRequestHandler):
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {
-                    "stop_reason": "max_tokens" if count >= options["max_tokens"] else "end_turn",
-                    "stop_sequence": None,
-                },
+                "delta": _stop_fields(report.get("stop"), count, options["max_tokens"]),
                 "usage": {"output_tokens": count},
             },
         )

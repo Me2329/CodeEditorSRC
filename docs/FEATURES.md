@@ -633,6 +633,16 @@ way to make a folder is to name a file into one.
 | 431 | Files never opened keep their created order | a file with no recency has nothing to sort by |
 | 432 | Recency is separate from the tab strip | tabs are what is open; this includes what has since been closed |
 
+## Running the whole chain
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 433 | `serve --threads` | serving usually shares a box with an editor or a training run |
+| 434 | The Messages surface reports why generation ended | stop_sequence, max_tokens or end_turn, rather than end_turn always |
+| 435 | The matched stop sequence is named | so a client can tell "it finished" from "you cut it off" |
+| 436 | What a call did is returned, not stored on the engine | the engine is shared between request threads |
+| 437 | A cached answer says it was cached | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

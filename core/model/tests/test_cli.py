@@ -112,6 +112,23 @@ def test_the_model_is_sized_for_the_tokenizer_that_was_trained(
     assert f"vocab {tokenizer.vocab_size}" in reported
 
 
+def test_serving_can_be_told_how_many_threads_to_use(tmp_path, monkeypatch) -> None:
+    """Serving usually shares a box with an editor, a build, or the training run
+    that produced the checkpoint."""
+    import torch
+
+    from codecraft_model import cli
+
+    asked: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", lambda count: asked.append(count))
+    monkeypatch.setattr(cli, "serve", lambda *args, **kwargs: 0, raising=False)
+
+    # The run is empty, so serve refuses after the thread count is applied.
+    cli.main(["serve", "--run", str(tmp_path), "--port", "0", "--threads", "2", "--device", "cpu"])
+
+    assert asked == [2]
+
+
 def test_resuming_takes_the_architecture_from_the_checkpoint(
     tmp_path, sources, capsys
 ) -> None:

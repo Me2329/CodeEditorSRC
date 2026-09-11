@@ -603,6 +603,47 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Running the whole chain
+
+Every piece above was tested on its own. Running them together found two things
+no unit test would have.
+
+```bash
+codecraft_model serve --run runs/fim --port 8941 --threads 2
+CODECRAFT_MODEL_URL=http://127.0.0.1:8941 uvicorn app.main:create_app --factory --app-dir backend
+```
+
+Measured through the gateway, on the FIM checkpoint, completing at a caret:
+
+| request | tokens | time |
+| --- | --- | --- |
+| First | 12 | 171ms |
+| The same one again | 0 | under 1ms |
+| One character later | 12 | 91ms |
+
+The second is the response cache and the third is the prefix cache, both through
+three layers of code that had only ever been exercised separately.
+
+Superseding, measured the same way: a request for 400 tokens was cancelled after
+144 when a second request from the same editor arrived a second later. The first
+returned empty with `superseded: true`; the second answered in 55ms instead of
+waiting out the three seconds the first had left to run.
+
+### What it found
+
+`serve` had no way to limit its CPU threads, so it took every core on a machine
+that was also training. It has `--threads` now.
+
+And the Messages surface reported `end_turn` whatever happened, including when a
+stop sequence ended the generation, so a client could not tell "it finished"
+from "you cut it off". It now reports `stop_sequence` with the one that matched,
+`max_tokens` when the budget ran out, and `end_turn` otherwise.
+
+Fixing that turned up something worse. "What the last call did" was kept on the
+engine, which is shared between request threads, so two concurrent requests
+could read each other's answer. The information a caller needs now goes into a
+dictionary it passes in.
+
 ## Abandoning work nobody wants
 
 An editor sends a completion request per pause in typing. If the user keeps
@@ -883,7 +924,7 @@ whatever it is shown.
 make test-model
 ```
 
-420 tests: parameter counts against real modules, tokenizer round trips over
+426 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
