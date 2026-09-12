@@ -582,6 +582,36 @@ def test_best_of_costs_what_it_says(run_directory) -> None:
     assert many >= single
 
 
+def test_a_completion_stops_at_the_corpus_file_marker(run_directory) -> None:
+    """The marker is ordinary text in the corpus, so the model can emit one.
+
+    It is the string that follows the end of a file in the training data, so a
+    completion that reaches it has left the file it was completing. Seen in
+    practice: a caret in a constructor answered with the name of a test file.
+    """
+    from codecraft_model.data import FILE_MARKER
+    from codecraft_model.serve import DEFAULT_INFILL_STOPS
+
+    assert FILE_MARKER in DEFAULT_INFILL_STOPS
+
+    engine = Engine(run_directory)
+    text, _ = engine.infill("def parse(", ")", max_tokens=32, temperature=0.0, use_cache=False)
+
+    assert FILE_MARKER not in text
+
+
+def test_a_caller_s_own_stops_replace_the_default(run_directory) -> None:
+    """Passing stops is a decision about where to end, not an addition to one."""
+    engine = Engine(run_directory)
+    report: dict = {}
+    engine.infill(
+        "def parse(", ")", max_tokens=8, temperature=0.0, stop=["zzz"],
+        use_cache=False, report=report,
+    )
+
+    assert report["stop"] in (None, "zzz")
+
+
 def test_typing_in_a_file_bigger_than_the_context_still_reuses(run_directory) -> None:
     """The case the prefix cache exists for, and the one it used to miss.
 

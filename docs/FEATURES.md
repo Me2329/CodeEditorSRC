@@ -823,6 +823,13 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 529 | And says so | silently ceasing to save is how someone loses an afternoon to a reload |
 | 530 | A browser that refuses storage entirely says to export | |
 
+## A completion stops where the file did
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 531 | Completions stop at the corpus file marker | it is ordinary text in the training data, so the model emits one |
+| 532 | A caller's own stops replace the default | passing stops is a decision about where to end |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

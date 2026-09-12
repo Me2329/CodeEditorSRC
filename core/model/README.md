@@ -603,6 +603,43 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## A second run, on six times the data
+
+The first fill-in-the-middle run saw three million tokens six times over. The
+second saw twenty million, from 6,792 files across twenty real Python projects,
+with the same 6.5M-parameter model so the corpus was the only thing that
+changed. 6000 steps, 24.6M tokens seen, 76 minutes on four CPU cores, and still
+improving when the schedule ended: 3.719 at step 3400, 3.504 at 6000.
+
+The validation losses of the two runs are not comparable, for the reason in the
+next section: different corpora mean different held-out projects. What can be
+compared is what each writes at the same caret.
+
+```
+    return ⟨here⟩          3M corpus:  , re.match(b)
+                          20M corpus:  \n\nfrom pydantic import BaseModel, Field,
+
+    print(⟨here⟩)          3M corpus:  a list of the list of the same as a list of
+                          20M corpus:  \n* [`@example.com`](https://github.
+
+    self.text = ⟨here⟩     3M corpus:  , _text, _texts, _text = _text.text,
+                          20M corpus:  <|file|>test_tutorial001_py310.py
+```
+
+Neither is usable, and the second is not obviously better than the first. More
+data made it repeat itself less and wander further: it now produces well-formed
+lines from somewhere else in its training data rather than degenerate ones from
+nowhere. Six and a half million parameters is the binding constraint, and the
+next thing to change is the model rather than the corpus.
+
+The third of those answers was a real find rather than a bad sample. The corpus
+writes `<|file|>name` ahead of every document as ordinary text, not as a special
+token, so the model learned it as the string that follows the end of a file and
+emits one when it thinks the file is over. A completion that reaches it has left
+the file it was completing, so it is now where a completion stops. That caret
+answers with nothing at all now, which is the correct answer and what the editor
+already knows how to show.
+
 ## What the validation number is
 
 The corpus is split by truncation: the last 5% of the token stream is the
@@ -1201,7 +1238,7 @@ whatever it is shown.
 make test-model
 ```
 
-461 tests: parameter counts against real modules, tokenizer round trips over
+463 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

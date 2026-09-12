@@ -32,6 +32,7 @@ import torch
 
 from .cache import PrefixCache, ResponseCache
 from .config import humanise
+from .data import FILE_MARKER
 from .device import (
     architecture_warning,
     autocast_dtype,
@@ -53,6 +54,13 @@ DEFAULT_MAX_TOKENS = 512
 # Marks text produced by flushing the decoder at the end of a generation rather
 # than by a token of its own.
 FLUSH_TOKEN = -1
+
+# The corpus writes "<|file|>name" ahead of every document, as ordinary text
+# rather than as a special token, so a model trained on it can and does emit one
+# mid-completion: it is simply a string that often follows the end of a file.
+# Nothing downstream wants it, and a completion that reaches it has left the
+# file it was completing.
+DEFAULT_INFILL_STOPS: tuple[str, ...] = (FILE_MARKER,)
 
 
 class Engine:
@@ -354,6 +362,8 @@ class Engine:
 
         if reuse_prefill is None:
             reuse_prefill = use_cache
+        if stop is None:
+            stop = list(DEFAULT_INFILL_STOPS)
 
         ids = self.tokenizer.encode_infill(
             prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
