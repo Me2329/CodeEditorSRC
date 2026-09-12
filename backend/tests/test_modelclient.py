@@ -294,6 +294,62 @@ def test_the_infill_route_clamps_the_token_budget(client) -> None:
     assert response.status_code == 422
 
 
+def test_the_infill_route_bounds_the_candidate_count(client) -> None:
+    """Each candidate is a whole generation, so this multiplies the wait."""
+    response = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "x", "candidates": 99}
+    )
+    assert response.status_code == 422
+
+
+def test_the_infill_route_bounds_the_source(client) -> None:
+    """It is a dictionary key on the model server."""
+    response = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "x", "source": "s" * 500}
+    )
+    assert response.status_code == 422
+
+
+def test_the_infill_route_passes_the_model_s_answer_through(client, model_server) -> None:
+    model_server.response = (
+        200,
+        {
+            "completion": "    return x",
+            "tokens": 4,
+            "model": "codecraft-demo",
+            "seconds": 0.1,
+            "superseded": False,
+            "confidence": -1.5,
+        },
+    )
+
+    body = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "def f():\n", "suffix": ""}
+    ).json()
+
+    assert body["completion"] == "    return x"
+    assert body["confidence"] == -1.5
+    assert body["superseded"] is False
+
+
+def test_the_tokenize_route_answers(client, model_server) -> None:
+    model_server.response = (200, {"tokens": 5, "characters": 16, "context": 512})
+
+    body = client.post("/api/v1/assistant/tokenize", json={"text": "def parse(text):"}).json()
+
+    assert body == {"tokens": 5, "characters": 16, "context": 512}
+
+
+def test_the_tokenize_route_reports_an_absent_model_as_503(client, no_model_server) -> None:
+    response = client.post("/api/v1/assistant/tokenize", json={"text": "x"})
+    assert response.status_code == 503
+
+
+def test_the_tokenize_route_bounds_what_it_will_measure(client) -> None:
+    response = client.post("/api/v1/assistant/tokenize", json={"text": "x" * 1_000_001})
+    assert response.status_code == 422
+
+
 def test_the_model_route_describes_an_absent_model(client, no_model_server) -> None:
     body = client.get("/api/v1/assistant/model").json()
     assert body["available"] is False
