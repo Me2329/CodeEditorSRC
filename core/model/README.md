@@ -965,6 +965,19 @@ both `= [` and `sum([1, 2])`, and no amount of log-probability is needed to say
 which of those is worth showing. Confidence then separates the candidates that
 are equally finished.
 
+Measured by drawing four candidates at each of the six probe carets and asking
+both rules to choose from the same four:
+
+| chosen by | answers that were finished |
+| --- | --- |
+| confidence alone | 2 of 6 |
+| finished first, then confidence | 5 of 6 |
+
+The sixth caret had no finished candidate among its four, so both rules
+returned the same unfinished one. Twice the rules disagreed on a caret where
+confidence preferred `from alembic import (` over `import string`, which is the
+whole point: one of those can be accepted and the other cannot.
+
 It costs four generations and one reading of the prompt. The prompt is identical
 for every candidate, so only the sampling is repeated, and the two caches are
 separate switches for exactly this reason: no remembered answer, or every

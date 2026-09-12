@@ -347,6 +347,32 @@ def test_the_infill_route_bounds_the_source(client) -> None:
     assert response.status_code == 422
 
 
+def test_the_infill_route_bounds_the_caret(client) -> None:
+    """Tokenizing the request must not become the expensive part of it."""
+    response = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "x" * 200_001}
+    )
+    assert response.status_code == 422
+
+
+def test_the_infill_route_bounds_the_suffix_as_well(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "x", "suffix": "y" * 200_001}
+    )
+    assert response.status_code == 422
+
+
+def test_a_caret_the_editor_would_really_send_is_well_inside_the_bound(
+    client, model_server
+) -> None:
+    """Two thousand characters of prefix and one of suffix, as `inline.ts` sends."""
+    model_server.response = (200, {"completion": "", "tokens": 0})
+    response = client.post(
+        "/api/v1/assistant/infill", json={"prefix": "x" * 2000, "suffix": "y" * 1000}
+    )
+    assert response.status_code == 200
+
+
 def test_the_infill_route_passes_the_model_s_answer_through(client, model_server) -> None:
     model_server.response = (
         200,

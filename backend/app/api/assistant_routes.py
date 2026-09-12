@@ -7,10 +7,11 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.websockets import WebSocketState
 
 from .. import assistant, modelclient
+from ..config import settings
 from ..schemas import SourceFile
 
 logger = logging.getLogger("codecraft.assistant")
@@ -21,13 +22,40 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_HISTORY_TURNS = 40
 
 
+# What a caret can carry. The editor sends two thousand characters of prefix
+# and one of suffix; these are far above that and far below anything that would
+# make tokenizing the request the expensive part of answering it.
+MAX_CARET_CHARS = 200_000
+# A completion prefix is the word being typed, not a document.
+MAX_COMPLETION_PREFIX = 4_096
+
+
 class WorkspaceContext(BaseModel):
     language: str = ""
-    files: list[SourceFile] = Field(default_factory=list)
+    # Bounded like an execution request's: this workspace is sent to the
+    # assistant daemon, which indexes every file in it.
+    files: list[SourceFile] = Field(
+        default_factory=list, max_length=settings.max_files
+    )
     active_file: str = ""
     line: int = Field(default=0, ge=0)
     column: int = Field(default=0, ge=0)
-    selection: str = ""
+    selection: str = Field(default="", max_length=MAX_CARET_CHARS)
+
+    @field_validator("files")
+    @classmethod
+    def _check_total_size(cls, value: list[SourceFile]) -> list[SourceFile]:
+        """The same ceiling the execution path uses, for the same reason.
+
+        Unlike an execution request this one may be empty: asking for the
+        symbols of an empty workspace is a fair question with a short answer.
+        """
+        total = sum(len(entry.content.encode("utf-8")) for entry in value)
+        if total > settings.max_source_bytes:
+            raise ValueError(
+                f"workspace exceeds the {settings.max_source_bytes} byte source limit"
+            )
+        return value
 
     def payload(self) -> dict:
         return assistant.workspace_payload(
@@ -42,7 +70,7 @@ class WorkspaceContext(BaseModel):
 
 class CompletionRequest(BaseModel):
     workspace: WorkspaceContext
-    prefix: str = ""
+    prefix: str = Field(default="", max_length=MAX_COMPLETION_PREFIX)
     limit: int = Field(default=25, ge=1, le=200)
 
 
@@ -53,8 +81,8 @@ class SymbolsRequest(BaseModel):
 class InfillRequest(BaseModel):
     """A caret, with the code on both sides of it."""
 
-    prefix: str = ""
-    suffix: str = ""
+    prefix: str = Field(default="", max_length=MAX_CARET_CHARS)
+    suffix: str = Field(default="", max_length=MAX_CARET_CHARS)
     # Small on purpose: an inline suggestion should be a line or two, not an
     # essay the user has to read before deciding.
     max_tokens: int = Field(default=64, ge=1, le=512)

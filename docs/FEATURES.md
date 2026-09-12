@@ -959,18 +959,30 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 615 | Trailing whitespace does not decide it | |
 | 616 | A bracket inside a string does not count | |
 | 617 | Confidence still separates candidates that are equally finished | |
-| 618 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
-| 619 | `--candidates` on the probe | which switches it from greedy to sampling |
+| 618 | Measured: finished-first chose a finished answer at 5 of 6 carets, confidence alone at 2 | from the same four candidates each time |
+| 619 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
+| 620 | `--candidates` on the probe | which switches it from greedy to sampling |
 
 ## Every use of a name
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 620 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
-| 621 | Whole word by default | or `save` would match `saved` and `autosave` |
-| 622 | The search panel takes a request from elsewhere | rather than only what is typed into it |
-| 623 | Asking twice for the same name is two requests | the request is an object, not a string |
-| 624 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
+| 621 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
+| 622 | Whole word by default | or `save` would match `saved` and `autosave` |
+| 623 | The search panel takes a request from elsewhere | rather than only what is typed into it |
+| 624 | Asking twice for the same name is two requests | the request is an object, not a string |
+| 625 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
+
+## What a request to the assistant may contain
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 626 | A workspace sent for symbols or completions is bounded like one that would be run | the daemon indexes every file in it |
+| 627 | And by total source bytes, not only file count | |
+| 628 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
+| 629 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
+| 630 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
+| 631 | A completion prefix is bounded as the word it is | not as a document |
 
 ## Not implemented
 

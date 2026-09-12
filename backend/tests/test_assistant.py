@@ -279,3 +279,46 @@ async def test_agent_run_without_a_credential_fails_honestly(daemon) -> None:
         assert "credential" in message.lower()
     else:
         assert kinds & {"step", "failed", "finished"}
+
+
+# ------------------------------------------------------- what a workspace may be
+
+
+def test_a_workspace_is_bounded_like_one_that_would_be_run(client) -> None:
+    """It is sent to the daemon, which indexes every file in it."""
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={"workspace": {"files": [{"name": f"f{i}.py", "content": ""} for i in range(200)]}},
+    )
+    assert response.status_code == 422
+
+
+def test_a_workspace_larger_than_the_source_limit_is_refused(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={
+            "workspace": {
+                "files": [{"name": "big.py", "content": "x" * (5 * 1024 * 1024)}]
+            }
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_an_empty_workspace_passes_validation(client) -> None:
+    """Unlike an execution request, which has nothing to run.
+
+    With no daemon the request fails at the daemon rather than at the model, and
+    503 is the proof that validation let it through.
+    """
+    response = client.post("/api/v1/assistant/symbols", json={"workspace": {"files": []}})
+
+    assert response.status_code in (200, 503)
+
+
+def test_a_completion_prefix_is_a_word_not_a_document(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/complete",
+        json={"workspace": {"files": []}, "prefix": "x" * 5000},
+    )
+    assert response.status_code == 422
