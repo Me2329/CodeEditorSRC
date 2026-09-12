@@ -632,24 +632,31 @@ lines from somewhere else in its training data rather than degenerate ones from
 nowhere. Six and a half million parameters is the binding constraint, and the
 next thing to change is the model rather than the corpus.
 
-### Training it longer was not the answer either
+### What resuming it costs, and what it buys
 
 The obvious next thing was more steps, so the run was resumed from 6000 with the
-budget raised to 14000. It was abandoned at 6340, because by then the numbers
-had already answered the question:
+budget raised to 14000. The first thing that happened was that validation got
+worse:
 
-| | loss |
+| step | validation loss |
 | --- | --- |
-| training batches | 1.8 – 2.4 |
-| held-out validation | 3.618 |
+| 6000, where the first schedule ended | 3.504 |
+| 6200 | 3.618 |
+| 6600 | 3.598 |
+| 7200 | 3.563 |
 
-A model whose training loss sits a nat and a half below its validation loss is
-not learning the language any more, it is learning the corpus. Validation had
-also moved the wrong way from the 3.504 the first schedule ended on, because
-resuming restarts the learning-rate warmup and the first few hundred steps of a
-fresh schedule undo some of what a decayed one settled into. Neither number
-argues for spending three more hours on it. The conclusion above stands: the
-model is too small, and steps and tokens are not what is missing.
+Resuming restarts the learning-rate warmup, and a fresh schedule spends its
+first several hundred steps undoing some of what a decayed one settled into.
+The loss recovers from there, but a thousand steps of the new budget went on
+getting back to where the old one already was. A resume is not free, and a run
+that will be resumed is better off being given the longer schedule to begin
+with.
+
+The gap between the two losses is the more interesting number. Training batches
+sit between 1.8 and 2.4 while held-out text sits near 3.5: a model a nat and a
+half better on what it has seen than on what it has not is learning the corpus
+as much as the language. Which is what the size argument above predicts, and
+what makes more steps the least promising of the things left to try.
 
 The third of those answers was a real find rather than a bad sample. The corpus
 writes `<|file|>name` ahead of every document as ordinary text, not as a special
