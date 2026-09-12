@@ -22,8 +22,8 @@ interface Props {
   fileName: string;
   /** Where the caret is, so the declaration around it can be marked. */
   line: number;
-  /** True while the daemon that supplies symbols is unreachable. */
-  unavailable?: boolean;
+  /** Why there are no symbols, when the reason is not "this file has none". */
+  problem?: string | null;
   onJump: (line: number) => void;
 }
 
@@ -54,7 +54,7 @@ const TONES: Record<string, string> = {
   function: 'text-run',
 };
 
-export function OutlinePanel({ symbols, fileName, line, unavailable, onJump }: Props) {
+export function OutlinePanel({ symbols, fileName, line, problem, onJump }: Props) {
   const [query, setQuery] = useState('');
 
   const entries = useMemo(() => outlineFor(symbols, fileName), [symbols, fileName]);
@@ -90,11 +90,7 @@ export function OutlinePanel({ symbols, fileName, line, unavailable, onJump }: P
       <div className="min-h-0 flex-1 overflow-y-auto p-2 font-mono text-[11px]">
         {entries.length === 0 ? (
           <p className="px-1 py-2 leading-snug text-slate-600">
-            {unavailable
-              ? 'The assistant daemon is not running, so nothing is indexed.'
-              : fileName
-                ? 'Nothing declared in this file.'
-                : 'No file open.'}
+            {problem ?? (fileName ? 'Nothing declared in this file.' : 'No file open.')}
           </p>
         ) : shown.length === 0 ? (
           <p className="px-1 py-2 text-slate-600">Nothing matches.</p>

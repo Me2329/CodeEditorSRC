@@ -873,117 +873,118 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 559 | A filter appears once there is enough to filter | five declarations |
 | 560 | Filtering keeps the parents of what matched | a method without its class has lost half its name |
 | 561 | Marking follows the caret, not the filter | typing in the filter does not move the caret |
-| 562 | An unreachable daemon says so | an empty list means "nothing declared here", which is different |
-| 563 | A repeated container name resolves to the nearest one above | two classes in a file can both have a `save` |
-| 564 | A symbol whose container is not in the file sits at the top | |
-| 565 | An older daemon that reports no containers still produces a flat outline | the field is optional |
+| 562 | The outline says why it is empty | an empty list means "nothing declared here", which is a different thing |
+| 563 | A refused request is not an absent daemon | telling someone to start one they are already running helps nobody |
+| 564 | A repeated container name resolves to the nearest one above | two classes in a file can both have a `save` |
+| 565 | A symbol whose container is not in the file sits at the top | |
+| 566 | An older daemon that reports no containers still produces a flat outline | the field is optional |
 
 ## Asking a checkpoint the same questions every time
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 566 | `probe` command | six carets, answered the same way every time |
-| 567 | Two checkpoints side by side at every caret | `--compare` |
-| 568 | Temperature zero and a fixed seed by default | a difference between rows is a difference between models |
-| 569 | Every case starts from the same sampler state | not from wherever the last one left it |
-| 570 | Cases can come from a file | `{name, prefix, suffix, line_comment}` |
-| 571 | A case with no prefix is refused, by number | so the file can be fixed |
-| 572 | Line breaks are printed, not taken | a completion leaving the block is the failure being looked for |
-| 573 | Answers count empties and structural cuts | the two numbers that say whether a model is usable at a caret |
-| 574 | The same run given twice is numbered apart | identical answers are the determinism check |
-| 575 | Answers written as JSON | `--json`, for a comparison worth keeping |
-| 576 | `make model-probe`, with `COMPARE=` | |
+| 567 | `probe` command | six carets, answered the same way every time |
+| 568 | Two checkpoints side by side at every caret | `--compare` |
+| 569 | Temperature zero and a fixed seed by default | a difference between rows is a difference between models |
+| 570 | Every case starts from the same sampler state | not from wherever the last one left it |
+| 571 | Cases can come from a file | `{name, prefix, suffix, line_comment}` |
+| 572 | A case with no prefix is refused, by number | so the file can be fixed |
+| 573 | Line breaks are printed, not taken | a completion leaving the block is the failure being looked for |
+| 574 | Answers count empties and structural cuts | the two numbers that say whether a model is usable at a caret |
+| 575 | The same run given twice is numbered apart | identical answers are the determinism check |
+| 576 | Answers written as JSON | `--json`, for a comparison worth keeping |
+| 577 | `make model-probe`, with `COMPARE=` | |
 
 ## Knowing where the caret is
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 577 | Breadcrumb bar above the editor | folders, file, then the declarations the caret is inside |
-| 578 | The chain is built from the outline | an entry knows its depth, not what it is under |
-| 579 | Click a declaration to go to its line | the fastest way out of a long method |
-| 580 | A sibling that happens to be shallower is not a parent | a top-level function after a method is not inside its class |
-| 581 | Nothing is shown when there is nothing to say | no folders and no enclosing declaration is just the tab strip again |
-| 582 | Folders come from the file name | which is where folders live in this workspace |
+| 578 | Breadcrumb bar above the editor | folders, file, then the declarations the caret is inside |
+| 579 | The chain is built from the outline | an entry knows its depth, not what it is under |
+| 580 | Click a declaration to go to its line | the fastest way out of a long method |
+| 581 | A sibling that happens to be shallower is not a parent | a top-level function after a method is not inside its class |
+| 582 | Nothing is shown when there is nothing to say | no folders and no enclosing declaration is just the tab strip again |
+| 583 | Folders come from the file name | which is where folders live in this workspace |
 
 ## Healing the caret
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 583 | The prompt is cut back to the boundary before its last token | a caret does not land on token boundaries |
-| 584 | The first token is chosen from those beginning with what was removed | so the characters come back |
-| 585 | Only the first | after it the model is on a boundary again |
-| 586 | What was put back is stripped from the answer | those characters are already in the file |
-| 587 | A one-token prompt is left alone | removing it would leave nothing to predict from |
-| 588 | A character split across two tokens is left alone | its bytes are not text on their own |
-| 589 | Specials are never candidates | a marker about the document cannot be what was typed |
-| 590 | Healed and unhealed are separate cache entries | they send different prompts |
-| 591 | On by default, `heal: false` to turn it off | `--no-heal` on the probe |
-| 592 | Measured: four of six carets answered with nothing without it | the first token the model wanted was a line break |
+| 584 | The prompt is cut back to the boundary before its last token | a caret does not land on token boundaries |
+| 585 | The first token is chosen from those beginning with what was removed | so the characters come back |
+| 586 | Only the first | after it the model is on a boundary again |
+| 587 | What was put back is stripped from the answer | those characters are already in the file |
+| 588 | A one-token prompt is left alone | removing it would leave nothing to predict from |
+| 589 | A character split across two tokens is left alone | its bytes are not text on their own |
+| 590 | Specials are never candidates | a marker about the document cannot be what was typed |
+| 591 | Healed and unhealed are separate cache entries | they send different prompts |
+| 592 | On by default, `heal: false` to turn it off | `--no-heal` on the probe |
+| 593 | Measured: four of six carets answered with nothing without it | the first token the model wanted was a line break |
 
 ## Scoring the part the editor asks for
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 593 | Held-out loss over the middles alone | the rest of the stream is what the model was given, not asked for |
-| 594 | Windows placed at the markers, not sampled | random windows scored 0.2% of what they read |
-| 595 | Each window ends a fixed distance after its marker | the first tokens of the answer are all an editor sees |
-| 596 | A marker without a whole window of context behind it is skipped | |
-| 597 | A second marker inside a window counts too | it is still a middle, with context |
-| 598 | Reported as None when the corpus has no middles | which is what a corpus prepared without them looks like |
-| 599 | The same checkpoint measures the same way twice | fixed seed, sorted windows |
-| 600 | `--infill-windows`, and `--no-infill` to skip the pass | |
-| 601 | Carried in the JSON report | |
+| 594 | Held-out loss over the middles alone | the rest of the stream is what the model was given, not asked for |
+| 595 | Windows placed at the markers, not sampled | random windows scored 0.2% of what they read |
+| 596 | Each window ends a fixed distance after its marker | the first tokens of the answer are all an editor sees |
+| 597 | A marker without a whole window of context behind it is skipped | |
+| 598 | A second marker inside a window counts too | it is still a middle, with context |
+| 599 | Reported as None when the corpus has no middles | which is what a corpus prepared without them looks like |
+| 600 | The same checkpoint measures the same way twice | fixed seed, sorted windows |
+| 601 | `--infill-windows`, and `--no-infill` to skip the pass | |
+| 602 | Carried in the JSON report | |
 
 ## Going to where a name was declared
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 602 | Go to definition, F12 or the palette | from the workspace index, not a language server |
-| 603 | The name the caret is on, or has just finished typing | a caret sits between characters |
-| 604 | A number is not a name | nothing to go to |
-| 605 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
-| 606 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
-| 607 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
-| 608 | It says how many declarations there were | so a wrong jump is explainable rather than mysterious |
-| 609 | A name nothing declares says so | rather than doing nothing |
-| 610 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
-| 611 | And says how many others share the name | |
+| 603 | Go to definition, F12 or the palette | from the workspace index, not a language server |
+| 604 | The name the caret is on, or has just finished typing | a caret sits between characters |
+| 605 | A number is not a name | nothing to go to |
+| 606 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
+| 607 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
+| 608 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
+| 609 | It says how many declarations there were | so a wrong jump is explainable rather than mysterious |
+| 610 | A name nothing declares says so | rather than doing nothing |
+| 611 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
+| 612 | And says how many others share the name | |
 
 ## Choosing between several completions
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 612 | A candidate is judged finished before it is judged likely | confidence alone does not separate good from bad here |
-| 613 | Finished means every bracket and quote it opened is closed | |
-| 614 | And that it does not end on a character demanding a right-hand side | `= [` and `sum([1, 2])` come out of the same caret |
-| 615 | Trailing whitespace does not decide it | |
-| 616 | A bracket inside a string does not count | |
-| 617 | Confidence still separates candidates that are equally finished | |
-| 618 | Measured: finished-first chose a finished answer at 5 of 6 carets, confidence alone at 2 | from the same four candidates each time |
-| 619 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
-| 620 | `--candidates` on the probe | which switches it from greedy to sampling |
+| 613 | A candidate is judged finished before it is judged likely | confidence alone does not separate good from bad here |
+| 614 | Finished means every bracket and quote it opened is closed | |
+| 615 | And that it does not end on a character demanding a right-hand side | `= [` and `sum([1, 2])` come out of the same caret |
+| 616 | Trailing whitespace does not decide it | |
+| 617 | A bracket inside a string does not count | |
+| 618 | Confidence still separates candidates that are equally finished | |
+| 619 | Measured: finished-first chose a finished answer at 5 of 6 carets, confidence alone at 2 | from the same four candidates each time |
+| 620 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
+| 621 | `--candidates` on the probe | which switches it from greedy to sampling |
 
 ## Every use of a name
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 621 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
-| 622 | Whole word by default | or `save` would match `saved` and `autosave` |
-| 623 | The search panel takes a request from elsewhere | rather than only what is typed into it |
-| 624 | Asking twice for the same name is two requests | the request is an object, not a string |
-| 625 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
+| 622 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
+| 623 | Whole word by default | or `save` would match `saved` and `autosave` |
+| 624 | The search panel takes a request from elsewhere | rather than only what is typed into it |
+| 625 | Asking twice for the same name is two requests | the request is an object, not a string |
+| 626 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
 
 ## What a request to the assistant may contain
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 626 | A workspace sent for symbols or completions is bounded by file count | but higher than one that would be run: nothing here is executed |
-| 627 | And by total source bytes, not only file count | |
-| 628 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
-| 629 | A few hundred files, as dropping a folder in produces, is answered rather than refused | the limit is the size of an index, not of a sandbox |
-| 630 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
-| 631 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
-| 632 | A completion prefix is bounded as the word it is | not as a document |
+| 627 | A workspace sent for symbols or completions is bounded by file count | but higher than one that would be run: nothing here is executed |
+| 628 | And by total source bytes, not only file count | |
+| 629 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
+| 630 | A few hundred files, as dropping a folder in produces, is answered rather than refused | the limit is the size of an index, not of a sandbox |
+| 631 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
+| 632 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
+| 633 | A completion prefix is bounded as the word it is | not as a document |
 
 ## Not implemented
 

@@ -171,8 +171,10 @@ export function CodeCraftIDE() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
   // Told apart from "this file declares nothing", which looks identical in an
-  // empty list and means something completely different.
-  const [symbolsUnavailable, setSymbolsUnavailable] = useState(false);
+  // empty list and means something completely different. A message rather than
+  // a flag, because "no daemon" and "this workspace is too big to index" are
+  // two problems with two answers.
+  const [symbolsProblem, setSymbolsProblem] = useState<string | null>(null);
   // Read by the definition lookup, which is registered once and must not go
   // stale as the index is refreshed.
   const symbolsRef = useRef<WorkspaceSymbol[]>([]);
@@ -553,14 +555,19 @@ export function CodeCraftIDE() {
         .then((result) => {
           if (cancelled) return;
           setSymbols(result.items);
-          setSymbolsUnavailable(false);
+          setSymbolsProblem(null);
         })
-        .catch(() => {
-          // The assistant daemon may not be running; the outline stays empty
-          // and the palette says so rather than showing a stale list.
+        .catch((error: unknown) => {
+          // The outline stays empty and says why rather than showing a stale
+          // list. A refused request is not an absent daemon, and telling
+          // someone to start one they are already running helps nobody.
           if (cancelled) return;
           setSymbols([]);
-          setSymbolsUnavailable(true);
+          setSymbolsProblem(
+            error instanceof ApiError && error.status === 422
+              ? 'This workspace is too large to index.'
+              : 'The assistant daemon is not running, so nothing is indexed.',
+          );
         });
     }, 600);
 
@@ -2180,7 +2187,7 @@ export function CodeCraftIDE() {
               symbols={symbols}
               fileName={activeFile?.name ?? ''}
               line={caret.line}
-              unavailable={symbolsUnavailable}
+              problem={symbolsProblem}
               onJump={handleJumpToLine}
             />
           }
