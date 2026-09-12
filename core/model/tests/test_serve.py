@@ -582,6 +582,23 @@ def test_best_of_costs_what_it_says(run_directory) -> None:
     assert many >= single
 
 
+def test_typing_in_a_file_bigger_than_the_context_still_reuses(run_directory) -> None:
+    """The case the prefix cache exists for, and the one it used to miss.
+
+    A prompt too long for the context is trimmed to the caret's neighbourhood.
+    While that window slid a token per keystroke, consecutive prompts shared
+    only the marker at the front, so the cache never fired on exactly the files
+    where prefilling costs the most.
+    """
+    engine = Engine(run_directory)
+    big = CORPUS * 4
+
+    for typed in ("", "r", "re", "ret", "retu"):
+        engine.infill(big + typed, "\n", max_tokens=4, temperature=0.0)
+
+    assert engine.prefix_cache.stats.partial == 4
+
+
 def test_candidates_share_one_prefill(run_directory) -> None:
     """Four candidates of one prompt are four samples, not four readings.
 
