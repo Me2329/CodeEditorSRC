@@ -893,10 +893,10 @@ across prompts would be a knob that looks like it is working.
 
 ## Tried, measured, and not kept
 
-Two ideas that looked right and did not survive contact with a measurement. They
-are here because the reasoning behind each is still sound and a larger model may
-well revisit them, and because a record of what was rejected is worth as much as
-the list of what was kept.
+Three ideas that looked right and did not survive contact with a measurement.
+They are here because the reasoning behind each is still sound and a larger
+model may well revisit them, and because a record of what was rejected is worth
+as much as the list of what was kept.
 
 **A confidence threshold on inline suggestions.** Every completion comes back
 with a mean log-probability, so the obvious move is to refuse to show one that
@@ -912,6 +912,23 @@ it back should give the model the language for free. On the checkpoint here it
 changed the answers without improving them: one case got worse, one got slightly
 more code-like, one was a wash. Three cases is not evidence, and shipping a knob
 on that basis is how a codebase fills up with options nobody can evaluate.
+
+**A warmup generation when the server starts.** The first pass through a model
+is supposed to pay for what every later one does not: lazy kernel selection,
+allocator growth, the first read of every weight. Running two tokens at startup
+should move that cost off whoever types first. Measured on this checkpoint, in
+separate processes, timing the first real request against a 500-token prompt:
+
+| | first request |
+| --- | --- |
+| cold | 0.096s, 0.148s, 0.092s |
+| after a warmup | 0.094s, 0.102s, 0.110s |
+
+The spread between runs is larger than any difference between the columns. At
+6.5M parameters there is not enough machinery for the first pass to be special,
+and shipping it would have meant a paragraph of explanation for something that
+does nothing. It is worth trying again at a size where the weights do not fit in
+cache.
 
 ## Abandoning work nobody wants
 
