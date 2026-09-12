@@ -307,6 +307,7 @@ class Engine:
         # second run of indentation would be worse than the loop.
         no_repeat_ngram: int = 4,
         stop: list[str] | None = None,
+        heal: bool = True,
         scope: bool = True,
         line_comment: str | None = None,
         use_cache: bool = True,
@@ -355,6 +356,7 @@ class Engine:
             repetition_penalty=repetition_penalty,
             no_repeat_ngram=no_repeat_ngram,
             stop=tuple(stop) if stop else (),
+            heal=heal,
             scope=scope,
             line_comment=line_comment,
         )
@@ -373,8 +375,24 @@ class Engine:
         if stop is None:
             stop = list(DEFAULT_INFILL_STOPS)
 
+        # Token healing: the prompt is cut back to a boundary the model has
+        # seen, and the characters removed are put back by constraining the
+        # first token. The caret itself does not move, so everything after this
+        # still sees the prefix the editor sent.
+        prompt_prefix, tail = self.tokenizer.heal(prefix) if heal else (prefix, "")
+        allowed_first = None
+        if tail:
+            candidates = self.tokenizer.starting_with(tail)
+            if candidates:
+                allowed_first = torch.tensor(candidates, dtype=torch.long, device=self.device)
+            else:
+                # Nothing in the vocabulary begins with those characters, which
+                # cannot happen for text that was tokenized from them, but a
+                # constraint with nothing in it would forbid every token.
+                prompt_prefix, tail = prefix, ""
+
         ids = self.tokenizer.encode_infill(
-            prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
+            prompt_prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
         )
         tokens = torch.tensor([ids], dtype=torch.long, device=self.device)
 
@@ -397,6 +415,7 @@ class Engine:
                 else None
             )
             count = 0
+            pending = tail
             logprobs: list[float] = []
 
             for token_id in self.model.generate(
@@ -414,6 +433,7 @@ class Engine:
                              self.tokenizer.fim_suffix, self.tokenizer.fim_middle},
                 prefix_caches=prefix_caches,
                 prefix_length=reused,
+                allowed_first=allowed_first,
                 # Remembering the prompt's own prefill, not the generated tail:
                 # the next request extends the prompt, never the suggestion.
                 on_prefill=(
@@ -430,6 +450,18 @@ class Engine:
                 piece = self.tokenizer.vocab.get(token_id)
                 if piece is not None:
                     text = decoder.decode(piece)
+                    if pending:
+                        # The healed characters were already in the file before
+                        # the model was asked; returning them would type them
+                        # twice.
+                        shared = min(len(pending), len(text))
+                        if text[:shared] == pending[:shared]:
+                            text = text[shared:]
+                            pending = pending[shared:]
+                        else:
+                            pending = ""
+                        if not text:
+                            continue
                     _, hit = watcher.feed(text)
                     if scoper is not None and scoper.feed(text)[1]:
                         hit = True
@@ -876,6 +908,7 @@ class Handler(BaseHTTPRequestHandler):
             "no_repeat_ngram": max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
             "stop": _stop_sequences(body),
             "scope": bool(body.get("scope", True)),
+            "heal": bool(body.get("heal", True)),
             # The caller knows the language and the server does not, so it says
             # what a comment looks like or the rule stays off.
             "line_comment": (

@@ -282,3 +282,48 @@ def test_the_markers_decode_to_nothing(tokenizer: Tokenizer) -> None:
 def test_an_unknown_special_name_is_refused(tokenizer: Tokenizer) -> None:
     with pytest.raises(KeyError):
         tokenizer.special_id("<|not_a_token|>")
+
+
+def test_healing_cuts_the_prompt_back_to_a_token_boundary(tokenizer) -> None:
+    prefix = "def parse(te"
+    healed, tail = tokenizer.heal(prefix)
+
+    assert tail
+    assert healed + tail == prefix
+    assert len(tokenizer.encode(healed)) == len(tokenizer.encode(prefix)) - 1
+
+
+def test_the_healed_characters_can_be_put_back(tokenizer) -> None:
+    _, tail = tokenizer.heal("def parse(te")
+    candidates = tokenizer.starting_with(tail)
+
+    assert candidates
+    assert all(tokenizer.vocab[token].startswith(tail.encode()) for token in candidates)
+    # The token that was removed is itself a candidate, so the constraint can
+    # always be satisfied.
+    assert tokenizer.encode("def parse(te")[-1] in candidates
+
+
+def test_nothing_is_healed_from_nothing(tokenizer) -> None:
+    assert tokenizer.heal("") == ("", "")
+
+
+def test_a_one_token_prompt_is_left_alone(tokenizer) -> None:
+    """Removing it would leave nothing to predict from."""
+    single = tokenizer.decode([tokenizer.encode("def parse(text)")[0]])
+
+    assert tokenizer.heal(single) == (single, "")
+
+
+def test_starting_with_nothing_matches_nothing(tokenizer) -> None:
+    # An empty constraint would otherwise mean every token, which is not what
+    # "no characters to put back" means.
+    assert tokenizer.starting_with("") == []
+
+
+def test_healing_never_offers_a_special_token(tokenizer) -> None:
+    specials = {
+        tokenizer.fim_prefix, tokenizer.fim_suffix, tokenizer.fim_middle,
+    }
+    for text in ["te", " ", "(", "return"]:
+        assert not specials & set(tokenizer.starting_with(text))

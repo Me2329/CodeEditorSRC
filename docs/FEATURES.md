@@ -905,6 +905,21 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 581 | Nothing is shown when there is nothing to say | no folders and no enclosing declaration is just the tab strip again |
 | 582 | Folders come from the file name | which is where folders live in this workspace |
 
+## Healing the caret
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 583 | The prompt is cut back to the boundary before its last token | a caret does not land on token boundaries |
+| 584 | The first token is chosen from those beginning with what was removed | so the characters come back |
+| 585 | Only the first | after it the model is on a boundary again |
+| 586 | What was put back is stripped from the answer | those characters are already in the file |
+| 587 | A one-token prompt is left alone | removing it would leave nothing to predict from |
+| 588 | A character split across two tokens is left alone | its bytes are not text on their own |
+| 589 | Specials are never candidates | a marker about the document cannot be what was typed |
+| 590 | Healed and unhealed are separate cache entries | they send different prompts |
+| 591 | On by default, `heal: false` to turn it off | `--no-heal` on the probe |
+| 592 | Measured: four of six carets answered with nothing without it | the first token the model wanted was a line break |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

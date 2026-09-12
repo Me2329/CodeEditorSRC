@@ -129,6 +129,68 @@ class Tokenizer:
     def fim_middle(self) -> int:
         return self.special_id("<|fim_middle|>")
 
+    # ---------------------------------------------------------- token healing
+
+    def heal(self, prefix: str) -> tuple[str, str]:
+        """Cut a prompt back to the token boundary before its last token.
+
+        A caret does not land on token boundaries. `def parse(te` ends inside
+        whatever token `te` would have been part of, and the model has never
+        seen that token in that position during training: in the corpus those
+        characters are the front of `text` or `test`, never a token of their
+        own. So the distribution it predicts from is one it was never trained
+        on, and the completion that follows is worse than the model is.
+
+        Healing removes the last token from the prompt and makes the generator
+        put it back, choosing among the tokens that begin with those characters.
+        The model then predicts from a boundary it has seen, and is free to pick
+        the longer token the text was heading towards.
+
+        Returns the shortened prefix and the characters taken off it. Both
+        empty-handed cases return the prefix unchanged: nothing to heal, and
+        nothing lost.
+        """
+        if not prefix:
+            return prefix, ""
+
+        ids = self.encode(prefix)
+        if len(ids) < 2:
+            # One token is the whole prompt. Removing it would leave nothing to
+            # predict from, which is worse than an unhealed boundary.
+            return prefix, ""
+
+        piece = self.vocab.get(ids[-1])
+        if piece is None:
+            return prefix, ""
+        try:
+            tail = piece.decode("utf-8")
+        except UnicodeDecodeError:
+            # A character split across two tokens. Its bytes are not text on
+            # their own, and matching tokens by string would be nonsense.
+            return prefix, ""
+
+        # Not every token's text is a suffix of the prompt: a tokenizer is free
+        # to encode in ways that do not line up character for character.
+        if not tail or not prefix.endswith(tail):
+            return prefix, ""
+        return prefix[: -len(tail)], tail
+
+    def starting_with(self, text: str) -> list[int]:
+        """Every ordinary token whose text begins with this.
+
+        The set the first healed token is chosen from. Specials are excluded:
+        they are markers about the document, and one of them cannot be the
+        characters the user typed.
+        """
+        if not text:
+            return []
+        wanted = text.encode("utf-8")
+        return [
+            token
+            for token, piece in self.vocab.items()
+            if piece.startswith(wanted) and token >= BYTE_OFFSET
+        ]
+
     # ------------------------------------------------------ fill in the middle
 
     def encode_infill(

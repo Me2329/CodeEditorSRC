@@ -381,6 +381,7 @@ class CodeCraftLM(nn.Module):
         prefix_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         prefix_length: int = 0,
         on_prefill=None,
+        allowed_first: torch.Tensor | None = None,
     ):
         """Yield tokens one at a time, using the cache so each step is O(1).
 
@@ -455,6 +456,15 @@ class CodeCraftLM(nn.Module):
                 next_logits = _apply_repetition_penalty(
                     next_logits, generated, repetition_penalty
                 )
+
+            if allowed_first is not None and not produced:
+                # Token healing: the prompt was cut back to a token boundary and
+                # the characters removed have to come back, so the first token
+                # is chosen from those that begin with them. Only the first:
+                # after it the model is on a boundary again and unconstrained.
+                permitted = torch.full_like(next_logits, float("-inf"))
+                permitted[:, allowed_first] = next_logits[:, allowed_first]
+                next_logits = permitted
 
             banned = _ngram_bans(produced, no_repeat_ngram)
             if banned:

@@ -990,3 +990,63 @@ def test_the_infill_route_says_why_the_completion_ended(base_url: str) -> None:
     body = post(f"{base_url}/infill", {"prefix": "def f(", "suffix": "):\n    pass\n",
                                        "max_tokens": 8})
     assert "trimmed" in body and "stop" in body
+
+
+def test_healing_puts_back_what_it_took_off(run_directory) -> None:
+    """The characters cut from the prompt must not come back in the answer.
+
+    They are already in the file; returning them would type them twice.
+    """
+    engine = Engine(run_directory)
+    healed, tail = engine.tokenizer.heal("def parse(te")
+    assert tail, "this prompt should have something to heal"
+
+    text, _ = engine.infill("def parse(te", "):\n    pass\n", max_tokens=4, temperature=0.0)
+
+    assert not text.startswith(tail)
+
+
+def test_the_first_token_is_chosen_from_those_that_fit(run_directory) -> None:
+    """Healing constrains only the first token, and only to what was removed."""
+    engine = Engine(run_directory)
+    seen: list = []
+    original = engine.model.generate
+
+    def watching(*args, **kwargs):
+        seen.append(kwargs.get("allowed_first"))
+        return original(*args, **kwargs)
+
+    engine.model.generate = watching
+    engine.infill("def parse(te", "):\n    pass\n", max_tokens=2, temperature=0.0)
+
+    assert seen[0] is not None
+    _, tail = engine.tokenizer.heal("def parse(te")
+    allowed = set(int(token) for token in seen[0])
+    assert allowed == set(engine.tokenizer.starting_with(tail))
+
+
+def test_healing_can_be_turned_off(run_directory) -> None:
+    engine = Engine(run_directory)
+    seen: list = []
+    original = engine.model.generate
+
+    def watching(*args, **kwargs):
+        seen.append(kwargs.get("allowed_first"))
+        return original(*args, **kwargs)
+
+    engine.model.generate = watching
+    engine.infill("def parse(te", "):\n", max_tokens=2, temperature=0.0, heal=False)
+
+    assert seen == [None]
+
+
+def test_healed_and_unhealed_are_different_questions(run_directory) -> None:
+    """They send different prompts, so the cache must not answer for both."""
+    engine = speaking(Engine(run_directory), "xyz")
+    first: dict = {}
+    second: dict = {}
+    engine.infill("def parse(te", "):\n", max_tokens=4, report=first)
+    engine.infill("def parse(te", "):\n", max_tokens=4, heal=False, report=second)
+
+    assert first["cached"] is False
+    assert second["cached"] is False

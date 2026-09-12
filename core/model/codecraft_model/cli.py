@@ -858,6 +858,7 @@ def command_probe(args: argparse.Namespace) -> int:
                 max_tokens=args.tokens,
                 temperature=args.temperature,
                 line_comment=case.line_comment,
+                heal=not args.no_heal,
                 scope=not args.no_scope,
                 use_cache=False,
                 report=recorded,
@@ -1249,6 +1250,11 @@ def main(argv: list[str] | None = None) -> int:
         help="zero, so the same checkpoint answers the same way twice",
     )
     prober.add_argument("--seed", type=int, default=1337)
+    prober.add_argument(
+        "--no-heal",
+        action="store_true",
+        help="ask from the caret as it falls, without cutting back to a token boundary",
+    )
     prober.add_argument(
         "--no-scope",
         action="store_true",

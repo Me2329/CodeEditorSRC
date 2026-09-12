@@ -1039,6 +1039,54 @@ hides exactly that. Passing the same run twice is a supported thing to do: the
 two rows are numbered apart, and identical answers are the check that the probe
 is deterministic.
 
+## Healing the caret
+
+A caret does not land on token boundaries. `def parse(te` ends inside whatever
+token those two characters would have been part of: in the corpus they are the
+front of `text` or `test`, never a token of their own. The model is asked to
+continue from a token it has never seen in that position, and what it does with
+that is the failure the editor had been throwing away — it answers a half-
+written line by starting a new one.
+
+So the prompt is cut back to the boundary before its last token, and the first
+generated token is chosen from those that begin with the characters removed.
+The model predicts from a boundary it has seen, is free to reach the longer
+token the text was heading towards, and the characters it puts back are
+stripped before the completion is returned: they are already in the file.
+
+Measured on a frozen copy of the 20M checkpoint, six carets, temperature zero:
+
+```
+call argument   print(⟨here⟩)
+  without: (nothing — it began with a line break, and the block rule cut it)
+  with:    item, item=item
+
+function body   def load(path):\n    ⟨here⟩
+  without: \n\n# The `get` file is not supported for the `get` command.
+  with:    return_value,\n            )\n        return str(path)
+
+condition       if value ⟨here⟩:
+  without: (nothing)
+  with:    from pydantic_core import SchemaValidator, core_schema
+```
+
+| | empty answers | cut for structure |
+| --- | --- | --- |
+| without healing | 4 of 6 | 4 |
+| with healing | 0 of 6 | 4 |
+
+Four of six carets produced nothing at all without it, because the first token
+the model wanted was a line break. Most of what healing produces instead is
+still wrong — this is a 6.5M-parameter model — but it is wrong on the line the
+caret is on, which is the difference between a suggestion that can be judged
+and no suggestion at all. It is on by default, and `--no-heal` on the probe
+turns it off.
+
+The measurement itself has a trap worth recording: the first pair of numbers
+came out different from the second because the training run rewrote
+`model.pt` between them. A probe is only a comparison if the checkpoint holds
+still, so measure against a copy.
+
 ## Stopping on structure
 
 Stopping on text needs to know what the model will say. The two ways a small
