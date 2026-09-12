@@ -9,8 +9,17 @@ function symbol(
   container = '',
   file = 'main.py',
   kind = 'function',
+  endLine?: number,
 ): WorkspaceSymbol {
-  return { name, kind, file, line, detail: `def ${name}()`, container };
+  return {
+    name,
+    kind,
+    file,
+    line,
+    detail: `def ${name}()`,
+    container,
+    ...(endLine === undefined ? {} : { end_line: endLine }),
+  };
 }
 
 describe('outlineFor', () => {
@@ -184,5 +193,45 @@ describe('ancestry', () => {
       'main.py',
     );
     expect(ancestry(siblings, 11).map((entry) => entry.name)).toEqual(['second']);
+  });
+});
+
+describe('enclosing, with the end lines the index reports', () => {
+  const entries = outlineFor(
+    [
+      symbol('Engine', 1, '', 'main.py', 'class', 9),
+      symbol('start', 2, 'Engine', 'main.py', 'function', 5),
+      symbol('stop', 7, 'Engine', 'main.py', 'function', 9),
+    ],
+    'main.py',
+  );
+
+  it('is the innermost declaration the caret is inside', () => {
+    expect(entries[enclosing(entries, 3)]?.name).toBe('start');
+    expect(entries[enclosing(entries, 8)]?.name).toBe('stop');
+  });
+
+  it('is the class between its methods', () => {
+    expect(entries[enclosing(entries, 6)]?.name).toBe('Engine');
+  });
+
+  it('is nothing below the last declaration', () => {
+    // The old answer here was "the last one", which is how a breadcrumb bar
+    // comes to claim you are somewhere you are not.
+    expect(enclosing(entries, 20)).toBe(-1);
+  });
+
+  it('treats a declaration with no reported end as running to the next one', () => {
+    const older = outlineFor([symbol('f', 1), symbol('g', 10)], 'main.py');
+    expect(older[enclosing(older, 5)]?.name).toBe('f');
+    expect(older[enclosing(older, 500)]?.name).toBe('g');
+  });
+
+  it('and so does a declaration whose body never arrived', () => {
+    const prototype = outlineFor(
+      [symbol('declared', 1, '', 'lib.rs', 'function', 1)],
+      'lib.rs',
+    );
+    expect(prototype[enclosing(prototype, 4)]?.name).toBe('declared');
   });
 });

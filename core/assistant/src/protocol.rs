@@ -247,6 +247,10 @@ pub struct Symbol {
     /// indentation, which is what an outline needs and all these languages
     /// agree on.
     pub container: String,
+    /// The last line that still belongs to it, judged the same way: the line
+    /// before the next one indented no further. Equal to `line` for a
+    /// declaration whose body never arrived.
+    pub end_line: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

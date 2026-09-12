@@ -112,6 +112,9 @@ export interface Symbol {
   /** The declaration this one sits inside, by name. Empty at the top level,
    *  and absent from an assistant daemon older than the field. */
   container?: string;
+  /** The last line that still belongs to it. Absent from an older daemon, in
+   *  which case a declaration is treated as running to the next one. */
+  end_line?: number;
 }
 
 export interface AnalysisResult {

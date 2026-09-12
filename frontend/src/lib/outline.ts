@@ -18,6 +18,9 @@ export interface OutlineEntry {
   name: string;
   kind: string;
   line: number;
+  /** The last line that still belongs to it, from the index. Equal to `line`
+   *  when the index did not say, which is what an older daemon reports. */
+  endLine: number;
   detail: string;
   /** How far in to draw it. Zero for a top-level declaration. */
   depth: number;
@@ -50,6 +53,7 @@ export function outlineFor(symbols: WorkspaceSymbol[], fileName: string): Outlin
       name: symbol.name,
       kind: symbol.kind,
       line: symbol.line,
+      endLine: symbol.end_line ?? symbol.line,
       detail: symbol.detail,
       depth,
     });
@@ -60,16 +64,23 @@ export function outlineFor(symbols: WorkspaceSymbol[], fileName: string): Outlin
 /**
  * Which entry the caret is inside, as an index, or -1.
  *
- * The last declaration at or above the caret. Without an end line there is
- * nothing better available, and it is right everywhere except in the blank
- * space after the last declaration of a file, where it says the last one.
+ * The last declaration that starts at or above the caret and has not ended
+ * before it. The end matters: below the last function of a file the answer is
+ * nothing, and saying "the last function" there is how a breadcrumb bar comes
+ * to claim you are somewhere you are not.
+ *
+ * An index that reports no end lines says every declaration ends where it
+ * starts, which would make every caret below a declaration line answer
+ * nothing. So a declaration whose end is its own line is treated as running to
+ * the next one, which is the old behaviour and the right fallback.
  */
 export function enclosing(entries: OutlineEntry[], line: number): number {
   let found = -1;
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
-    if (entry && entry.line <= line) found = index;
-    else break;
+    if (!entry || entry.line > line) break;
+    const ends = entry.endLine > entry.line ? entry.endLine : Infinity;
+    if (ends >= line) found = index;
   }
   return found;
 }

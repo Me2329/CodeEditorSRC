@@ -196,16 +196,22 @@ pub struct Index {
 impl Index {
     pub fn build(language: &str, files: &[SourceFile]) -> Self {
         let rules = rules_for(language);
-        let mut symbols = Vec::new();
+        let mut symbols: Vec<Symbol> = Vec::new();
         let mut identifiers: HashMap<String, usize> = HashMap::new();
 
         for file in files {
             // What each declaration in this file sits inside, as a stack of
-            // (indentation, name). A declaration indented further than the one
-            // on top of the stack is inside it; one indented the same or less
-            // has closed it. That is true of a braced language as much as an
-            // indented one, because nobody writes a method at column zero.
-            let mut containers: Vec<(usize, String)> = Vec::new();
+            // (indentation, name, index into `symbols`). A declaration indented
+            // further than the one on top of the stack is inside it; a line
+            // indented the same or less has closed it. That is true of a braced
+            // language as much as an indented one, because nobody writes a
+            // method at column zero.
+            //
+            // Every line moves the stack, not only the declarations, or a
+            // declaration would appear to run until the next one rather than
+            // until its own body ended.
+            let mut containers: Vec<(usize, String, usize)> = Vec::new();
+            let mut last_content_line = 0usize;
 
             for (offset, raw_line) in file.content.lines().enumerate() {
                 let line_number = offset + 1;
@@ -214,6 +220,19 @@ impl Index {
                     continue;
                 }
                 let indent = raw_line.len() - raw_line.trim_start().len();
+
+                // A line that closes a block is the last line of it; anything
+                // else means the block ended on the line before this one.
+                let closes_here = trimmed.starts_with(['}', ')', ']']);
+                while containers.last().is_some_and(|(outer, _, _)| *outer >= indent) {
+                    let (_, _, index) = containers.pop().expect("just checked");
+                    symbols[index].end_line = if closes_here {
+                        line_number
+                    } else {
+                        last_content_line.max(symbols[index].line)
+                    };
+                }
+                last_content_line = line_number;
 
                 let is_comment = rules
                     .line_comment
@@ -278,15 +297,9 @@ impl Index {
                             let name = clean_name(candidate);
                             if !name.is_empty() && is_identifier_start(name.chars().next().unwrap())
                             {
-                                while containers
-                                    .last()
-                                    .is_some_and(|(outer, _)| *outer >= indent)
-                                {
-                                    containers.pop();
-                                }
                                 let container = containers
                                     .last()
-                                    .map(|(_, name)| name.clone())
+                                    .map(|(_, name, _)| name.clone())
                                     .unwrap_or_default();
                                 symbols.push(Symbol {
                                     name: name.to_string(),
@@ -295,13 +308,19 @@ impl Index {
                                     line: line_number,
                                     detail: trimmed.chars().take(120).collect(),
                                     container,
+                                    end_line: line_number,
                                 });
-                                containers.push((indent, name.to_string()));
+                                containers.push((indent, name.to_string(), symbols.len() - 1));
                             }
                         }
                         break;
                     }
                 }
+            }
+
+            // Whatever is still open when the file ends, ends with it.
+            for (_, _, index) in containers.drain(..) {
+                symbols[index].end_line = last_content_line.max(symbols[index].line);
             }
         }
 
@@ -378,6 +397,47 @@ mod tests {
         assert_eq!(index.find("start").unwrap().container, "Server");
         // The closing brace is at column zero, and so is what follows it.
         assert_eq!(index.find("helper").unwrap().container, "");
+    }
+
+    #[test]
+    fn a_declaration_ends_where_its_body_does() {
+        let files = vec![file(
+            "main.py",
+            "def f():\n    a = 1\n    b = 2\n\n\ndef g():\n    pass\n",
+        )];
+        let index = Index::build("python", &files);
+        // Not the line before `def g`, which is blank, and not `def g` itself.
+        assert_eq!(index.find("f").unwrap().end_line, 3);
+        assert_eq!(index.find("g").unwrap().end_line, 7);
+    }
+
+    #[test]
+    fn a_closing_brace_is_the_last_line_of_what_it_closes() {
+        let files = vec![file(
+            "lib.rs",
+            "fn first() {\n    call();\n}\n\nfn second() {\n    call();\n}\n",
+        )];
+        let index = Index::build("rust", &files);
+        assert_eq!(index.find("first").unwrap().end_line, 3);
+        assert_eq!(index.find("second").unwrap().end_line, 7);
+    }
+
+    #[test]
+    fn a_class_ends_after_its_last_method() {
+        let files = vec![file(
+            "main.py",
+            "class Engine:\n    def start(self):\n        pass\n\nprint(1)\n",
+        )];
+        let index = Index::build("python", &files);
+        assert_eq!(index.find("start").unwrap().end_line, 3);
+        assert_eq!(index.find("Engine").unwrap().end_line, 3);
+    }
+
+    #[test]
+    fn a_declaration_with_no_body_ends_on_its_own_line() {
+        let files = vec![file("lib.rs", "fn declared();\nfn other();\n")];
+        let index = Index::build("rust", &files);
+        assert_eq!(index.find("declared").unwrap().end_line, 1);
     }
 
     #[test]
