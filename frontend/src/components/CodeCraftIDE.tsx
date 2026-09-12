@@ -1134,6 +1134,38 @@ export function CodeCraftIDE() {
   extensionsRef.current = extensions.host;
 
   /**
+   * The Monaco theme to use: a contributed one if it is still contributed, and
+   * the interface theme's base otherwise.
+   */
+  const editorTheme = extensions.host.allThemes().some((theme) => theme.id === preferences.editorTheme)
+    ? preferences.editorTheme
+    : themeById(preferences.theme).monacoBase;
+
+  /**
+   * Editor colour schemes contributed by extensions.
+   *
+   * Defined with Monaco when they arrive and again whenever the set changes, so
+   * enabling a theme extension makes its themes selectable without a reload.
+   * A theme named in preferences but no longer contributed falls back to the
+   * interface theme rather than leaving Monaco with a name it cannot resolve.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+
+    for (const theme of extensions.host.allThemes()) {
+      monaco.editor.defineTheme(theme.id, {
+        base: theme.base,
+        // Inherited, so a contribution is a short list of overrides rather than
+        // a complete scheme that would still miss whatever Monaco adds next.
+        inherit: true,
+        rules: [],
+        colors: theme.colors,
+      });
+    }
+  }, [monacoReady, extensions]);
+
+  /**
    * Comment markers and brackets for the language on screen.
    *
    * Monaco ships configurations for the languages it knows and nothing for the
@@ -1852,6 +1884,7 @@ export function CodeCraftIDE() {
       <SettingsPanel
         open={settingsOpen}
         preferences={preferences}
+        editorThemes={extensions.host.allThemes()}
         onChange={updatePreference}
         onReset={() => {
           setPreferences({ ...DEFAULT_PREFERENCES });
@@ -1945,7 +1978,7 @@ export function CodeCraftIDE() {
                   key={activeFile.id}
                   height="100%"
                   language={activeFile.language}
-                  theme={themeById(preferences.theme).monacoBase}
+                  theme={editorTheme}
                   value={activeFile.content}
                   onChange={handleEditorChange}
                   onMount={handleEditorMount}
@@ -1983,7 +2016,7 @@ export function CodeCraftIDE() {
                       key={`split:${splitFile.id}`}
                       height="100%"
                       language={splitFile.language}
-                      theme={themeById(preferences.theme).monacoBase}
+                      theme={editorTheme}
                       value={splitFile.content}
                       onChange={(value) => {
                         if (value === undefined) return;

@@ -768,6 +768,11 @@ the extension was listed as installed, enabled, and doing nothing.
 | 502 | The file's real indentation, not the preference | the most common leading-space width |
 | 503 | The note count uses the shared scan | all three places now agree on how many a file has |
 | 504 | Contributed language configurations reach Monaco | Ctrl+/ did nothing in a language Monaco has never heard of |
+| 505 | Contributed themes colour the editor | three of them, from an extension that can be turned off |
+| 506 | They are defined with Monaco when they arrive | so enabling a theme extension needs no reload |
+| 507 | The interface keeps its own theme | a theme contribution can only reach the editor, and pretending otherwise leaves half the window unchanged |
+| 508 | A theme that is no longer contributed falls back | rather than leaving Monaco a name it cannot resolve |
+| 509 | The choice survives the extension being disabled | forgetting it is worse than holding a name that currently resolves to nothing |
 
 ## Not implemented
 
@@ -783,9 +788,6 @@ Stated plainly so the list above can be trusted:
 - Language servers. Completion comes from the local index, not from a
   per-language LSP.
 - Git integration. Local history is snapshots in the browser, not version control.
-- Extension themes. The host accepts a theme contribution and nothing renders
-  one: the five themes in settings are the editor's own. The contribution point
-  is API surface with no implementation behind it.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
 - Installing extensions from a registry. The host loads bundled extensions and
   the contract is public, but there is no marketplace, no download, and no

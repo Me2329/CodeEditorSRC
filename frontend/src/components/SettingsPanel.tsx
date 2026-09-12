@@ -12,6 +12,14 @@ import { X } from 'lucide-react';
 import { THEMES, type Preferences, type ThemeId } from '../lib/preferences';
 
 interface Props {
+  /**
+   * Editor colour schemes extensions have contributed.
+   *
+   * Passed in rather than imported: which ones exist depends on what is
+   * enabled, and settings should not have to know about the extension host to
+   * show a list.
+   */
+  editorThemes?: readonly { id: string; label: string }[];
   open: boolean;
   preferences: Preferences;
   onChange: <K extends keyof Preferences>(key: K, value: Preferences[K]) => void;
@@ -19,7 +27,14 @@ interface Props {
   onClose: () => void;
 }
 
-export function SettingsPanel({ open, preferences, onChange, onReset, onClose }: Props) {
+export function SettingsPanel({
+  open,
+  preferences,
+  editorThemes = [],
+  onChange,
+  onReset,
+  onClose,
+}: Props) {
   if (!open) return null;
 
   return (
@@ -64,6 +79,23 @@ export function SettingsPanel({ open, preferences, onChange, onReset, onClose }:
                 ))}
               </select>
             </Row>
+            {editorThemes.length > 0 && (
+              <Row label="Editor colours">
+                <select
+                  value={preferences.editorTheme}
+                  onChange={(event) => onChange('editorTheme', event.target.value)}
+                  className="w-44 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 outline-none focus:border-accent"
+                  title="A theme from an extension, for the editor surface only"
+                >
+                  <option value="">Match the interface</option>
+                  {editorThemes.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.label}
+                    </option>
+                  ))}
+                </select>
+              </Row>
+            )}
             <Slider
               label="Font size"
               value={preferences.fontSize}

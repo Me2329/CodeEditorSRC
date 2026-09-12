@@ -170,6 +170,14 @@ export interface Preferences {
   snippets: boolean;
   /** Show a rendered view beside a markdown file instead of the terminal. */
   markdownPreview: boolean;
+  /**
+   * An extension theme for the editor surface, or empty to follow `theme`.
+   *
+   * Separate from `theme` because a theme contribution can only reach the
+   * editor: the panels and the terminal keep the interface theme, and pretending
+   * otherwise would leave half the window unchanged.
+   */
+  editorTheme: string;
   /** Shortcut overrides, as written text against a command id. */
   keybindings: Record<string, string>;
   /** Show whitespace characters. */
@@ -195,6 +203,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   inlineCompletion: true,
   snippets: true,
   markdownPreview: true,
+  editorTheme: '',
   keybindings: {},
   renderWhitespace: false,
   zenMode: false,
@@ -230,6 +239,10 @@ export function normalisePreferences(raw: unknown): Preferences {
     inlineCompletion: flag(source.inlineCompletion, DEFAULT_PREFERENCES.inlineCompletion),
     snippets: flag(source.snippets, DEFAULT_PREFERENCES.snippets),
     markdownPreview: flag(source.markdownPreview, DEFAULT_PREFERENCES.markdownPreview),
+    // Not checked against the installed extensions: one may be disabled now and
+    // enabled again later, and forgetting the choice in between is worse than
+    // holding a name that currently resolves to nothing.
+    editorTheme: typeof source.editorTheme === 'string' ? source.editorTheme.slice(0, 64) : '',
     // Only string values survive: a hand-edited file cannot install a binding
     // the resolver would choke on.
     keybindings: Object.fromEntries(

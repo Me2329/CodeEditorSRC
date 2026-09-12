@@ -14,6 +14,7 @@ import { lintPack } from './lint';
 import { snippetPack } from './snippets';
 import { statusPack } from './status';
 import { textToolkit } from './text-toolkit';
+import { themePack } from './themes';
 
 export const BUILTIN_EXTENSIONS: readonly Extension[] = [
   textToolkit,
@@ -21,6 +22,7 @@ export const BUILTIN_EXTENSIONS: readonly Extension[] = [
   lintPack,
   formatPack,
   statusPack,
+  themePack,
 ];
 
-export { formatPack, lintPack, snippetPack, statusPack, textToolkit };
+export { formatPack, lintPack, snippetPack, statusPack, textToolkit, themePack };
