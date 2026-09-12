@@ -11,7 +11,7 @@ import { Braces, FileCode, Hash, Search, Terminal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { formatShortcut, rank, type Command } from '../lib/commands';
-import type { Snippet } from '../lib/snippets';
+import type { SnippetContribution } from '../lib/extensions/types';
 import type { Symbol as WorkspaceSymbol, VirtualFile } from '../lib/types';
 
 export type PaletteMode =
@@ -33,11 +33,11 @@ interface Props {
    * Typing a prefix in the editor finds a snippet you already know about; this
    * is for the ones you do not, which is most of them the first time.
    */
-  snippets: Snippet[];
+  snippets: SnippetContribution[];
   onClose: () => void;
   onOpenFile: (id: string) => void;
   onGoToSymbol: (symbol: WorkspaceSymbol) => void;
-  onInsertSnippet: (snippet: Snippet) => void;
+  onInsertSnippet: (snippet: SnippetContribution) => void;
   onCompareFile: (fileId: string) => void;
   onSplitFile: (fileId: string) => void;
 }
@@ -107,13 +107,13 @@ export function CommandPalette({
         }));
     }
     if (mode === 'snippets') {
-      return rank(snippets, query, (snippet) => `${snippet.prefix} ${snippet.label} ${snippet.description}`)
+      return rank(snippets, query, (snippet) => `${snippet.prefix} ${snippet.description}`)
         .slice(0, MAX_RESULTS)
         .map((match) => ({
-          key: `${match.item.languages[0]}:${match.item.prefix}`,
-          primary: match.item.label,
+          key: `${match.item.language}:${match.item.prefix}`,
+          primary: match.item.prefix,
           secondary: match.item.description,
-          trailing: match.item.prefix,
+          trailing: match.item.language,
           icon: Braces,
           activate: () => onInsertSnippet(match.item),
         }));

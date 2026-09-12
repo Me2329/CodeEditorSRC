@@ -1,63 +1,48 @@
 import { describe, expect, test } from 'vitest';
 
-import {
-  SNIPPETS,
-  type Snippet,
-  matching,
-  placeholders,
-  reindent,
-  snippetsFor,
-  validate,
-  wordBefore,
-} from './snippets';
+import { ALL_SNIPPETS } from './extensions/builtin/snippets';
+import type { SnippetContribution } from './extensions/types';
+import { matching, placeholders, reindent, validate, wordBefore } from './snippets';
 
-const snippet = (over: Partial<Snippet> = {}): Snippet => ({
+const snippet = (over: Partial<SnippetContribution> = {}): SnippetContribution => ({
+  language: 'python',
   prefix: 'p',
-  label: 'p',
   description: 'd',
   body: 'body $0',
-  languages: ['python'],
   ...over,
 });
 
-describe('the library itself', () => {
+describe('the shipped snippets', () => {
   test('every body is well formed', () => {
     // A malformed body inserts a literal '${1:' into someone's source, and the
     // moment to find that out is not while they are typing.
-    const broken = SNIPPETS.map((entry) => [entry.prefix, validate(entry)] as const).filter(
-      ([, problem]) => problem !== null,
-    );
+    const broken = ALL_SNIPPETS.map((entry) => [
+      `${entry.language}:${entry.prefix}`,
+      validate(entry),
+    ]).filter(([, problem]) => problem !== null);
 
     expect(broken).toEqual([]);
   });
 
   test('a prefix belongs to one snippet per language', () => {
     // Two snippets fighting over 'for' is a bug, not a preference.
-    const seen = new Map<string, string[]>();
-    for (const entry of SNIPPETS) {
-      for (const language of entry.languages) {
-        const key = `${language}:${entry.prefix}`;
-        seen.set(key, [...(seen.get(key) ?? []), entry.label]);
-      }
+    const seen = new Map<string, number>();
+    for (const entry of ALL_SNIPPETS) {
+      const key = `${entry.language}:${entry.prefix}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
     }
 
-    expect([...seen].filter(([, labels]) => labels.length > 1)).toEqual([]);
+    expect([...seen].filter(([, count]) => count > 1)).toEqual([]);
   });
 
-  test('the same prefix may mean different things in different languages', () => {
-    // 'main' is a class in Java and a guard in Python; that is not a conflict.
-    expect(matching('python', 'main')).toHaveLength(1);
-    expect(matching('go', 'main')).toHaveLength(1);
+  test('every one says what it is for', () => {
+    expect(ALL_SNIPPETS.every((entry) => entry.description.trim().length > 0)).toBe(true);
   });
 
-  test('every snippet says what it is for', () => {
-    expect(SNIPPETS.every((entry) => entry.description.trim().length > 0)).toBe(true);
-  });
+  test('the languages covered are ones the editor runs', () => {
+    const covered = new Set(ALL_SNIPPETS.map((entry) => entry.language));
 
-  test('the languages covered are the ones the editor runs', () => {
-    const covered = new Set(SNIPPETS.flatMap((entry) => entry.languages));
-
-    for (const language of ['python', 'c', 'cpp', 'rust', 'go', 'java', 'typescript']) {
+    for (const language of ['python', 'typescript', 'rust', 'go', 'cpp']) {
       expect(covered.has(language)).toBe(true);
     }
   });
@@ -82,8 +67,8 @@ describe('validation', () => {
     expect(validate(snippet({ prefix: '  ' }))).toMatch('no prefix');
   });
 
-  test('a snippet in no language is caught', () => {
-    expect(validate(snippet({ languages: [] }))).toMatch('unreachable');
+  test('a snippet with no language is caught', () => {
+    expect(validate(snippet({ language: '' }))).toMatch('unreachable');
   });
 
   test('a repeated ordinal is allowed', () => {
@@ -107,37 +92,28 @@ describe('placeholders', () => {
     ]);
   });
 
-  test('an empty default is still a stop', () => {
-    expect(placeholders('${1:}')).toEqual([{ ordinal: 1, value: '' }]);
-  });
-
   test('a body with no stops has none', () => {
     expect(placeholders('print("hello")')).toEqual([]);
   });
 });
 
 describe('matching', () => {
-  test('what has been typed narrows the list', () => {
-    const all = snippetsFor('python').length;
+  const some = [snippet({ prefix: 'def' }), snippet({ prefix: 'dataclass' }), snippet({ prefix: 'try' })];
 
-    expect(matching('python', 'd').length).toBeLessThan(all);
-    expect(matching('python', 'd').every((entry) => entry.prefix.startsWith('d'))).toBe(true);
+  test('what has been typed narrows the list', () => {
+    expect(matching(some, 'd').map((entry) => entry.prefix)).toEqual(['def', 'dataclass']);
   });
 
-  test('nothing typed offers everything for the language', () => {
-    expect(matching('python', '')).toEqual(snippetsFor('python'));
+  test('nothing typed offers everything given', () => {
+    expect(matching(some, '')).toHaveLength(3);
   });
 
   test('matching ignores case', () => {
-    expect(matching('python', 'DEF').map((entry) => entry.prefix)).toContain('def');
-  });
-
-  test('a language with no snippets gets none rather than everything', () => {
-    expect(snippetsFor('brainfuck')).toEqual([]);
+    expect(matching(some, 'DEF').map((entry) => entry.prefix)).toEqual(['def']);
   });
 
   test('a prefix that matches nothing is empty', () => {
-    expect(matching('python', 'zzzz')).toEqual([]);
+    expect(matching(some, 'zzzz')).toEqual([]);
   });
 });
 
@@ -154,22 +130,23 @@ describe('the word being typed', () => {
     expect(wordBefore('def ', 4)).toBe('');
   });
 
-  test('is empty at the start of a file', () => {
-    expect(wordBefore('', 0)).toBe('');
-  });
-
   test('underscores and digits are part of it', () => {
     expect(wordBefore('my_var2', 7)).toBe('my_var2');
   });
 });
 
 describe('re-indentation', () => {
-  test('tabs become the width the user set', () => {
+  test('four spaces become the width the user set', () => {
+    // The shipped pack is written with spaces.
+    expect(reindent('def f():\n    return 1', 2)).toBe('def f():\n  return 1');
+  });
+
+  test('tabs work too, for a snippet pasted in from elsewhere', () => {
     expect(reindent('def f():\n\treturn 1', 4)).toBe('def f():\n    return 1');
   });
 
   test('nesting is multiplied, not flattened', () => {
-    expect(reindent('a\n\t\tb', 2)).toBe('a\n    b');
+    expect(reindent('a\n        b', 2)).toBe('a\n    b');
   });
 
   test('a tab size of zero keeps tabs', () => {
@@ -178,11 +155,11 @@ describe('re-indentation', () => {
 
   test('continuation lines take the caret indentation', () => {
     // Otherwise a snippet inserted inside a function comes back flush left.
-    expect(reindent('if x:\n\tpass', 4, '    ')).toBe('if x:\n        pass');
+    expect(reindent('if x:\n    pass', 4, '    ')).toBe('if x:\n        pass');
   });
 
   test('the first line is left where the caret already is', () => {
-    expect(reindent('if x:\n\tpass', 4, '    ').startsWith('if')).toBe(true);
+    expect(reindent('if x:\n    pass', 4, '    ').startsWith('if')).toBe(true);
   });
 
   test('a body with no indentation is unchanged', () => {

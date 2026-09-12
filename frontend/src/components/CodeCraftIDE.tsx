@@ -46,12 +46,8 @@ import { nextAfter, position as problemPosition, previousBefore } from '../lib/p
 import { loadSession, reconcile, saveSession } from '../lib/session';
 import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
-import {
-  matching as matchingSnippets,
-  reindent,
-  type Snippet,
-  snippetsFor,
-} from '../lib/snippets';
+import type { SnippetContribution } from '../lib/extensions/types';
+import { matching as matchingSnippets, reindent } from '../lib/snippets';
 import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
 import {
   EMPTY as NO_PLACES,
@@ -176,6 +172,10 @@ export function CodeCraftIDE() {
   // The cursor listener is attached once at mount, so it reads the current file
   // through a ref rather than closing over the one that was showing then.
   const activeFileIdRef = useRef('');
+  // The snippet provider is registered once, so it reads the extension host
+  // through a ref: a snippet contributed after mount has to appear without the
+  // provider being registered again.
+  const extensionsRef = useRef<ReturnType<typeof useExtensions>['host'] | null>(null);
   // The extension API is built once and must see current state, so it reads
   // these rather than closing over a render's values.
   const filesRef = useRef<VirtualFile[]>([]);
@@ -973,7 +973,7 @@ export function CodeCraftIDE() {
    * than nothing happening at all.
    */
   const handleInsertSnippet = useCallback(
-    (snippet: Snippet) => {
+    (snippet: SnippetContribution) => {
       const editor = editorRef.current;
       const model = editor?.getModel();
       const position = editor?.getPosition();
@@ -1028,7 +1028,10 @@ export function CodeCraftIDE() {
         );
 
         return {
-          suggestions: matchingSnippets(model.getLanguageId(), word.word).map((entry) => ({
+          suggestions: matchingSnippets(
+            extensionsRef.current?.snippetsFor(model.getLanguageId()) ?? [],
+            word.word,
+          ).map((entry) => ({
             label: entry.prefix,
             kind: monaco.languages.CompletionItemKind.Snippet,
             detail: entry.description,
@@ -1124,6 +1127,9 @@ export function CodeCraftIDE() {
   );
 
   const extensions = useExtensions(extensionHostApi, language);
+  // Assigned here rather than with the other refs, which are set before this
+  // hook runs. The snippet provider reads it on demand, long after mount.
+  extensionsRef.current = extensions.host;
 
   /**
    * Whether the local model is running.
@@ -1644,7 +1650,8 @@ export function CodeCraftIDE() {
         id: 'edit.snippet',
         title: 'Insert a snippet',
         category: 'Edit',
-        when: () => snippetsFor(activeFile?.language ?? language).length > 0,
+        when: () =>
+          extensions.host.snippetsFor(activeFile?.language ?? language).length > 0,
         run: () => setPaletteMode('snippets'),
       },
       {
@@ -1767,7 +1774,7 @@ export function CodeCraftIDE() {
         commands={commands}
         files={byRecency(files, recent)}
         symbols={symbols}
-        snippets={snippetsFor(activeFile?.language ?? language)}
+        snippets={extensions.host.snippetsFor(activeFile?.language ?? language)}
         onClose={() => setPaletteMode(null)}
         onOpenFile={setActiveFileId}
         onGoToSymbol={handleGoToSymbol}

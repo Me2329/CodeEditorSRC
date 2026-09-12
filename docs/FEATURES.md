@@ -466,17 +466,21 @@ history lives in the browser alongside the workspace.
 
 ## Snippets
 
+The builtin Text Toolkit's sibling, the snippet pack, contributes forty-nine
+across thirteen languages through the extension host. The editor uses that,
+rather than a library of its own.
+
 | # | Feature | Notes |
 | --- | --- | --- |
-| 331 | A snippet library for twelve languages | Python, C, C++, JavaScript, TypeScript, Rust, Go, Java, shell, HTML, CSS, SQL, Markdown |
+| 331 | Snippets come from extensions | so one loaded later appears without the editor changing |
 | 332 | Offered in the completion list as you type | prefix matching, not fuzzy: a list that reorders under you is unreadable |
 | 333 | Tab stops, defaults and mirrors | `${1:name}` twice fills both from one typing |
 | 334 | A palette mode for browsing them | typing a prefix finds what you know; this is for what you do not |
 | 335 | Bodies re-indented to your tab size | and to the caret's own indentation, so one inserted inside a function is not flush left |
-| 336 | Every body validated by a test | an unclosed placeholder would insert `${1:` into someone's source |
-| 337 | One prefix per snippet per language | two snippets fighting over `for` is a bug, not a preference |
-| 338 | Consecutive tab stops enforced | a gap makes Tab land somewhere the author did not intend |
-| 339 | A toggle in settings | |
+| 336 | Tabs and four-space indentation both understood | the pack uses spaces; a snippet pasted from elsewhere may not |
+| 337 | Every shipped body validated by a test | an unclosed placeholder would insert `${1:` into someone's source |
+| 338 | One prefix per snippet per language | two snippets fighting over `for` is a bug, not a preference |
+| 339 | Consecutive tab stops enforced | a gap makes Tab land somewhere the author did not intend |
 | 340 | They work with no model running | which is the point of having them alongside inline completion |
 
 ## Repeat control
