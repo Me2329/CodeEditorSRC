@@ -165,6 +165,18 @@ On a 50-series card, check that PyTorch was built for it: a wheel without
 `sm_120` installs cleanly and then fails on every kernel launch, so the model
 checks the card against the wheel and names the fix before doing any work.
 
+Serving is built for an editor rather than for a benchmark. A prefix cache
+keeps the last prefill, so a completion after one more keystroke pays for the
+new tokens instead of the whole context. A response cache answers a repeated
+request without touching the model. A newer completion from the same editor
+cancels the older one between tokens, because generation is serialised and an
+obsolete request sits in front of the one that matters. Measured through the
+gateway: 171ms for a completion, under a millisecond for the same one again,
+91ms one character later.
+
+It also serves a checkpoint that is still being written, reloading when training
+replaces it and keeping the running model if the new one will not load.
+
 Serving exposes a Messages-shaped endpoint, so the Rust assistant client talks
 to it with no code change:
 
@@ -243,6 +255,10 @@ protection it does not have.
 make test   # every suite
 ```
 
+Every suite, run together: 34 sandbox conformance checks with 17 skipped for
+toolchains this machine does not have, 16 supervisor tests, 32 analyzer checks,
+90 gateway tests, 11 assistant tests, 456 model tests and 450 frontend tests.
+
 | Suite | Covers |
 | --- | --- |
 | `make test-sandbox` | containment: egress, deadlines, memory, credentials, rootfs writes, fork bombs, teardown |
@@ -250,8 +266,8 @@ make test   # every suite
 | `make test-analyzer` | lexing, scope trees, diagnostics, JSON well-formedness |
 | `make test-backend` | REST and WebSocket surfaces against the real sandbox |
 | `make test-assistant` | symbol indexing, completion ranking, routing, the model client, the agent loop |
-| `make test-model` | parameter counts, tokenizer round trips, the KV cache, the training loop, the HTTP surfaces |
-| `make test-frontend` | typecheck, argument parsing, fuzzy matching, preferences, the extension host |
+| `make test-model` | parameter counts, tokenizer round trips, the KV cache and its attention mask, prefix reuse, the training loop, adapters, the HTTP surfaces |
+| `make test-frontend` | typecheck, fuzzy matching, preferences, the extension host, local history, the file tree, snippets, markdown, the zip writer |
 
 The sandbox suite asserts containment rather than mere execution: each test is
 written so an escape fails loudly instead of passing quietly. It skips checks a
