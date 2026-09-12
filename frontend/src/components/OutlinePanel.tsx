@@ -13,12 +13,13 @@
 import { ListTree } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import { type OutlineEntry, enclosing, filterOutline, outlineFor } from '../lib/outline';
-import type { Symbol as WorkspaceSymbol } from '../lib/types';
+import { type OutlineEntry, enclosing, filterOutline } from '../lib/outline';
 
 interface Props {
-  symbols: WorkspaceSymbol[];
-  /** The file on screen. Its declarations are the ones shown. */
+  /** The declarations of the file on screen, in line order. Built once by the
+   *  editor, because the breadcrumb bar wants the same list. */
+  entries: OutlineEntry[];
+  /** Only to tell "no file open" from "nothing declared in this one". */
   fileName: string;
   /** Where the caret is, so the declaration around it can be marked. */
   line: number;
@@ -54,10 +55,9 @@ const TONES: Record<string, string> = {
   function: 'text-run',
 };
 
-export function OutlinePanel({ symbols, fileName, line, problem, onJump }: Props) {
+export function OutlinePanel({ entries, fileName, line, problem, onJump }: Props) {
   const [query, setQuery] = useState('');
 
-  const entries = useMemo(() => outlineFor(symbols, fileName), [symbols, fileName]);
   const shown = useMemo(() => filterOutline(entries, query), [entries, query]);
   // Against the unfiltered list: the declaration the caret is in does not stop
   // being that because it was typed out of the list.

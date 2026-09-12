@@ -41,6 +41,7 @@ import {
   isName,
 } from '../lib/definitions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
+import { outlineFor } from '../lib/outline';
 import {
   order as byRecency,
   previous as previousFile,
@@ -216,6 +217,14 @@ export function CodeCraftIDE() {
 
   const activeRuntime = runtimes.find((runtime) => runtime.id === language) ?? null;
   const activeFile = files.find((file) => file.id === activeFileId) ?? files[0] ?? null;
+
+  // The active file's declarations, built once: the outline panel and the
+  // breadcrumb bar want the same list, and the index is workspace-wide, so
+  // filtering it twice per caret move is twice too many.
+  const outline = useMemo(
+    () => outlineFor(symbols, activeFile?.name ?? ''),
+    [symbols, activeFile?.name],
+  );
 
   /**
    * Which files have tabs, as distinct from which files exist.
@@ -2242,7 +2251,7 @@ export function CodeCraftIDE() {
           }}
           outline={
             <OutlinePanel
-              symbols={symbols}
+              entries={outline}
               fileName={activeFile?.name ?? ''}
               line={caret.line}
               problem={symbolsProblem}
@@ -2266,7 +2275,7 @@ export function CodeCraftIDE() {
             <div className="flex min-h-0 flex-1 flex-col">
               <Breadcrumbs
                 fileName={activeFile.name}
-                symbols={symbols}
+                entries={outline}
                 line={caret.line}
                 onJump={handleJumpToLine}
               />

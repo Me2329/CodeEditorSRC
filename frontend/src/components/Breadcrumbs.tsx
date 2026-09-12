@@ -15,21 +15,18 @@
 import { ChevronRight } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { ancestry, outlineFor } from '../lib/outline';
-import type { Symbol as WorkspaceSymbol } from '../lib/types';
+import { type OutlineEntry, ancestry } from '../lib/outline';
 
 interface Props {
   fileName: string;
-  symbols: WorkspaceSymbol[];
+  /** The file's declarations in line order, as the outline panel receives them. */
+  entries: OutlineEntry[];
   line: number;
   onJump: (line: number) => void;
 }
 
-export function Breadcrumbs({ fileName, symbols, line, onJump }: Props) {
-  const chain = useMemo(() => {
-    const entries = outlineFor(symbols, fileName);
-    return ancestry(entries, line);
-  }, [symbols, fileName, line]);
+export function Breadcrumbs({ fileName, entries, line, onJump }: Props) {
+  const chain = useMemo(() => ancestry(entries, line), [entries, line]);
 
   const folders = fileName.split('/').slice(0, -1);
   const base = fileName.split('/').pop() ?? '';
