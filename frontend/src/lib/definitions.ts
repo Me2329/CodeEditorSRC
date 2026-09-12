@@ -14,27 +14,15 @@
 
 import type { Symbol as WorkspaceSymbol } from './types';
 
-/** A word is what an identifier is made of in every language here. */
-const IDENTIFIER = /[A-Za-z0-9_$]/;
-
 /**
- * The identifier the caret is on or immediately after.
+ * Whether a word is a name worth looking up.
  *
- * Both, because a caret sits between characters: after typing `parse` the caret
- * is past the `e`, and asking about the name you have just finished typing is
- * the common case.
+ * The editor decides what a word is, using the language's own rules, which is
+ * why this takes one rather than finding it. What it adds is the part the
+ * editor does not judge: `42` is a word and is not something to go to.
  */
-export function wordAt(text: string, offset: number): string {
-  const position = Math.max(0, Math.min(offset, text.length));
-  let start = position;
-  let end = position;
-
-  while (start > 0 && IDENTIFIER.test(text[start - 1] ?? '')) start -= 1;
-  while (end < text.length && IDENTIFIER.test(text[end] ?? '')) end += 1;
-
-  const word = text.slice(start, end);
-  // A name cannot begin with a digit, and `42` is not something to go to.
-  return /^[A-Za-z_$]/.test(word) ? word : '';
+export function isName(word: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(word);
 }
 
 /**

@@ -1,36 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
-import { declarationsOf, definitionFrom, describeDeclarations, wordAt } from './definitions';
+import { declarationsOf, definitionFrom, describeDeclarations, isName } from './definitions';
 import type { Symbol as WorkspaceSymbol } from './types';
 
 function symbol(name: string, file: string, line: number): WorkspaceSymbol {
   return { name, kind: 'function', file, line, detail: `def ${name}()` };
 }
 
-describe('wordAt', () => {
-  it('reads the identifier the caret is inside', () => {
-    expect(wordAt('total = parse(text)', 10)).toBe('parse');
+describe('isName', () => {
+  it('accepts an identifier', () => {
+    expect(isName('parse')).toBe(true);
+    expect(isName('_private')).toBe(true);
+    expect(isName('parse_2')).toBe(true);
   });
 
-  it('reads the identifier the caret has just finished typing', () => {
-    expect(wordAt('total = parse', 13)).toBe('parse');
+  it('refuses a number', () => {
+    expect(isName('42')).toBe(false);
+    expect(isName('3.14')).toBe(false);
   });
 
-  it('is nothing between two identifiers', () => {
-    expect(wordAt('a + b', 2)).toBe('');
+  it('refuses nothing at all', () => {
+    expect(isName('')).toBe(false);
   });
 
-  it('does not treat a number as a name', () => {
-    expect(wordAt('x = 42', 6)).toBe('');
-  });
-
-  it('keeps a name that merely contains digits', () => {
-    expect(wordAt('parse_2(x)', 7)).toBe('parse_2');
-  });
-
-  it('survives an offset past the end', () => {
-    expect(wordAt('parse', 99)).toBe('parse');
-    expect(wordAt('', 0)).toBe('');
+  it('refuses something that is not one word', () => {
+    expect(isName('a b')).toBe(false);
+    expect(isName('a.b')).toBe(false);
   });
 });
 

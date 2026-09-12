@@ -38,7 +38,7 @@ import {
   declarationsOf,
   definitionFrom,
   describeDeclarations,
-  wordAt,
+  isName,
 } from '../lib/definitions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import {
@@ -909,8 +909,8 @@ export function CodeCraftIDE() {
     const position = editor?.getPosition();
     if (!editor || !model || !position) return;
 
-    const name = wordAt(model.getValue(), model.getOffsetAt(position));
-    if (!name) {
+    const name = model.getWordAtPosition(position)?.word ?? '';
+    if (!isName(name)) {
       notify('Put the caret on a name first.');
       return;
     }
@@ -953,8 +953,8 @@ export function CodeCraftIDE() {
     const position = editor?.getPosition();
     if (!editor || !model || !position) return;
 
-    const name = wordAt(model.getValue(), model.getOffsetAt(position));
-    if (!name) {
+    const name = model.getWordAtPosition(position)?.word ?? '';
+    if (!isName(name)) {
       notify('Put the caret on a name first.');
       return;
     }
@@ -1256,8 +1256,11 @@ export function CodeCraftIDE() {
 
     const provider = monaco.languages.registerHoverProvider('*', {
       provideHover: (model, position) => {
-        const name = wordAt(model.getValue(), model.getOffsetAt(position));
-        if (!name) return null;
+        // The editor's own idea of a word, which knows the language's rules
+        // and costs nothing. Asking for the whole file and scanning it would
+        // copy the document on every movement of the pointer.
+        const name = model.getWordAtPosition(position)?.word ?? '';
+        if (!isName(name)) return null;
 
         const contents: { value: string }[] = [];
 
