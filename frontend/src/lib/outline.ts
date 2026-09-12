@@ -75,6 +75,31 @@ export function enclosing(entries: OutlineEntry[], line: number): number {
 }
 
 /**
+ * The chain of declarations the caret is inside, outermost first.
+ *
+ * `Editor`, then `save`, for a caret in a method. This is what a breadcrumb
+ * bar shows, and it is the one question the flat list cannot answer by itself:
+ * an entry knows how deep it is but not which entries it is under.
+ */
+export function ancestry(entries: OutlineEntry[], line: number): OutlineEntry[] {
+  let index = enclosing(entries, line);
+  if (index < 0) return [];
+
+  const chain: OutlineEntry[] = [];
+  let depth = entries[index]?.depth ?? 0;
+  for (; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    if (entry.depth === depth) {
+      chain.unshift(entry);
+      depth -= 1;
+    }
+    if (depth < 0) break;
+  }
+  return chain;
+}
+
+/**
  * Entries matching what was typed, keeping the parents of what matched.
  *
  * A method shown without its class has lost the thing that made its name mean

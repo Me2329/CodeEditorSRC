@@ -894,6 +894,17 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 575 | Answers written as JSON | `--json`, for a comparison worth keeping |
 | 576 | `make model-probe`, with `COMPARE=` | |
 
+## Knowing where the caret is
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 577 | Breadcrumb bar above the editor | folders, file, then the declarations the caret is inside |
+| 578 | The chain is built from the outline | an entry knows its depth, not what it is under |
+| 579 | Click a declaration to go to its line | the fastest way out of a long method |
+| 580 | A sibling that happens to be shallower is not a parent | a top-level function after a method is not inside its class |
+| 581 | Nothing is shown when there is nothing to say | no folders and no enclosing declaration is just the tab strip again |
+| 582 | Folders come from the file name | which is where folders live in this workspace |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

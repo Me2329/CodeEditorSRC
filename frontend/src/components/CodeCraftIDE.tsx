@@ -112,6 +112,7 @@ import { AgentPanel } from './AgentPanel';
 import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { CommandPalette, type PaletteMode } from './CommandPalette';
+import { Breadcrumbs } from './Breadcrumbs';
 import { FileExplorer } from './FileExplorer';
 import { OutlinePanel } from './OutlinePanel';
 import { HistoryPanel } from './HistoryPanel';
@@ -2051,7 +2052,14 @@ export function CodeCraftIDE() {
             onReorder={(fileId, to) => setTabs((current) => moveTab(current, fileId, to))}
           />
           {activeFile ? (
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <Breadcrumbs
+                fileName={activeFile.name}
+                symbols={symbols}
+                line={caret.line}
+                onJump={handleJumpToLine}
+              />
+              <div className="flex min-h-0 flex-1">
               <div className="min-w-0 flex-1">
                 <Editor
                   key={activeFile.id}
@@ -2110,6 +2118,7 @@ export function CodeCraftIDE() {
                   </div>
                 </div>
               )}
+              </div>
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-xs text-slate-500">

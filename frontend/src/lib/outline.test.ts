@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { enclosing, filterOutline, outlineFor } from './outline';
+import { ancestry, enclosing, filterOutline, outlineFor } from './outline';
 import type { Symbol as WorkspaceSymbol } from './types';
 
 function symbol(
@@ -138,5 +138,51 @@ describe('filterOutline', () => {
       'middle',
       'target',
     ]);
+  });
+});
+
+describe('ancestry', () => {
+  const entries = outlineFor(
+    [
+      symbol('Editor', 1, '', 'main.py', 'class'),
+      symbol('save', 5, 'Editor'),
+      symbol('write', 8, 'save'),
+      symbol('helper', 20),
+    ],
+    'main.py',
+  );
+
+  it('is the chain of declarations the caret is inside, outermost first', () => {
+    expect(ancestry(entries, 9).map((entry) => entry.name)).toEqual(['Editor', 'save', 'write']);
+  });
+
+  it('stops at the declaration the caret is actually in', () => {
+    expect(ancestry(entries, 6).map((entry) => entry.name)).toEqual(['Editor', 'save']);
+  });
+
+  it('is one long for a top-level declaration', () => {
+    expect(ancestry(entries, 21).map((entry) => entry.name)).toEqual(['helper']);
+  });
+
+  it('is empty above the first declaration', () => {
+    // The caret is on the import block at the top of the file, which is inside
+    // nothing. Line 1 here is the class itself, so it does not test this.
+    const later = outlineFor([symbol('Editor', 4, '', 'main.py', 'class')], 'main.py');
+    expect(ancestry(later, 2)).toEqual([]);
+    expect(ancestry([], 4)).toEqual([]);
+  });
+
+  it('does not climb into a sibling that happens to be shallower', () => {
+    // `second` is top-level and follows a nested method; the caret in it must
+    // not be reported as being inside the first class.
+    const siblings = outlineFor(
+      [
+        symbol('First', 1, '', 'main.py', 'class'),
+        symbol('inside', 2, 'First'),
+        symbol('second', 10),
+      ],
+      'main.py',
+    );
+    expect(ancestry(siblings, 11).map((entry) => entry.name)).toEqual(['second']);
   });
 });
