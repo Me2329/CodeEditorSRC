@@ -582,6 +582,23 @@ def test_best_of_costs_what_it_says(run_directory) -> None:
     assert many >= single
 
 
+def test_a_cancelled_search_stops_between_candidates(run_directory) -> None:
+    """The expensive request is the one most likely to be running when the next
+    one arrives, so it stops between candidates as well as between tokens."""
+    from codecraft_model.inflight import Ticket
+
+    engine = Engine(run_directory)
+    ticket = Ticket("editor")
+    ticket.cancelled = True
+
+    text, total = engine.infill_best_of(
+        "def parse(", ")", candidates=6, max_tokens=8, ticket=ticket
+    )
+
+    assert text == ""
+    assert total == 0
+
+
 def test_best_of_zero_is_refused(run_directory) -> None:
     """Picking the best of nothing has no answer."""
     engine = Engine(run_directory)

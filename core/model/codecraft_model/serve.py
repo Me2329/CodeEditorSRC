@@ -418,7 +418,14 @@ class Engine:
         return completion, count
 
     def infill_best_of(
-        self, prefix: str, suffix: str, *, candidates: int = 4, temperature: float = 0.6, **options
+        self,
+        prefix: str,
+        suffix: str,
+        *,
+        candidates: int = 4,
+        temperature: float = 0.6,
+        ticket: Ticket | None = None,
+        **options,
     ) -> tuple[str, int]:
         """Sample several completions and return the one the model believed most.
 
@@ -432,6 +439,10 @@ class Engine:
 
         Costs `candidates` times as much. Worth it for a completion someone is
         waiting on and reading; not worth it for anything generated in bulk.
+
+        That cost is also why cancellation matters most here: this is the
+        request most likely to still be running when the next one arrives, and
+        it stops between candidates as well as between tokens.
         """
         if candidates < 1:
             raise ValueError("best-of needs at least one candidate")
@@ -442,21 +453,26 @@ class Engine:
         outer = options.pop("report", None)
 
         for _ in range(candidates):
+            if ticket is not None and ticket.cancelled:
+                break
             # Caching is off: identical requests would otherwise return the same
             # remembered answer every time and the sampling would do nothing.
             scored: dict = {}
             text, count = self.infill(
                 prefix, suffix, temperature=temperature, use_cache=False,
-                report=scored, **options,
+                report=scored, ticket=ticket, **options,
             )
             total += count
             confidence = scored.get("confidence", float("-inf"))
             if confidence > best_score and text.strip():
                 best_score, best_text = confidence, text
 
+        cancelled = bool(ticket is not None and ticket.cancelled)
         if outer is not None:
-            outer.update(cached=False, confidence=best_score, stop=None, superseded=False)
-        return best_text, total
+            outer.update(cached=False, confidence=best_score, stop=None, superseded=cancelled)
+        # Half a search is not the answer to the question, for the same reason
+        # half a generation is not.
+        return ("" if cancelled else best_text), total
 
     def _remember_prefill(self, ids: list[int], caches, length: int) -> None:
         """Store a prefill, unless the prompt was trimmed to fit the context.
@@ -813,6 +829,7 @@ class Handler(BaseHTTPRequestHandler):
                     suffix,
                     candidates=candidates,
                     temperature=float(body.get("temperature", 0.6)),
+                    ticket=ticket,
                     **shared,
                 )
             else:
