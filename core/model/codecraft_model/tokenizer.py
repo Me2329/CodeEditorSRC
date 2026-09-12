@@ -132,7 +132,12 @@ class Tokenizer:
     # ------------------------------------------------------ fill in the middle
 
     def encode_infill(
-        self, prefix: str, suffix: str, *, max_context: int | None = None
+        self,
+        prefix: str,
+        suffix: str,
+        *,
+        max_context: int | None = None,
+        stride: int = 32,
     ) -> list[int]:
         """Build a prompt asking the model to write what goes between two halves.
 
@@ -143,6 +148,15 @@ class Tokenizer:
 
         `max_context` trims from the outside in. The text nearest the caret is
         what the completion has to agree with, so the far ends are what goes.
+
+        `stride` is what makes that trimming cacheable. Keeping exactly the last
+        N tokens moves the window one token every time a character is typed, so
+        every key press shifts the whole prompt and a prefill cached a moment
+        ago matches nothing: the cache that exists for typing would never fire
+        on a file bigger than the context, which is the only case where it would
+        have mattered. Rounding the window's start up to a multiple of `stride`
+        holds it still for `stride` keystrokes at a time, at the cost of up to
+        that many tokens of context. Set it to 1 for the old behaviour.
         """
         prefix_ids = self.encode(prefix)
         suffix_ids = self.encode(suffix)
@@ -152,7 +166,13 @@ class Tokenizer:
             budget = max(0, max_context - 3)
             half = budget // 2
             if len(prefix_ids) + len(suffix_ids) > budget:
-                prefix_ids = prefix_ids[-max(half, budget - len(suffix_ids)) :]
+                keep = max(half, budget - len(suffix_ids))
+                start = max(0, len(prefix_ids) - keep)
+                if stride > 1:
+                    # Rounded up, never down: up is fewer tokens than the budget
+                    # allows, and down would exceed it.
+                    start = min(len(prefix_ids), start + (-start) % stride)
+                prefix_ids = prefix_ids[start:]
                 suffix_ids = suffix_ids[: max(0, budget - len(prefix_ids))]
 
         return [

@@ -1124,6 +1124,32 @@ dictionary assignment by starting a new function, which is what an hour of
 training on a 6.5M-parameter model buys. The loop was a decoding problem and is
 fixed; the rest is a model problem and is not.
 
+## The cache that would never have fired
+
+The prefix cache above is measured on a file that fits in the model's context.
+On a file that does not, it fired exactly never, and the reason is worth writing
+down because the feature looked like it worked.
+
+A prompt too long for the context is trimmed from the outside in, keeping the
+text nearest the caret. Keeping *exactly* the last N tokens means the window
+moves one token every time a character is typed. Every key press therefore
+shifts the whole prompt by one, and a prefill cached a moment earlier lines up
+with nothing:
+
+| typed since the cached prompt | tokens shared, sliding window | with the window held still |
+| --- | --- | --- |
+| one character | 493 | 476 |
+| two | **1** | 476 |
+| three | **1** | 476 |
+
+One token. The `<|fim_prefix|>` marker, and nothing else.
+
+The fix is to round the window's start up to a multiple of 32 tokens, so it
+stays put for 32 keystrokes at a time and then jumps. Rounded up rather than
+down, because down would buy context by exceeding the budget. The cost is up to
+32 tokens of context out of 500, about 3%, in exchange for a cache that fires on
+the files it was built for.
+
 ## Serving the same question twice
 
 An editor at a caret asks almost the same question on every keystroke. The
@@ -1175,7 +1201,7 @@ whatever it is shown.
 make test-model
 ```
 
-456 tests: parameter counts against real modules, tokenizer round trips over
+460 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

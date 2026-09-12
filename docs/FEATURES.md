@@ -805,6 +805,15 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 521 | Reported with everything else that was left out | |
 | 522 | A drop where nothing reads says so | rather than adding nothing and saying nothing |
 
+## A cache that fires on the files it was built for
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 523 | The trimming window holds still for 32 keystrokes | a window that slides by one token per character shares nothing with the last prompt |
+| 524 | Rounded up, never down | down would buy context by exceeding the budget |
+| 525 | A prompt that fits is not trimmed at all | the stride costs nothing when there is nothing to trim |
+| 526 | The sliding case is kept as a negative control | so the test measures the fix rather than agreeing with it |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

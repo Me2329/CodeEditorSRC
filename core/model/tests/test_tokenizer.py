@@ -224,6 +224,55 @@ def test_trimming_keeps_the_text_closest_to_the_caret(tokenizer: Tokenizer) -> N
     assert "START" not in kept
 
 
+def test_typing_does_not_shift_a_trimmed_prompt(tokenizer: Tokenizer) -> None:
+    """The property the prefix cache depends on entirely.
+
+    Keeping exactly the last N tokens moves the window one token per character
+    typed, so every key press shifts the whole prompt and a prefill cached a
+    moment ago matches nothing. That would make the cache useless on exactly the
+    files where it matters: the ones bigger than the context.
+    """
+    body = "def parse(text):\n    " + ("value = compute(text)\n    " * 200)
+    first = tokenizer.encode_infill(body, "\n    return value\n", max_context=256)
+
+    for typed in ("r", "re", "ret", "retu"):
+        later = tokenizer.encode_infill(body + typed, "\n    return value\n", max_context=256)
+        shared = 0
+        while shared < min(len(first), len(later)) and first[shared] == later[shared]:
+            shared += 1
+        # Almost all of it, rather than the single marker token that survives
+        # an unquantised window.
+        assert shared > len(first) // 2
+
+
+def test_a_sliding_window_loses_everything(tokenizer: Tokenizer) -> None:
+    """The negative control: without the stride, the shared prefix collapses."""
+    body = "def parse(text):\n    " + ("value = compute(text)\n    " * 200)
+    first = tokenizer.encode_infill(body, "", max_context=256, stride=1)
+    later = tokenizer.encode_infill(body + "xyz", "", max_context=256, stride=1)
+
+    shared = 0
+    while shared < min(len(first), len(later)) and first[shared] == later[shared]:
+        shared += 1
+    assert shared < 10
+
+
+def test_holding_the_window_still_stays_within_the_budget(tokenizer: Tokenizer) -> None:
+    """Rounded up, never down: down would buy context by exceeding the budget."""
+    body = "filler " * 500
+    for typed in range(40):
+        ids = tokenizer.encode_infill(body + "x" * typed, "tail " * 20, max_context=128)
+        assert len(ids) <= 128
+
+
+def test_a_prompt_that_fits_is_not_trimmed_at_all(tokenizer: Tokenizer) -> None:
+    """The stride costs nothing when there is nothing to trim."""
+    short = tokenizer.encode_infill("def f():\n    ", "\n", max_context=4096)
+    unbounded = tokenizer.encode_infill("def f():\n    ", "\n")
+
+    assert short == unbounded
+
+
 def test_the_markers_decode_to_nothing(tokenizer: Tokenizer) -> None:
     """They are structure, not text, so they must not appear in the output."""
     ids = tokenizer.encode_infill("a", "b")
