@@ -741,23 +741,25 @@ export function CodeCraftIDE() {
         return;
       }
 
-      let opened = '';
-      setFiles((previous) => {
-        const taken = previous.map((file) => file.name);
-        const added = read.map((entry) => {
-          const name = uniqueName(entry.name, taken);
-          taken.push(name);
-          return createFile(name, entry.content);
-        });
-        opened = added[added.length - 1]?.id ?? '';
-        return [...previous, ...added];
+      // Built outside the updater. A state updater has to be a pure function of
+      // what it is given: React may run it twice, and createFile invents an id
+      // each time, so an id captured from inside one is not necessarily the id
+      // that ended up in the workspace.
+      const taken = files.map((file) => file.name);
+      const added = read.map((entry) => {
+        const name = uniqueName(entry.name, taken);
+        taken.push(name);
+        return createFile(name, entry.content);
       });
+
+      setFiles((previous) => [...previous, ...added]);
+      const opened = added[added.length - 1]?.id;
       if (opened) setActiveFileId(opened);
 
       const note = `Added ${read.length} ${read.length === 1 ? 'file' : 'files'}.`;
       notify(left.length ? `${note} ${explainRefused(left)}` : note);
     },
-    [notify],
+    [files, notify],
   );
 
   /**
@@ -955,6 +957,8 @@ export function CodeCraftIDE() {
     if (!editor || !model || !position) return;
 
     const { prefix, suffix } = contextAround(model.getValue(), model.getOffsetAt(position));
+    // Four generations take seconds, and the caret is not obliged to wait.
+    const versionBefore = model.getVersionId();
     notify('Asking for a completion…');
 
     try {
@@ -964,13 +968,25 @@ export function CodeCraftIDE() {
         notify('The model had nothing to add here.');
         return;
       }
+
+      // Inserting at a remembered position in a file that has changed since
+      // puts the text somewhere nobody asked for, and it is undoable only if
+      // you notice.
+      const now = editorRef.current;
+      const current = now?.getModel();
+      const where = now?.getPosition();
+      if (!now || current !== model || model.getVersionId() !== versionBefore || !where) {
+        notify('The file changed while the model was thinking, so nothing was inserted.');
+        return;
+      }
+
       // Through the editor, so one Ctrl+Z takes it back.
-      editor.executeEdits('codecraft-complete', [
+      now.executeEdits('codecraft-complete', [
         { range: new (monacoRef.current!.Range)(
-            position.lineNumber, position.column, position.lineNumber, position.column,
+            where.lineNumber, where.column, where.lineNumber, where.column,
           ), text: completion },
       ]);
-      editor.focus();
+      now.focus();
       notify(`Completed ${answer.tokens} tokens from ${answer.model}.`);
     } catch {
       notify('No model is running, so there is nothing to complete with.');
