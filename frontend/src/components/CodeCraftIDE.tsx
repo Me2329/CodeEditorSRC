@@ -2125,7 +2125,13 @@ export function CodeCraftIDE() {
                 onClick={() => setBottomTab('analysis')}
                 icon={Cpu}
                 label="Analysis"
-                badge={allDiagnostics.length + outstanding(todos)}
+                // Notes in the open file are already among the diagnostics,
+                // because the linter and the panel share one scan. Counting
+                // them again here would show every TODO twice.
+                badge={
+                  allDiagnostics.length +
+                  outstanding(todos.filter((todo) => todo.fileId !== activeFile?.id))
+                }
               />
               <PaneTab
                 active={bottomTab === 'search'}

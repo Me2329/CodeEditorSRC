@@ -744,6 +744,15 @@ rather than a deletion.
 | 492 | "Discard all local history" | the per-file button covered one file at a time |
 | 493 | Context budgets and single-file search are no longer exported | they were implementation detail |
 
+## One scan, two presentations
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 494 | The TODO linter and the notes panel share one scan | two rules for one thing drift |
+| 495 | `print("TODO")` is no longer a diagnostic | the linter had no idea what a comment was |
+| 496 | The diagnostic carries the note's text | not just which marker it was |
+| 497 | The badge counts each note once | notes in the open file are already among its diagnostics |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

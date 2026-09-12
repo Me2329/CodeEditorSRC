@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { todoComments } from './extensions/builtin/lint';
 import { countByKind, outstanding, scanFile, scanWorkspace } from './todos';
 import type { VirtualFile } from './types';
 
@@ -120,6 +121,28 @@ describe('the workspace list', () => {
 
   test('an empty workspace has nothing', () => {
     expect(scanWorkspace([])).toEqual([]);
+  });
+});
+
+describe('the linter shares this scan', () => {
+  test('a note becomes a diagnostic on its line', () => {
+    // One rule, two presentations: a marker in the gutter and a row in the
+    // panel. Two rules for one thing drift.
+    const diagnostics = todoComments.lint(file('a.py', 'x = 1\n# TODO tidy this'));
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ line: 2, severity: 'info', rule: 'todo' });
+    expect(diagnostics[0]!.message).toContain('tidy this');
+  });
+
+  test('what is not a comment is not a diagnostic either', () => {
+    // The old regular expression flagged this, and then the panel and the
+    // gutter disagreed about how many notes the file had.
+    expect(todoComments.lint(file('a.py', 'print("TODO")'))).toEqual([]);
+  });
+
+  test('a note with no text still says which kind it is', () => {
+    expect(todoComments.lint(file('a.py', '# FIXME'))[0]!.message).toBe('FIXME comment');
   });
 });
 

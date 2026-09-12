@@ -11,6 +11,7 @@
  * committed, a tab in a Python file.
  */
 
+import { scanFile } from '../../todos';
 import type { Extension, LinterContribution } from '../types';
 import type { Diagnostic, VirtualFile } from '../../types';
 
@@ -65,16 +66,21 @@ export const trailingWhitespace: LinterContribution = {
     }),
 };
 
+/**
+ * The notes people leave themselves, as diagnostics on the line they are on.
+ *
+ * The same scan the notes panel uses, rather than a regular expression of its
+ * own. Two rules for one thing drift: this one used to flag `print("TODO")`,
+ * because it had no idea what a comment was, and the two disagreed about how
+ * many notes a file contained.
+ */
 export const todoComments: LinterContribution = {
   id: 'lint.todo',
   language: '*',
   lint: (file) =>
-    scan(file, (line, number) => {
-      const match = /\b(TODO|FIXME|XXX|HACK)\b/.exec(line);
-      return match
-        ? [at(number, match.index + 1, 'info', `${match[1]} comment`, 'todo')]
-        : [];
-    }),
+    scanFile(file).map((todo) =>
+      at(todo.line, 1, 'info', todo.text ? `${todo.kind}: ${todo.text}` : `${todo.kind} comment`, 'todo'),
+    ),
 };
 
 export const longLines: LinterContribution = {
