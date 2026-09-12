@@ -30,6 +30,14 @@ export type RevisionReason = 'edit' | 'run' | 'restore' | 'assistant' | 'replace
 export interface Revision {
   id: string;
   fileId: string;
+  /**
+   * The file's name when the snapshot was taken.
+   *
+   * Recorded because a deleted file's history outlives the file: without the
+   * name there is nothing to offer back, only an id that refers to nothing.
+   * A rename leaves older snapshots holding the older name, which is correct.
+   */
+  name: string;
   /** Epoch milliseconds. */
   at: number;
   content: string;
@@ -66,6 +74,7 @@ function newId(at: number): string {
 
 export interface RecordRequest {
   fileId: string;
+  name: string;
   content: string;
   reason: RevisionReason;
   /** Injected rather than read from the clock, so coalescing is testable. */
@@ -90,6 +99,7 @@ export function record(history: History, request: RecordRequest): History {
   const revision: Revision = {
     id: newId(at),
     fileId: request.fileId,
+    name: request.name,
     at,
     content: request.content,
     reason: request.reason,
@@ -264,7 +274,11 @@ export function loadHistory(): History {
     const result: Record<string, Revision[]> = {};
     for (const [fileId, revisions] of Object.entries(parsed as Record<string, unknown>)) {
       if (!Array.isArray(revisions)) continue;
-      const valid = revisions.filter(isRevision);
+      // A snapshot written before names were recorded keeps everything else it
+      // had; it simply cannot be offered back by name.
+      const valid = revisions
+        .filter(isRevision)
+        .map((revision) => ({ ...revision, name: revision.name ?? '' }));
       if (valid.length > 0) {
         result[fileId] = valid.sort((left, right) => right.at - left.at);
       }

@@ -308,8 +308,8 @@ export function CodeCraftIDE() {
   }, [history]);
 
   const snapshot = useCallback(
-    (fileId: string, content: string, reason: RevisionReason) => {
-      setHistory((current) => recordRevision(current, { fileId, content, reason }));
+    (fileId: string, name: string, content: string, reason: RevisionReason) => {
+      setHistory((current) => recordRevision(current, { fileId, name, content, reason }));
     },
     [],
   );
@@ -320,8 +320,8 @@ export function CodeCraftIDE() {
   // change harmless.
   useEffect(() => {
     if (!activeFile) return;
-    const { id, content } = activeFile;
-    const timer = window.setTimeout(() => snapshot(id, content, 'edit'), SNAPSHOT_IDLE_MS);
+    const { id, name, content } = activeFile;
+    const timer = window.setTimeout(() => snapshot(id, name, content, 'edit'), SNAPSHOT_IDLE_MS);
     return () => window.clearTimeout(timer);
   }, [activeFile?.id, activeFile?.content, snapshot]);
 
@@ -574,7 +574,7 @@ export function CodeCraftIDE() {
 
     // The state the code was in when it last ran is the one worth going back
     // to, so it is a landmark in the history rather than an ordinary edit.
-    if (activeFile) snapshot(activeFile.id, activeFile.content, 'run');
+    if (activeFile) snapshot(activeFile.id, activeFile.name, activeFile.content, 'run');
 
     setLastRun(null);
     const args = parseArgs(argsText);
@@ -665,7 +665,7 @@ export function CodeCraftIDE() {
       const target = files.find((file) => file.id === fileId);
       if (!target || target.content === content) return;
 
-      snapshot(fileId, target.content, 'restore');
+      snapshot(fileId, target.name, target.content, 'restore');
       setFiles((previous) =>
         previous.map((file) => (file.id === fileId ? { ...file, content } : file)),
       );
@@ -1227,7 +1227,7 @@ export function CodeCraftIDE() {
         // from inside the updater because recording identical content is
         // declined, so a second invocation adds nothing.
         const replaced = previous.find((file) => file.name === name);
-        if (replaced) snapshot(replaced.id, replaced.content, 'assistant');
+        if (replaced) snapshot(replaced.id, replaced.name, replaced.content, 'assistant');
         return previous;
       });
 
@@ -1262,7 +1262,7 @@ export function CodeCraftIDE() {
       const editor = editorRef.current;
       const model = editor?.getModel();
       if (!editor || !model) return;
-      if (activeFile) snapshot(activeFile.id, activeFile.content, 'assistant');
+      if (activeFile) snapshot(activeFile.id, activeFile.name, activeFile.content, 'assistant');
       // Pushed as an edit operation rather than setValue, so a single Ctrl+Z
       // takes it back.
       editor.executeEdits('codecraft-assistant', [
@@ -1975,7 +1975,7 @@ export function CodeCraftIDE() {
                   // are not on screen.
                   for (const change of changes) {
                     const before = files.find((file) => file.id === change.fileId);
-                    if (before) snapshot(before.id, before.content, 'replace');
+                    if (before) snapshot(before.id, before.name, before.content, 'replace');
                   }
                   setFiles((previous) =>
                     previous.map((file) => {
@@ -2024,7 +2024,16 @@ export function CodeCraftIDE() {
               <HistoryPanel
                 history={history}
                 file={activeFile}
+                files={files}
                 onRestore={handleRestore}
+                onRecover={(name, content) => {
+                  // A new file, because the id the snapshots refer to is gone
+                  // and so is anything that pointed at it.
+                  const recovered = createFile(uniqueName(name, files.map((file) => file.name)), content);
+                  setFiles((previous) => [...previous, recovered]);
+                  setActiveFileId(recovered.id);
+                  notify(`Recovered ${recovered.name}`);
+                }}
                 onForget={(fileId) => {
                   setHistory((current) => forgetHistory(current, fileId));
                   notify('History cleared for this file');

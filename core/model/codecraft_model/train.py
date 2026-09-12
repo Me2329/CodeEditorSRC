@@ -126,20 +126,35 @@ def evaluate(
     model: CodeCraftLM,
     dataset: TokenDataset,
     config: TrainConfig,
-    generator: np.random.Generator,
     device: torch.device,
     amp_dtype: torch.dtype | None = None,
 ) -> float:
-    """Mean loss over a fixed number of random validation windows.
+    """Mean loss over a fixed set of validation windows.
+
+    The same windows every time, which is the point. Drawing fresh ones on each
+    evaluation compares two checkpoints against two different samples, and at 20
+    batches the difference between samples is large enough to pick the wrong
+    one: on the run this was found in, the checkpoint kept as best scored 2.577
+    against its own sample and 2.686 against a proper evaluation, while the
+    final checkpoint it beat scored 2.680.
+
+    The cost is that the number describes one sample of the validation set
+    rather than an unbiased estimate of all of it. That is the right trade for a
+    number whose whole job is to be compared with the same number from a
+    hundred steps ago.
 
     Run in the same precision as training, or the reported number describes a
     model that is not the one being trained.
     """
     model.eval()
     losses = []
+    # Seeded from the configuration rather than from a generator that advances,
+    # so every evaluation in a run scores the same windows and successive
+    # numbers can be compared.
+    windows = np.random.default_rng(config.seed + 1)
     for _ in range(config.eval_batches):
         inputs, targets = dataset.batch(
-            config.batch_size, config.block_size, generator, device=device
+            config.batch_size, config.block_size, windows, device=device
         )
         with torch.autocast(
             device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
@@ -235,7 +250,6 @@ def train(
 
     torch.manual_seed(config.seed)
     generator = np.random.default_rng(config.seed)
-    eval_generator = np.random.default_rng(config.seed + 1)
 
     optimizer = build_optimizer(model, config)
 
@@ -334,7 +348,7 @@ def train(
         is_last = step == config.steps - 1 or out_of_time
         if (step + 1) % config.eval_every == 0 or is_last:
             val_loss = evaluate(
-                model, val_dataset, config, eval_generator, device, amp_dtype
+                model, val_dataset, config, device, amp_dtype
             )
             record = {
                 "step": step + 1,

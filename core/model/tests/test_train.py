@@ -170,8 +170,36 @@ def test_evaluation_does_not_leave_the_model_in_eval_mode(learnable_dataset) -> 
     model.train()
 
     evaluate(model, val_dataset, TrainConfig(eval_batches=2, batch_size=2, block_size=16),
-             np.random.default_rng(0), torch.device("cpu"))
+             torch.device("cpu"))
     assert model.training
+
+
+def test_two_evaluations_of_one_model_agree(learnable_dataset) -> None:
+    """Otherwise "keep the best checkpoint" compares two different samples.
+
+    On the run this was found in, the checkpoint kept as best scored 2.577
+    against its own sample and 2.686 against a proper evaluation, while the
+    final checkpoint it had beaten scored 2.680.
+    """
+    _, val_dataset, _ = learnable_dataset
+    model = CodeCraftLM(CONFIG)
+    config = TrainConfig(eval_batches=3, batch_size=2, block_size=16)
+
+    first = evaluate(model, val_dataset, config, torch.device("cpu"))
+    second = evaluate(model, val_dataset, config, torch.device("cpu"))
+
+    assert first == second
+
+
+def test_a_different_seed_scores_different_windows(learnable_dataset) -> None:
+    """The windows are fixed within a run, not fixed for all time."""
+    _, val_dataset, _ = learnable_dataset
+    model = CodeCraftLM(CONFIG)
+
+    one = evaluate(model, val_dataset, TrainConfig(eval_batches=3, batch_size=2, block_size=16, seed=1), torch.device("cpu"))
+    two = evaluate(model, val_dataset, TrainConfig(eval_batches=3, batch_size=2, block_size=16, seed=2), torch.device("cpu"))
+
+    assert one != two
 
 
 # ---------------------------------------------------------------- checkpoints

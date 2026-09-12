@@ -603,6 +603,37 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## The fill-in-the-middle run, finished
+
+4200 steps on 3.0M tokens of Python, 6.5M parameters, on four CPU cores:
+
+| | validation loss | perplexity |
+| --- | --- | --- |
+| step 1019, where the first hour ended | 2.859 | 17.4 |
+| step 1600 | 2.769 | 15.9 |
+| step 4000, the best | 2.577 | 13.2 |
+
+Still falling when the schedule ended, which says the corpus has more in it than
+this model has taken.
+
+What it writes at a caret, greedily, with the markers it was trained on:
+
+```
+    return ⟨here⟩            ->  , re.match(b)
+    print(⟨here⟩)            ->  a list of the list of the same as a list of
+    self.text = ⟨here⟩       ->  , _text, _texts, _text = _text.text,
+```
+
+The first is the shape of an answer. The rest are not, and repeating a phrase
+is what a model this size does when it has nothing better. Six and a half
+million parameters trained for three hours on three million tokens is a model
+that has learned what Python looks like and not what it means, and no amount of
+sampling arranges that into a useful suggestion.
+
+Everything around it — the caches, the superseding, the stop sequences, the
+best-of selection — is measured and works. The model is the part that needs a
+bigger corpus and a longer run, which the pipeline is built to give it.
+
 ## Fitting a model that does not fit
 
 Training keeps every block's activations from the forward pass so the backward
@@ -875,7 +906,7 @@ codecraft_model evaluate --run runs/x --checkpoint runs/x/soup.pt
 It costs no training, no data and no hyperparameters, one model comes out rather
 than several, and inference costs exactly what it did.
 
-### Measured, and it did not help
+### Measured twice, and it did not help either time
 
 The only two distinct checkpoints on disk here are 20 and 40 steps into the
 billion-token run, so that is what was measured:
@@ -893,9 +924,43 @@ checkpoints is mostly progress, not noise, and averaging a point with a worse
 point earlier on the same road gives a point in between.
 
 Averaging pays off when the checkpoints are jittering around a minimum, not when
-they are still descending. The command prints "evaluate it before using it" for
-exactly this reason, and the table above is why the sentence is there rather
-than a claim that it helps.
+they are still descending.
+
+So it was measured again at the other end, on the fill-in-the-middle run at
+steps 4000 and 4200 with the learning rate down to 3e-5:
+
+| | held-out loss | perplexity |
+| --- | --- | --- |
+| step 4000 | 2.6863 | 14.68 |
+| step 4200 | 2.6802 | 14.59 |
+| the average of both | 2.6802 | 14.59 |
+
+Indistinguishable from the later checkpoint to four decimal places. The weights
+really do differ — the largest disagreement in one attention projection is
+0.0018 — and the average really is their midpoint, but 200 steps at that
+learning rate move the model too little for the average to be anywhere else.
+
+Two measurements, two reasons, one answer: the checkpoints are either too far
+apart to average or too close to be worth it. The command prints "evaluate it
+before using it" for exactly this reason, and both tables are here rather than a
+claim that it helps.
+
+### What that measurement found instead
+
+The checkpoint the training loop had kept as best, at step 4000, scored *worse*
+on a proper evaluation than the final one it had beaten: 2.6863 against 2.6802.
+
+The loop drew fresh random validation windows for every evaluation, so "keep the
+best" was comparing two checkpoints against two different samples of the
+validation set. At 20 batches the difference between samples is larger than the
+difference between checkpoints a hundred steps apart, which makes the choice
+close to arbitrary.
+
+The windows are now seeded from the run's configuration, so every evaluation in
+a run scores the same text and successive numbers can be compared. The cost is
+that the number describes one sample rather than an unbiased estimate of the
+whole validation set, which is the right trade for a number whose entire job is
+to be compared with the same number from a hundred steps ago.
 
 ## Measuring a checkpoint
 
@@ -1033,7 +1098,7 @@ whatever it is shown.
 make test-model
 ```
 
-454 tests: parameter counts against real modules, tokenizer round trips over
+456 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

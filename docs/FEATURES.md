@@ -715,6 +715,18 @@ audit for duplicate code found two real bugs in it.
 | 480 | On demand, not as you type | a round trip whose answer only changes when the file does |
 | 481 | `/api/v1/assistant/tokenize` on the gateway | bounded at a megabyte |
 
+## Recovering a deleted file, and comparable validation
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 482 | Snapshots remember the file's name | without it a deleted file's history is an id referring to nothing |
+| 483 | A rename leaves older snapshots with the older name | which is what they were |
+| 484 | Deleted files are listed in the history panel | with the last snapshot of each |
+| 485 | Recovering one makes a new file | the old id is gone, and so is anything that referred to it |
+| 486 | A recovered name that is taken becomes `name-2.ext` | |
+| 487 | Validation scores the same windows every time | so "keep the best" compares checkpoints, not samples |
+| 488 | A different seed scores different windows | fixed within a run, not for all time |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -11,17 +11,34 @@ import { History as HistoryIcon, RotateCcw, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { collapse, diffLines, diffStats } from '../lib/diff';
-import { type History, describeAge, describeReason, revisionsFor } from '../lib/history';
+import {
+  type History,
+  describeAge,
+  describeReason,
+  orphaned,
+  revisionsFor,
+} from '../lib/history';
 import type { VirtualFile } from '../lib/types';
 
 interface Props {
   history: History;
   file: VirtualFile | null;
+  /** Every file in the workspace, so history without one can be recognised. */
+  files: readonly VirtualFile[];
   onRestore: (fileId: string, content: string) => void;
   onForget: (fileId: string) => void;
+  /** Bring back a file that was deleted, from the last snapshot of it. */
+  onRecover: (name: string, content: string) => void;
 }
 
-export function HistoryPanel({ history, file, onRestore, onForget }: Props) {
+export function HistoryPanel({
+  history,
+  file,
+  files,
+  onRestore,
+  onForget,
+  onRecover,
+}: Props) {
   const [selected, setSelected] = useState<string | null>(null);
 
   const revisions = file ? revisionsFor(history, file.id) : [];
@@ -37,16 +54,32 @@ export function HistoryPanel({ history, file, onRestore, onForget }: Props) {
     return { hunks: collapse(lines, 2), stats: diffStats(lines) };
   }, [active, file]);
 
+  // Files that were deleted but whose snapshots are still here. Deliberately
+  // shown rather than quietly kept: the content is the only copy left.
+  const deleted = orphaned(history, files);
+
+  const recoverable = (
+    <Deleted history={history} fileIds={deleted} onRecover={onRecover} onForget={onForget} />
+  );
+
   if (!file) {
-    return <Empty>Open a file to see its history.</Empty>;
+    return (
+      <>
+        <Empty>Open a file to see its history.</Empty>
+        {recoverable}
+      </>
+    );
   }
 
   if (revisions.length === 0) {
     return (
-      <Empty>
-        No snapshots of {file.name} yet. One is taken when you pause after editing, before a
-        run, and before anything rewrites the file for you.
-      </Empty>
+      <>
+        <Empty>
+          No snapshots of {file.name} yet. One is taken when you pause after editing, before a
+          run, and before anything rewrites the file for you.
+        </Empty>
+        {recoverable}
+      </>
     );
   }
 
@@ -95,6 +128,8 @@ export function HistoryPanel({ history, file, onRestore, onForget }: Props) {
           );
         })}
       </ul>
+
+      {recoverable}
 
       {active && change && (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -146,6 +181,62 @@ export function HistoryPanel({ history, file, onRestore, onForget }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Snapshots of files the workspace no longer has.
+ *
+ * Deleting the wrong file is the accident local history exists for, so its
+ * snapshots outlive it and are offered back here rather than being tidied away.
+ * The name is the one it had; recovering makes a new file, because the old id
+ * is gone and so is anything that referred to it.
+ */
+function Deleted({
+  history,
+  fileIds,
+  onRecover,
+  onForget,
+}: {
+  history: History;
+  fileIds: readonly string[];
+  onRecover: (name: string, content: string) => void;
+  onForget: (fileId: string) => void;
+}) {
+  if (fileIds.length === 0) return null;
+
+  return (
+    <section className="border-t border-slate-800/80 p-3">
+      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Deleted files ({fileIds.length})
+      </h3>
+      <ul className="space-y-0.5">
+        {fileIds.map((fileId) => {
+          const newest = revisionsFor(history, fileId)[0];
+          if (!newest) return null;
+          return (
+            <li key={fileId} className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onRecover(newest.name || 'recovered.txt', newest.content)}
+                className="min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left text-[11px] text-slate-400 transition-colors hover:bg-slate-800/40 hover:text-slate-200"
+                title="Bring this file back from its last snapshot"
+              >
+                {newest.name || fileId}
+              </button>
+              <button
+                type="button"
+                onClick={() => onForget(fileId)}
+                aria-label={`Discard the history of ${newest.name || fileId}`}
+                className="shrink-0 rounded p-0.5 text-slate-600 transition-colors hover:bg-slate-800/60 hover:text-halt"
+              >
+                <Trash2 className="h-3 w-3" aria-hidden />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

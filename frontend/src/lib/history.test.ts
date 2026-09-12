@@ -33,6 +33,7 @@ function series(fileId: string, count: number, size = 10): History {
   for (let index = 0; index < count; index += 1) {
     history = record(history, {
       fileId,
+      name: `${fileId}.py`,
       content: String(index).padEnd(size, '.'),
       reason: 'run',
       at: START + index * 60_000,
@@ -43,7 +44,7 @@ function series(fileId: string, count: number, size = 10): History {
 
 describe('recording', () => {
   test('a snapshot is kept', () => {
-    const history = record(EMPTY_HISTORY, { fileId: 'a', content: 'x = 1', reason: 'edit', at: START });
+    const history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'x = 1', reason: 'edit', at: START });
 
     expect(revisionsFor(history, 'a')).toHaveLength(1);
     expect(revisionsFor(history, 'a')[0]!.content).toBe('x = 1');
@@ -61,15 +62,15 @@ describe('recording', () => {
 
   test('content identical to the last snapshot is not recorded', () => {
     // Otherwise the list fills with entries that all diff to nothing.
-    const first = record(EMPTY_HISTORY, { fileId: 'a', content: 'same', reason: 'edit', at: START });
-    const second = record(first, { fileId: 'a', content: 'same', reason: 'run', at: START + 90_000 });
+    const first = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'same', reason: 'edit', at: START });
+    const second = record(first, { fileId: 'a', name: 'a.py', content: 'same', reason: 'run', at: START + 90_000 });
 
     expect(second).toBe(first);
   });
 
   test('files keep separate histories', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'one', reason: 'edit', at: START });
-    history = record(history, { fileId: 'b', content: 'two', reason: 'edit', at: START });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'one', reason: 'edit', at: START });
+    history = record(history, { fileId: 'b', name: 'b.py', content: 'two', reason: 'edit', at: START });
 
     expect(revisionsFor(history, 'a')[0]!.content).toBe('one');
     expect(revisionsFor(history, 'b')[0]!.content).toBe('two');
@@ -80,8 +81,8 @@ describe('recording', () => {
   });
 
   test('revisions have distinct ids even in the same millisecond', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: '1', reason: 'run', at: START });
-    history = record(history, { fileId: 'a', content: '2', reason: 'run', at: START });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: '1', reason: 'run', at: START });
+    history = record(history, { fileId: 'a', name: 'a.py', content: '2', reason: 'run', at: START });
 
     const [newer, older] = revisionsFor(history, 'a');
     expect(newer!.id).not.toBe(older!.id);
@@ -90,17 +91,18 @@ describe('recording', () => {
 
 describe('coalescing', () => {
   test('edits close together collapse into one entry', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'de', reason: 'edit', at: START });
-    history = record(history, { fileId: 'a', content: 'def', reason: 'edit', at: START + 1000 });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'de', reason: 'edit', at: START });
+    history = record(history, { fileId: 'a', name: 'a.py', content: 'def', reason: 'edit', at: START + 1000 });
 
     expect(revisionsFor(history, 'a')).toHaveLength(1);
     expect(revisionsFor(history, 'a')[0]!.content).toBe('def');
   });
 
   test('edits far apart are separate places to go back to', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'one', reason: 'edit', at: START });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'one', reason: 'edit', at: START });
     history = record(history, {
       fileId: 'a',
+      name: 'a.py',
       content: 'two',
       reason: 'edit',
       at: START + COALESCE_MS + 1,
@@ -110,15 +112,15 @@ describe('coalescing', () => {
   });
 
   test('a run is a landmark and never collapses into an edit', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'draft', reason: 'edit', at: START });
-    history = record(history, { fileId: 'a', content: 'ran', reason: 'run', at: START + 500 });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'draft', reason: 'edit', at: START });
+    history = record(history, { fileId: 'a', name: 'a.py', content: 'ran', reason: 'run', at: START + 500 });
 
     expect(revisionsFor(history, 'a')).toHaveLength(2);
   });
 
   test('an edit right after a landmark keeps the landmark', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'ran', reason: 'run', at: START });
-    history = record(history, { fileId: 'a', content: 'then', reason: 'edit', at: START + 500 });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'ran', reason: 'run', at: START });
+    history = record(history, { fileId: 'a', name: 'a.py', content: 'then', reason: 'edit', at: START + 500 });
 
     expect(revisionsFor(history, 'a').map((revision) => revision.reason)).toEqual(['edit', 'run']);
   });
@@ -138,6 +140,7 @@ describe('limits', () => {
     for (let index = 0; index < 12; index += 1) {
       history = record(history, {
         fileId: `file${index % 4}`,
+        name: `file${index % 4}.py`,
         content: `${index}${big}`,
         reason: 'run',
         at: START + index * 60_000,
@@ -173,8 +176,8 @@ describe('limits', () => {
 
 describe('lookup and removal', () => {
   test('a revision can be found by id across files', () => {
-    let history = record(EMPTY_HISTORY, { fileId: 'a', content: 'one', reason: 'edit', at: START });
-    history = record(history, { fileId: 'b', content: 'two', reason: 'edit', at: START });
+    let history = record(EMPTY_HISTORY, { fileId: 'a', name: 'a.py', content: 'one', reason: 'edit', at: START });
+    history = record(history, { fileId: 'b', name: 'b.py', content: 'two', reason: 'edit', at: START });
     const target = revisionsFor(history, 'b')[0]!;
 
     expect(revisionById(history, target.id)?.content).toBe('two');
@@ -186,7 +189,7 @@ describe('lookup and removal', () => {
 
   test('forgetting a file drops its history', () => {
     let history = series('a', 2);
-    history = record(history, { fileId: 'b', content: 'kept', reason: 'edit', at: START });
+    history = record(history, { fileId: 'b', name: 'b.py', content: 'kept', reason: 'edit', at: START });
 
     expect(Object.keys(forget(history, 'a'))).toEqual(['b']);
   });
@@ -200,9 +203,44 @@ describe('lookup and removal', () => {
   test('history for a deleted file is offered back rather than dropped', () => {
     // Deleting the wrong file is the accident this module exists for.
     let history = series('alive', 1);
-    history = record(history, { fileId: 'deleted', content: 'gone', reason: 'edit', at: START });
+    history = record(history, { fileId: 'deleted', name: 'deleted.py', content: 'gone', reason: 'edit', at: START });
 
     expect(orphaned(history, [file('alive')])).toEqual(['deleted']);
+  });
+
+  test('a snapshot remembers the name the file had', () => {
+    // Without it a deleted file's history is an id that refers to nothing.
+    const history = record(EMPTY_HISTORY, {
+      fileId: 'x',
+      name: 'lib/util.py',
+      content: 'x = 1',
+      reason: 'edit',
+      at: START,
+    });
+
+    expect(revisionsFor(history, 'x')[0]!.name).toBe('lib/util.py');
+  });
+
+  test('a rename leaves older snapshots holding the older name', () => {
+    let history = record(EMPTY_HISTORY, {
+      fileId: 'x',
+      name: 'old.py',
+      content: 'one',
+      reason: 'run',
+      at: START,
+    });
+    history = record(history, {
+      fileId: 'x',
+      name: 'new.py',
+      content: 'two',
+      reason: 'run',
+      at: START + 60_000,
+    });
+
+    expect(revisionsFor(history, 'x').map((revision) => revision.name)).toEqual([
+      'new.py',
+      'old.py',
+    ]);
   });
 
   test('nothing is orphaned when every file is still there', () => {
