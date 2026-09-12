@@ -934,92 +934,93 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 600 | Reported as None when the corpus has no middles | which is what a corpus prepared without them looks like |
 | 601 | The same checkpoint measures the same way twice | fixed seed, sorted windows |
 | 602 | `--infill-windows`, and `--no-infill` to skip the pass | |
-| 603 | Carried in the JSON report | |
+| 603 | `--threads` on both measuring commands | a number taken while the machine is training is a number about the machine |
+| 604 | Carried in the JSON report | |
 
 ## Going to where a name was declared
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 604 | Go to definition, F12 or the palette | from the workspace index, not a language server |
-| 605 | The name the caret is on, by the editor's own idea of a word | it knows the language's rules, and answers without copying the file |
-| 606 | A number is a word but not a name | nothing to go to |
-| 607 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
-| 608 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
-| 609 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
-| 610 | It says how many declarations there were | so a wrong jump is explainable rather than mysterious |
-| 611 | A name nothing declares says so | rather than doing nothing |
-| 612 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
-| 613 | And says how many others share the name | |
+| 605 | Go to definition, F12 or the palette | from the workspace index, not a language server |
+| 606 | The name the caret is on, by the editor's own idea of a word | it knows the language's rules, and answers without copying the file |
+| 607 | A number is a word but not a name | nothing to go to |
+| 608 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
+| 609 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
+| 610 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
+| 611 | It says how many declarations there were | so a wrong jump is explainable rather than mysterious |
+| 612 | A name nothing declares says so | rather than doing nothing |
+| 613 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
+| 614 | And says how many others share the name | |
 
 ## Choosing between several completions
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 614 | A candidate is judged finished before it is judged likely | confidence alone does not separate good from bad here |
-| 615 | Finished means every bracket and quote it opened is closed | |
-| 616 | And that it does not end on a character demanding a right-hand side | `= [` and `sum([1, 2])` come out of the same caret |
-| 617 | Trailing whitespace does not decide it | |
-| 618 | A bracket inside a string does not count | |
-| 619 | Confidence still separates candidates that are equally finished | |
-| 620 | Measured: finished-first chose a finished answer at 5 of 6 carets, confidence alone at 2 | from the same four candidates each time |
-| 621 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
-| 622 | `--candidates` on the probe | which switches it from greedy to sampling |
+| 615 | A candidate is judged finished before it is judged likely | confidence alone does not separate good from bad here |
+| 616 | Finished means every bracket and quote it opened is closed | |
+| 617 | And that it does not end on a character demanding a right-hand side | `= [` and `sum([1, 2])` come out of the same caret |
+| 618 | Trailing whitespace does not decide it | |
+| 619 | A bracket inside a string does not count | |
+| 620 | Confidence still separates candidates that are equally finished | |
+| 621 | Measured: finished-first chose a finished answer at 5 of 6 carets, confidence alone at 2 | from the same four candidates each time |
+| 622 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
+| 623 | `--candidates` on the probe | which switches it from greedy to sampling |
 
 ## Every use of a name
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 623 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
-| 624 | Whole word by default | or `save` would match `saved` and `autosave` |
-| 625 | The search panel takes a request from elsewhere | rather than only what is typed into it |
-| 626 | Asking twice for the same name is two requests | the request is an object, not a string |
-| 627 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
+| 624 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
+| 625 | Whole word by default | or `save` would match `saved` and `autosave` |
+| 626 | The search panel takes a request from elsewhere | rather than only what is typed into it |
+| 627 | Asking twice for the same name is two requests | the request is an object, not a string |
+| 628 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
 
 ## What a request to the assistant may contain
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 628 | A workspace sent for symbols or completions is bounded by file count | but higher than one that would be run: nothing here is executed |
-| 629 | And by total source bytes, not only file count | |
-| 630 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
-| 631 | A few hundred files, as dropping a folder in produces, is answered rather than refused | the limit is the size of an index, not of a sandbox |
-| 632 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
-| 633 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
-| 634 | A completion prefix is bounded as the word it is | not as a document |
+| 629 | A workspace sent for symbols or completions is bounded by file count | but higher than one that would be run: nothing here is executed |
+| 630 | And by total source bytes, not only file count | |
+| 631 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
+| 632 | A few hundred files, as dropping a folder in produces, is answered rather than refused | the limit is the size of an index, not of a sandbox |
+| 633 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
+| 634 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
+| 635 | A completion prefix is bounded as the word it is | not as a document |
 
 ## Indentation the next editor will disagree with
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 635 | A line indented with both tabs and spaces is reported | certain from the source, unlike most style questions |
-| 636 | And a line whose indentation disagrees with the rest of the file | |
-| 637 | An error in an indentation-scoped language | it is what the interpreter itself refuses |
-| 638 | A warning elsewhere | there it is a file that looks different in the next editor that opens it |
-| 639 | Indentation inside a string or block comment is skipped | a docstring holding a tab-indented example is not a mistake |
-| 640 | Reported once, at the first line that disagrees | one decision, not one per line |
+| 636 | A line indented with both tabs and spaces is reported | certain from the source, unlike most style questions |
+| 637 | And a line whose indentation disagrees with the rest of the file | |
+| 638 | An error in an indentation-scoped language | it is what the interpreter itself refuses |
+| 639 | A warning elsewhere | there it is a file that looks different in the next editor that opens it |
+| 640 | Indentation inside a string or block comment is skipped | a docstring holding a tab-indented example is not a mistake |
+| 641 | Reported once, at the first line that disagrees | one decision, not one per line |
 
 ## What a keyword means
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 641 | A hover contribution point | given the word and the line it sits on |
-| 642 | Every extension registered for the language is asked | two of them may each know something different about `yield` |
-| 643 | A hover that throws is skipped | as a linter that throws is |
-| 644 | A builtin that explains keywords in Python, JavaScript, TypeScript and Rust | the words whose meaning is not guessable from their spelling |
-| 645 | One sentence each | a hover is read in the two seconds before the pointer moves |
-| 646 | A keyword in a comment or a string is left alone | there it is prose |
-| 647 | Extension hovers and the index's own appear together | a keyword is never also a declaration, so they rarely collide |
-| 648 | Turning the extension off removes the hovers | as with every other contribution |
+| 642 | A hover contribution point | given the word and the line it sits on |
+| 643 | Every extension registered for the language is asked | two of them may each know something different about `yield` |
+| 644 | A hover that throws is skipped | as a linter that throws is |
+| 645 | A builtin that explains keywords in Python, JavaScript, TypeScript and Rust | the words whose meaning is not guessable from their spelling |
+| 646 | One sentence each | a hover is read in the two seconds before the pointer moves |
+| 647 | A keyword in a comment or a string is left alone | there it is prose |
+| 648 | Extension hovers and the index's own appear together | a keyword is never also a declaration, so they rarely collide |
+| 649 | Turning the extension off removes the hovers | as with every other contribution |
 
 ## Not asking a model that is not there
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 649 | Inline completion does not ask when no model is running | every pause in typing was spending a round trip to find that out again |
-| 650 | One failed request is enough to stop asking | a 503 is remembered |
-| 651 | And the probe retries once a minute while the answer is no | nothing else would ever notice a model being started |
-| 652 | No polling at all once the answer is yes | it is a fact that rarely changes in that direction |
-| 653 | An answer to an explicit request proves the model is there | whatever the last probe found |
+| 650 | Inline completion does not ask when no model is running | every pause in typing was spending a round trip to find that out again |
+| 651 | One failed request is enough to stop asking | a 503 is remembered |
+| 652 | And the probe retries once a minute while the answer is no | nothing else would ever notice a model being started |
+| 653 | No polling at all once the answer is yes | it is a fact that rarely changes in that direction |
+| 654 | An answer to an explicit request proves the model is there | whatever the last probe found |
 
 ## Not implemented
 
