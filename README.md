@@ -193,10 +193,12 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8940
 export ANTHROPIC_API_KEY=local
 ```
 
-What that buys you depends entirely on the corpus and the compute. A model
-trained for twenty minutes on one repository produces text shaped like code that
-means very little. The pipeline is real; the capability is whatever you feed it.
-Details in [core/model/README.md](core/model/README.md).
+What that buys you depends entirely on the corpus and the compute. The
+checkpoint trained here is 6.5M parameters over twenty million tokens of real
+Python, and what it writes at a caret is well-formed and nearly always wrong.
+The pipeline is real; the capability is whatever you feed it. What it writes at
+six fixed carets, and what changed when the corpus grew six times, are in
+[core/model/README.md](core/model/README.md).
 
 ## Extensions
 
