@@ -347,6 +347,7 @@ export function CodeCraftIDE() {
    */
   const todos = useMemo(() => scanWorkspace(files), [files]);
 
+
   /** One set of options for both panes, so the split is not a second editor
    *  with settings of its own to drift. */
   const editorOptions = useMemo(
@@ -1130,6 +1131,32 @@ export function CodeCraftIDE() {
   // Assigned here rather than with the other refs, which are set before this
   // hook runs. The snippet provider reads it on demand, long after mount.
   extensionsRef.current = extensions.host;
+
+  /**
+   * What extensions put in the status bar.
+   *
+   * Rendered here rather than in the bar so the bar stays a presentation
+   * component, and recomputed on the same inputs the contributions read, which
+   * is every keystroke and every caret move. Each is a few string operations
+   * over one file.
+   */
+  const statusItems = useMemo(() => {
+    const context = editorContextFrom(
+      files,
+      activeFile,
+      language,
+      selection,
+      caret.line,
+      caret.column,
+    );
+    return extensions.host
+      .allStatusBar()
+      .map((contribution) => {
+        const item = contribution.render(context);
+        return item ? { id: contribution.id, alignment: contribution.alignment, ...item } : null;
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }, [extensions, files, activeFile, language, selection, caret.line, caret.column]);
 
   /**
    * Whether the local model is running.
@@ -2172,9 +2199,7 @@ export function CodeCraftIDE() {
         language={activeRuntime?.label ?? language}
         toolchain={activeRuntime?.toolchain ?? null}
         fileName={activeFile?.name ?? ''}
-        caret={caret}
-        tabSize={preferences.tabSize}
-        selectionLength={selection.length}
+        items={statusItems}
         symbolCount={symbols.length}
         diagnosticCount={allDiagnostics.length}
         modelName={modelStatus?.available ? (modelStatus.model ?? 'local model') : null}
@@ -2193,9 +2218,7 @@ function StatusBar({
   language,
   toolchain,
   fileName,
-  caret,
-  tabSize,
-  selectionLength,
+  items,
   symbolCount,
   diagnosticCount,
   lastRun,
@@ -2208,9 +2231,15 @@ function StatusBar({
   language: string;
   toolchain: string | null;
   fileName: string;
-  caret: { line: number; column: number };
-  tabSize: number;
-  selectionLength: number;
+  /**
+   * What extensions want in the bar, already rendered.
+   *
+   * Cursor position, selection size, the language, the file's size, its line
+   * endings and its real indentation all come from the Status Bar Items
+   * extension. They used to be written here as well, which meant an extension
+   * that contributed them changed nothing and could not be turned off.
+   */
+  items: { id: string; text: string; tooltip?: string; tone?: string; alignment: 'left' | 'right' }[];
   symbolCount: number;
   diagnosticCount: number;
   lastRun: RunOutcome | null;
@@ -2233,15 +2262,12 @@ function StatusBar({
       </button>
 
       {fileName && <span className="truncate text-slate-400">{fileName}</span>}
-      <span>
-        Ln {caret.line}, Col {caret.column}
-      </span>
-      {selectionLength > 0 && <span>{selectionLength} selected</span>}
-      <span>Spaces: {tabSize}</span>
-      <span className="truncate">
-        {language}
-        {toolchain ? ` · ${toolchain}` : ''}
-      </span>
+      {items
+        .filter((item) => item.alignment === 'left')
+        .map((item) => (
+          <StatusItem key={item.id} item={item} />
+        ))}
+      <span className="truncate">{toolchain ?? language}</span>
 
       <span className="ml-auto flex items-center gap-3">
         {note && <span className="text-indigo-300">{note}</span>}
@@ -2250,6 +2276,11 @@ function StatusBar({
             {modelName}
           </span>
         )}
+        {items
+          .filter((item) => item.alignment === 'right')
+          .map((item) => (
+            <StatusItem key={item.id} item={item} />
+          ))}
         {symbolCount > 0 && <span>{symbolCount} symbols</span>}
         <span className={diagnosticCount > 0 ? 'text-amber-400' : ''}>
           {diagnosticCount} problem{diagnosticCount === 1 ? '' : 's'}
@@ -2271,6 +2302,27 @@ function StatusBar({
         )}
       </span>
     </footer>
+  );
+}
+
+/** One contributed item, in the tone it asked for. */
+function StatusItem({
+  item,
+}: {
+  item: { text: string; tooltip?: string; tone?: string };
+}) {
+  const tone =
+    item.tone === 'danger'
+      ? 'text-halt'
+      : item.tone === 'warning'
+        ? 'text-amber-400'
+        : item.tone === 'accent'
+          ? 'text-caret'
+          : '';
+  return (
+    <span className={`truncate ${tone}`} title={item.tooltip}>
+      {item.text}
+    </span>
   );
 }
 

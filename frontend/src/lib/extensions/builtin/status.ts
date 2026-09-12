@@ -5,6 +5,7 @@
  * to say, so the bar stays quiet rather than showing zeroes.
  */
 
+import { outstanding, scanFile } from '../../todos';
 import type { Extension, StatusBarContribution } from '../types';
 
 export const cursorPosition: StatusBarContribution = {
@@ -97,7 +98,10 @@ export const problemCount: StatusBarContribution = {
   alignment: 'left',
   render: (context) => {
     if (!context.activeFile) return null;
-    const count = (context.activeFile.content.match(/\b(TODO|FIXME)\b/g) ?? []).length;
+    // The same scan the panel and the linter use, so all three agree on how
+    // many notes a file has. Counting the marker word alone also counted
+    // `print("TODO")`.
+    const count = outstanding(scanFile(context.activeFile));
     return count ? { text: `${count} TODO`, tone: 'warning' } : null;
   },
 };

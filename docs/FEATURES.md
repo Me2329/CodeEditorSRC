@@ -753,6 +753,21 @@ rather than a deletion.
 | 496 | The diagnostic carries the note's text | not just which marker it was |
 | 497 | The badge counts each note once | notes in the open file are already among its diagnostics |
 
+## The status bar an extension can change
+
+The host had a status-bar contribution point, an extension contributed seven
+items to it, and nothing rendered them. The bar wrote the same facts itself, so
+the extension was listed as installed, enabled, and doing nothing.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 498 | Contributed status items are rendered | left and right, in the priority they ask for |
+| 499 | In the tone they ask for | warning, danger, accent or plain |
+| 500 | The bar no longer writes them itself | an extension that can be turned off now visibly does something |
+| 501 | Line endings, with a warning for a file that has both | it usually means two tools disagreed |
+| 502 | The file's real indentation, not the preference | the most common leading-space width |
+| 503 | The note count uses the shared scan | all three places now agree on how many a file has |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
