@@ -1002,6 +1002,7 @@ export function CodeCraftIDE() {
     [preferences.tabSize],
   );
 
+
   /**
    * Snippets in the completion list.
    *
@@ -1131,6 +1132,38 @@ export function CodeCraftIDE() {
   // Assigned here rather than with the other refs, which are set before this
   // hook runs. The snippet provider reads it on demand, long after mount.
   extensionsRef.current = extensions.host;
+
+  /**
+   * Comment markers and brackets for the language on screen.
+   *
+   * Monaco ships configurations for the languages it knows and nothing for the
+   * rest, so Ctrl+/ did nothing in a file whose language it has never heard of.
+   * An extension can now say what a comment looks like, and the editor obeys.
+   *
+   * Registered per language rather than once: Monaco keys these by language id,
+   * and a configuration registered for the wrong one is worse than none.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+
+    const configuration = extensions.host.languageConfiguration(
+      activeFile?.language ?? language,
+    );
+    if (!configuration) return;
+
+    const disposable = monaco.languages.setLanguageConfiguration(configuration.language, {
+      comments: {
+        lineComment: configuration.lineComment,
+        blockComment: configuration.blockComment
+          ? [configuration.blockComment[0], configuration.blockComment[1]]
+          : undefined,
+      },
+      brackets: configuration.brackets?.map(([open, close]) => [open, close] as [string, string]),
+    });
+
+    return () => disposable.dispose();
+  }, [monacoReady, extensions, activeFile?.language, language]);
 
   /**
    * What extensions put in the status bar.

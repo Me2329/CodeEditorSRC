@@ -260,10 +260,10 @@ would, and every one can be switched off from the Extensions panel.
 | 192 | 30 text actions | casing, line operations, encoding, number conversion |
 | 193 | 49 snippets | Python, Rust, C++, TypeScript, Go, shell |
 | 194 | 11 linters over 8 rule families | conflict markers, mutable defaults, unsafe string functions, unquoted expansions |
-| 195 | 10 language configurations | comments, brackets, indent and dedent patterns |
+| 195 | 10 language configurations | comments and brackets, registered with Monaco so Ctrl+/ works |
 | 196 | JSON formatter that survives malformed input | reformats what it can rather than throwing |
 | 197 | Whitespace formatter for every language | indentation, trailing space, final newline |
-| 198 | 8 status bar contributions | caret, selection, language, size, line endings, indent, TODO count |
+| 198 | 7 status bar contributions | caret, selection, language, size, line endings, indent, note count |
 | 199 | Extension diagnostics merged into Monaco markers | alongside the analyzer's, in one list |
 | 200 | Extension commands merged into the command palette | one list rather than two that drift |
 | 201 | Format command bound to the language's formatter | hidden when no formatter is registered |
@@ -767,6 +767,7 @@ the extension was listed as installed, enabled, and doing nothing.
 | 501 | Line endings, with a warning for a file that has both | it usually means two tools disagreed |
 | 502 | The file's real indentation, not the preference | the most common leading-space width |
 | 503 | The note count uses the shared scan | all three places now agree on how many a file has |
+| 504 | Contributed language configurations reach Monaco | Ctrl+/ did nothing in a language Monaco has never heard of |
 
 ## Not implemented
 
@@ -782,6 +783,9 @@ Stated plainly so the list above can be trusted:
 - Language servers. Completion comes from the local index, not from a
   per-language LSP.
 - Git integration. Local history is snapshots in the browser, not version control.
+- Extension themes. The host accepts a theme contribution and nothing renders
+  one: the five themes in settings are the editor's own. The contribution point
+  is API surface with no implementation behind it.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
 - Installing extensions from a registry. The host loads bundled extensions and
   the contract is public, but there is no marketplace, no download, and no
