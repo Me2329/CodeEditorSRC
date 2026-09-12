@@ -797,6 +797,14 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 518 | Rows carry their tree role and depth | |
 | 519 | The cursor is clamped when files are deleted | a cursor past the end focuses nothing and answers no key |
 
+## A dropped folder no longer loses the drop
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 520 | Files that will not read are skipped, not fatal | a folder arrives looking like a file and rejects when read |
+| 521 | Reported with everything else that was left out | |
+| 522 | A drop where nothing reads says so | rather than adding nothing and saying nothing |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { MAX_BYTES, MAX_FILES, decide, explain, uniqueName } from './drop';
+import { MAX_BYTES, MAX_FILES, decide, explain, read, uniqueName } from './drop';
 
 const file = (name: string, size = 10) => ({ name, size });
 
@@ -96,5 +96,54 @@ describe('explaining', () => {
     ]);
 
     expect(message).toBe('Skipped 2 not text, 1 too big.');
+  });
+});
+
+
+describe('reading', () => {
+  const readable = (name: string, content: string) => ({
+    name,
+    size: content.length,
+    text: async () => content,
+  });
+
+  const unreadable = (name: string) => ({
+    name,
+    size: 0,
+    // A folder dropped on the window arrives looking like this and rejects.
+    text: async () => {
+      throw new DOMException('is a directory', 'NotFoundError');
+    },
+  });
+
+  test('contents come back with their names', async () => {
+    const result = await read([readable('a.py', 'x = 1')]);
+
+    expect(result.read).toEqual([{ name: 'a.py', content: 'x = 1' }]);
+    expect(result.unreadable).toEqual([]);
+  });
+
+  test('one that will not read does not lose the others', async () => {
+    // Reading them all at once let a single rejection lose the whole drop,
+    // silently, which is what a dropped folder used to do.
+    const result = await read([readable('a.py', 'one'), unreadable('folder'), readable('b.py', 'two')]);
+
+    expect(result.read.map((entry) => entry.name)).toEqual(['a.py', 'b.py']);
+    expect(result.unreadable.map((entry) => entry.name)).toEqual(['folder']);
+  });
+
+  test('nothing readable comes back as nothing', async () => {
+    const result = await read([unreadable('folder')]);
+
+    expect(result.read).toEqual([]);
+    expect(result.unreadable).toHaveLength(1);
+  });
+
+  test('an empty drop is an empty result', async () => {
+    expect(await read([])).toEqual({ read: [], unreadable: [] });
+  });
+
+  test('unreadable files are explained like any other refusal', () => {
+    expect(explain([{ because: 'unreadable' as const }])).toBe('Skipped 1 unreadable.');
   });
 });

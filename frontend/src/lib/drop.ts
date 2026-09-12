@@ -33,7 +33,7 @@ export interface Droppable {
   size: number;
 }
 
-export type Refusal = 'too big' | 'not text' | 'too many';
+export type Refusal = 'too big' | 'not text' | 'too many' | 'unreadable';
 
 export interface Decision<T extends Droppable> {
   accepted: T[];
@@ -93,6 +93,35 @@ export function uniqueName(name: string, taken: readonly string[]): string {
   // A thousand files of one name is not a case worth a better answer than a
   // name nobody will collide with.
   return `${stem}-${Date.now()}${extension}`;
+}
+
+/**
+ * Read the ones that were accepted, skipping any that will not read.
+ *
+ * A folder dropped on the window arrives as an entry that looks like a file
+ * with no type and no size, and reading it rejects. Reading them all at once
+ * would let that one rejection lose the whole drop, silently, which is what
+ * happened before this existed.
+ */
+export async function read<T extends Droppable & { text(): Promise<string> }>(
+  files: readonly T[],
+): Promise<{ read: { name: string; content: string }[]; unreadable: T[] }> {
+  const results = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return { file, content: await file.text() };
+      } catch {
+        return { file, content: null };
+      }
+    }),
+  );
+
+  return {
+    read: results
+      .filter((entry) => entry.content !== null)
+      .map((entry) => ({ name: entry.file.name, content: entry.content as string })),
+    unreadable: results.filter((entry) => entry.content === null).map((entry) => entry.file),
+  };
 }
 
 /** What to tell the user about what was left out. */

@@ -41,7 +41,12 @@ import {
   prune as pruneRecent,
   touch as touchRecent,
 } from '../lib/recent';
-import { decide as decideDropped, explain as explainRefused, uniqueName } from '../lib/drop';
+import {
+  decide as decideDropped,
+  explain as explainRefused,
+  read as readDropped,
+  uniqueName,
+} from '../lib/drop';
 import { nextAfter, position as problemPosition, previousBefore } from '../lib/problems';
 import { loadSession, reconcile, saveSession } from '../lib/session';
 import { outstanding, scanWorkspace } from '../lib/todos';
@@ -723,10 +728,18 @@ export function CodeCraftIDE() {
       }
 
       // Read first, then add: a half-read drop that has already changed the
-      // workspace is worse than one that has not started.
-      const read = await Promise.all(
-        accepted.map(async (file) => ({ name: file.name, content: await file.text() })),
-      );
+      // workspace is worse than one that has not started. Anything that will
+      // not read is skipped rather than losing the drop, which is what a
+      // dropped folder used to do.
+      const { read, unreadable } = await readDropped(accepted);
+      const left = [
+        ...refused,
+        ...unreadable.map((file) => ({ file, because: 'unreadable' as const })),
+      ];
+      if (read.length === 0) {
+        notify(explainRefused(left) || 'Nothing there to open.');
+        return;
+      }
 
       let opened = '';
       setFiles((previous) => {
@@ -742,7 +755,7 @@ export function CodeCraftIDE() {
       if (opened) setActiveFileId(opened);
 
       const note = `Added ${read.length} ${read.length === 1 ? 'file' : 'files'}.`;
-      notify(refused.length ? `${note} ${explainRefused(refused)}` : note);
+      notify(left.length ? `${note} ${explainRefused(left)}` : note);
     },
     [notify],
   );
