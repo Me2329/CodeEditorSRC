@@ -43,7 +43,7 @@ from .device import (
 from .inflight import Supersede, Ticket
 from .reload import Watcher
 from .stopping import StopWatcher
-from .structure import ScopeWatcher
+from .structure import ScopeWatcher, settled
 from .tokenizer import Tokenizer
 from .train import load_checkpoint
 
@@ -514,7 +514,14 @@ class Engine:
         not the likeliest sequence, and for a suggestion that will be accepted
         or rejected whole, the sequence is what matters.
 
-        Scored by mean log-probability rather than total, or the shortest
+        Scored first by whether the candidate is finished — every bracket it
+        opened closed, and not ending on a character that demands a right-hand
+        side — and only then by the model's own confidence. Measured on this
+        checkpoint, confidence alone does not separate a good completion from a
+        bad one, while `= [` and `sum([1, 2])` come out of the same caret and
+        one of them is obviously the one to show.
+
+        Confidence is mean log-probability rather than total, or the shortest
         candidate wins every time by having fewer chances to be wrong.
 
         Costs `candidates` times as much. Worth it for a completion someone is
@@ -528,7 +535,8 @@ class Engine:
             raise ValueError("best-of needs at least one candidate")
 
         best_text = ""
-        best_score = float("-inf")
+        best_score: tuple[int, float] = (-1, float("-inf"))
+        best_trimmed: str | None = None
         total = 0
         outer = options.pop("report", None)
 
@@ -547,15 +555,23 @@ class Engine:
                 report=scored, ticket=ticket, **options,
             )
             total += count
-            confidence = scored.get("confidence", float("-inf"))
-            if confidence > best_score and text.strip():
-                best_score, best_text = confidence, text
+            if not text.strip():
+                continue
+            score = (int(settled(text)), scored.get("confidence", float("-inf")))
+            if score > best_score:
+                best_score, best_text = score, text
+                # The winner's, not the last one's: a caller asking why the
+                # answer is short is asking about the answer it was given.
+                best_trimmed = scored.get("trimmed")
 
         cancelled = bool(ticket is not None and ticket.cancelled)
         if outer is not None:
             outer.update(
-                cached=False, confidence=best_score,
-                stop=None, trimmed=None, superseded=cancelled,
+                cached=False, confidence=best_score[1],
+                # Whether the one that won was finished, which is the thing the
+                # caller cannot see from the text alone without redoing the work.
+                settled=best_score[0] == 1,
+                stop=None, trimmed=best_trimmed, superseded=cancelled,
             )
         # Half a search is not the answer to the question, for the same reason
         # half a generation is not.
@@ -953,6 +969,9 @@ class Handler(BaseHTTPRequestHandler):
                 # "dedent" and "bracket" for structure, otherwise the stop
                 # sequence that matched.
                 "trimmed": report.get("trimmed"),
+                # Whether the chosen candidate closed what it opened. Only
+                # best-of decides anything by it, and only best-of reports it.
+                "settled": report.get("settled"),
                 "stop": report.get("stop"),
                 "superseded": ticket.cancelled,
                 "seconds": round(time.time() - started, 3),

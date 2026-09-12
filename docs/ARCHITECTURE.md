@@ -48,6 +48,7 @@ document explains what each one owns and why the seams fall where they do.
          │   Byte-level BPE · transformer · trainer · sampler     │
          │   Serving: prefix and response caches · superseding    │
          │   Adapters merged on load · reload while training      │
+         │   At a caret: healed prompts · structural stopping     │
          └───────────────────────────────────────────────────────┘
 ```
 
@@ -149,6 +150,16 @@ the partial sequence until the next chunk completes it.
 closest to untrusted code. Each ships a small amount of JSON handling rather than
 pulling in a crate or a library, which keeps their supply chain empty and lets
 both build offline.
+
+**What a completion is allowed to do is decided in three places, not one.** The
+model server cuts a completion that breaks the structure around the caret,
+because only it sees the tokens as they arrive and can stop paying for the rest.
+The editor refuses one that does not fit the line it is on, because only it
+knows what a suggestion looks like next to a caret. The gateway does neither: it
+carries what the editor knows about the language down to the server, because the
+server cannot see the file. Putting all three in one layer would mean either a
+model server that knows about editors or an editor that pays for tokens it is
+going to throw away.
 
 **Generation is serialised, so obsolete work is cancelled rather than queued.**
 One lock guards the model: PyTorch releases the GIL inside its kernels, so two

@@ -1083,7 +1083,16 @@ export function CodeCraftIDE() {
           ), text: completion },
       ]);
       now.focus();
-      notify(`Completed ${answer.tokens} tokens from ${answer.model}.`);
+      // Why it is shorter than the budget asked for, when the model did not
+      // choose to stop: the suggestion left the block it started in, or closed
+      // a bracket the file already closes.
+      const cut =
+        answer.trimmed === 'dedent'
+          ? ', cut where it left the block'
+          : answer.trimmed === 'bracket'
+            ? ', cut before a bracket this line already closes'
+            : '';
+      notify(`Completed ${answer.tokens} tokens from ${answer.model}${cut}.`);
     } catch {
       notify('No model is running, so there is nothing to complete with.');
     }

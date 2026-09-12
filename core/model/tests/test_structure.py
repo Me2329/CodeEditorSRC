@@ -1,6 +1,6 @@
 """What a completion is allowed to do to the code around it."""
 
-from codecraft_model.structure import ScopeWatcher
+from codecraft_model.structure import ScopeWatcher, settled
 
 
 def stream(watcher: ScopeWatcher, text: str, chunk: int = 3) -> tuple[str, bool]:
@@ -149,3 +149,39 @@ def test_both_rules_at_once_take_the_earlier_cut():
     stream(watcher, "a\nb)")
     assert watcher.reason == "dedent"
     assert watcher.text == "a"
+
+
+# --------------------------------------------------------- finished or not
+
+def test_a_completion_that_closes_what_it_opened_is_finished():
+    assert settled("sum([1, 2, 3])")
+    assert settled("value")
+    assert settled("item, item=item")
+
+
+def test_an_unclosed_bracket_is_not_finished():
+    assert not settled("= [")
+    assert not settled("foo(a, b")
+
+
+def test_an_unclosed_quote_is_not_finished():
+    assert not settled('name = "open')
+
+
+def test_something_demanding_a_right_hand_side_is_not_finished():
+    for text in ["a +", "x =", "self.", "if x:", "items,"]:
+        assert not settled(text), text
+
+
+def test_trailing_whitespace_does_not_decide_it():
+    assert settled("value   \n")
+    assert not settled("value +  \n")
+
+
+def test_nothing_is_not_finished():
+    assert not settled("")
+    assert not settled("   \n  ")
+
+
+def test_a_bracket_inside_a_string_does_not_count():
+    assert settled('print("(")')

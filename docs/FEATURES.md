@@ -949,6 +949,19 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 610 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
 | 611 | And says how many others share the name | |
 
+## Choosing between several completions
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 612 | A candidate is judged finished before it is judged likely | confidence alone does not separate good from bad here |
+| 613 | Finished means every bracket and quote it opened is closed | |
+| 614 | And that it does not end on a character demanding a right-hand side | `= [` and `sum([1, 2])` come out of the same caret |
+| 615 | Trailing whitespace does not decide it | |
+| 616 | A bracket inside a string does not count | |
+| 617 | Confidence still separates candidates that are equally finished | |
+| 618 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
+| 619 | `--candidates` on the probe | which switches it from greedy to sampling |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

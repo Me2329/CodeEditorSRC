@@ -68,6 +68,51 @@ def _open_quote(line: str) -> str | None:
     return quote
 
 
+# Characters a completion cannot end on. An assignment, an open bracket, a
+# comma or an arithmetic operator all require something to their right, so a
+# suggestion ending on one is a suggestion that stopped halfway.
+DANGLING = "=([{,+-*/%<>&|^~:."
+
+
+def settled(text: str) -> bool:
+    """Whether a completion ends somewhere a person could stop typing.
+
+    Not whether it is correct — nothing here can judge that. Whether it is
+    finished: every bracket it opened is closed, every quote it opened is
+    closed, and it does not end on a character that demands a right-hand side.
+
+    This is what separates `sum([1, 2])` from `= [`, and both of those come out
+    of the same model at the same caret. Given several candidates, the finished
+    one is the one worth showing.
+    """
+    body = text.rstrip()
+    if not body:
+        return False
+
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for char in body:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+        elif quote is not None:
+            if char == quote:
+                quote = None
+        elif char in QUOTES:
+            quote = char
+        elif char in OPENERS:
+            depth += 1
+        elif char in CLOSERS:
+            depth -= 1
+
+    if quote is not None or depth != 0:
+        return False
+    return body[-1] not in DANGLING
+
+
 class ScopeWatcher:
     """Reports where a completion stops belonging to the caret it started at."""
 

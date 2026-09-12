@@ -887,17 +887,26 @@ def command_probe(args: argparse.Namespace) -> int:
             # Every case starts from the same state, so a difference between
             # two rows is the model rather than where the sampler had got to.
             torch.manual_seed(args.seed)
-            text, count = engine.infill(
-                case.prefix,
-                case.suffix,
+            options = dict(
                 max_tokens=args.tokens,
                 temperature=args.temperature,
                 line_comment=case.line_comment,
                 heal=not args.no_heal,
                 scope=not args.no_scope,
-                use_cache=False,
                 report=recorded,
             )
+            if args.candidates > 1:
+                # Sampling, not greedy: several candidates at temperature zero
+                # would be the same candidate several times.
+                text, count = engine.infill_best_of(
+                    case.prefix, case.suffix,
+                    candidates=args.candidates,
+                    **{key: value for key, value in options.items() if key != "temperature"},
+                )
+            else:
+                text, count = engine.infill(
+                    case.prefix, case.suffix, use_cache=False, **options
+                )
             answer = Answer(
                 case=case.name,
                 completion=text,
@@ -1296,6 +1305,12 @@ def main(argv: list[str] | None = None) -> int:
         help="zero, so the same checkpoint answers the same way twice",
     )
     prober.add_argument("--seed", type=int, default=1337)
+    prober.add_argument(
+        "--candidates",
+        type=int,
+        default=1,
+        help="sample this many per caret and keep the best; ignores --temperature",
+    )
     prober.add_argument(
         "--no-heal",
         action="store_true",

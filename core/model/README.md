@@ -956,6 +956,15 @@ property of the sampler rather than of the model.
 Mean rather than total, or the shortest candidate wins every time by having
 fewer chances to be wrong.
 
+Confidence is not the first thing asked, though, because measured on this
+checkpoint it does not separate a good completion from a bad one — there is a
+section below about that. What is asked first is whether the candidate is
+*finished*: every bracket and quote it opened is closed, and it does not end on
+a character that demands a right-hand side. At one caret this model produced
+both `= [` and `sum([1, 2])`, and no amount of log-probability is needed to say
+which of those is worth showing. Confidence then separates the candidates that
+are equally finished.
+
 It costs four generations and one reading of the prompt. The prompt is identical
 for every candidate, so only the sampling is repeated, and the two caches are
 separate switches for exactly this reason: no remembered answer, or every

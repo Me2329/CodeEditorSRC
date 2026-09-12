@@ -1050,3 +1050,74 @@ def test_healed_and_unhealed_are_different_questions(run_directory) -> None:
 
     assert first["cached"] is False
     assert second["cached"] is False
+
+
+def test_best_of_prefers_a_finished_candidate_over_a_confident_one(run_directory) -> None:
+    """`= [` and `sum([1, 2])` come out of the same caret; one is showable."""
+    engine = Engine(run_directory)
+    answers = iter([("= [", 3), ("sum([1, 2])", 6), ("x +", 2)])
+    scores = iter([-0.1, -2.0, -0.2])
+
+    def pretend(prefix, suffix, **options):
+        report = options.get("report")
+        if report is not None:
+            report.update(confidence=next(scores))
+        return next(answers)
+
+    engine.infill = pretend
+    text, _ = engine.infill_best_of("a = ", "\n", candidates=3)
+
+    assert text == "sum([1, 2])"
+
+
+def test_best_of_falls_back_to_confidence_among_equals(run_directory) -> None:
+    engine = Engine(run_directory)
+    answers = iter([("first", 2), ("second", 2)])
+    scores = iter([-2.0, -0.5])
+
+    def pretend(prefix, suffix, **options):
+        report = options.get("report")
+        if report is not None:
+            report.update(confidence=next(scores))
+        return next(answers)
+
+    engine.infill = pretend
+    text, _ = engine.infill_best_of("a = ", "\n", candidates=2)
+
+    assert text == "second"
+
+
+def test_best_of_says_whether_what_it_chose_was_finished(run_directory) -> None:
+    engine = Engine(run_directory)
+
+    def pretend(prefix, suffix, **options):
+        report = options.get("report")
+        if report is not None:
+            report.update(confidence=-1.0)
+        return "value", 2
+
+    engine.infill = pretend
+    outer: dict = {}
+    engine.infill_best_of("a = ", "\n", candidates=1, report=outer)
+
+    assert outer["settled"] is True
+
+
+def test_best_of_reports_why_the_winner_was_cut(run_directory) -> None:
+    """Not why some candidate that lost was."""
+    engine = Engine(run_directory)
+    answers = iter([("a +", 2), ("value", 2)])
+    reasons = iter(["bracket", "dedent"])
+
+    def pretend(prefix, suffix, **options):
+        report = options.get("report")
+        if report is not None:
+            report.update(confidence=-1.0, trimmed=next(reasons))
+        return next(answers)
+
+    engine.infill = pretend
+    outer: dict = {}
+    text, _ = engine.infill_best_of("a = ", "\n", candidates=2, report=outer)
+
+    assert text == "value"
+    assert outer["trimmed"] == "dedent"
