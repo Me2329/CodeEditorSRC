@@ -1039,6 +1039,34 @@ hides exactly that. Passing the same run twice is a supported thing to do: the
 two rows are numbered apart, and identical answers are the check that the probe
 is deterministic.
 
+## Scoring the part the editor asks for
+
+Held-out perplexity scores every token in the stream, and nearly all of a
+fill-in-the-middle stream is prefix and suffix: text the model is given rather
+than asked for. An editor only ever asks for the middle. A checkpoint can get
+better at reading code while getting worse at writing the part that goes in the
+hole, and one number cannot show that.
+
+So `evaluate` now reports a second loss, over the middles alone:
+
+```
+held-out loss        3.7712      everything, as before
+middles only         3.7990      what the model was asked to write
+middle tokens        3,745       15.2% of what was read
+```
+
+The windows are placed rather than sampled. Each one ends 64 tokens after a
+fill-in-the-middle marker, so the model has read a whole prefix and suffix and
+is scored on the first tokens of its answer, which is all an editor ever sees.
+
+That placement is the entire measurement, and the first version of it did not
+have it. Sampling windows at random and scoring whatever middle tokens happened
+to fall inside them scored **30 tokens out of 24,576** — 0.2% — and reported a
+middles-only loss of 4.31 against 3.77 for the stream. The number looked like a
+finding. It was thirty tokens of noise. Placed windows put 3,745 tokens through
+it and the gap disappeared: this checkpoint is no worse at middles than at
+anything else.
+
 ## Healing the caret
 
 A caret does not land on token boundaries. `def parse(te` ends inside whatever

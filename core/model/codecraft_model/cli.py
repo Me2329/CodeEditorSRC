@@ -732,7 +732,12 @@ def command_evaluate(args: argparse.Namespace) -> int:
         print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
         return 1
 
-    from .evaluate import measure_perplexity, measure_throughput, report
+    from .evaluate import (
+        measure_infill_perplexity,
+        measure_perplexity,
+        measure_throughput,
+        report,
+    )
 
     device = resolve_device(args.device)
     model, payload = load_checkpoint(checkpoint, device)
@@ -753,6 +758,7 @@ def command_evaluate(args: argparse.Namespace) -> int:
         )
 
     perplexity = None
+    infill = None
     validation = run / "val.bin"
     if validation.exists():
         metadata = json.loads((run / "meta.json").read_text(encoding="utf-8"))
@@ -773,6 +779,35 @@ def command_evaluate(args: argparse.Namespace) -> int:
             "   (comparable across tokenizers)\n"
             f"tokens scored        {perplexity.tokens_scored:,}\n"
         )
+
+        # The same held-out data, scored only where the model is being asked to
+        # write rather than to read. A checkpoint can improve at one and not the
+        # other, and the editor only ever asks for the second.
+        tokenizer_file = run / "tokenizer.json"
+        if not args.no_infill and tokenizer_file.exists():
+            from .tokenizer import Tokenizer
+
+            tokenizer = Tokenizer.load(tokenizer_file)
+            if tokenizer.vocab_size == model.config.vocab_size:
+                infill = measure_infill_perplexity(
+                    model,
+                    TokenDataset(validation, metadata["dtype"]),
+                    fim_middle=tokenizer.fim_middle,
+                    boundaries=(tokenizer.fim_prefix, tokenizer.fim_suffix),
+                    windows=args.infill_windows,
+                    batch_size=max(1, args.batch // 2),
+                    block_size=min(args.block, model.config.max_seq_len),
+                    device=device,
+                )
+            if infill is None:
+                print("no fill-in-the-middle documents in the held-out set\n")
+            else:
+                print(
+                    f"middles only         {infill.loss:.4f}\n"
+                    f"middle perplexity    {infill.perplexity:.2f}\n"
+                    f"middle tokens        {infill.middle_tokens:,}"
+                    f"   ({infill.coverage:.1%} of what was read)\n"
+                )
     else:
         print("no val.bin in the run directory; skipping perplexity\n")
 
@@ -790,7 +825,7 @@ def command_evaluate(args: argparse.Namespace) -> int:
 
     if args.json:
         Path(args.json).write_text(
-            json.dumps(report(perplexity, throughput), indent=2), encoding="utf-8"
+            json.dumps(report(perplexity, throughput, infill), indent=2), encoding="utf-8"
         )
         print(f"\nwritten to {args.json}")
     return 0
@@ -1209,6 +1244,17 @@ def main(argv: list[str] | None = None) -> int:
     evaluator.add_argument("--generate-tokens", type=int, default=64)
     evaluator.add_argument(
         "--quantize", action="store_true", help="measure the int8 model instead"
+    )
+    evaluator.add_argument(
+        "--infill-windows",
+        type=int,
+        default=48,
+        help="how many fill-in-the-middle markers to score the answer after",
+    )
+    evaluator.add_argument(
+        "--no-infill",
+        action="store_true",
+        help="skip the middles-only score, which costs a second pass over the data",
     )
     evaluator.add_argument("--json", default=None, help="also write the numbers to a file")
     add_device(evaluator)

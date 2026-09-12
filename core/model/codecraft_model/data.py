@@ -405,6 +405,17 @@ class TokenDataset:
             )
 
         starts = generator.integers(0, highest, size=batch_size)
+        return self.windows_at(starts, block_size, device=device)
+
+    def windows_at(self, starts, block_size: int, device=None):
+        """The same batch, from positions the caller chose.
+
+        Random windows are what training wants. A measurement sometimes wants
+        particular ones: scoring what a model writes after a fill-in-the-middle
+        marker means starting where those markers are, not where the dice fall.
+        """
+        import torch
+
         inputs = np.stack([self.tokens[s : s + block_size] for s in starts])
         targets = np.stack([self.tokens[s + 1 : s + 1 + block_size] for s in starts])
 
@@ -422,3 +433,7 @@ class TokenDataset:
                 targets.pin_memory().to(device, non_blocking=True),
             )
         return inputs.to(device), targets.to(device)
+
+    def find(self, token: int):
+        """Every position holding this token. One pass over the stream."""
+        return np.flatnonzero(np.asarray(self.tokens) == token)

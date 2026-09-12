@@ -10,7 +10,13 @@ import torch
 
 from codecraft_model.config import ModelConfig
 from codecraft_model.data import TokenDataset, write_dataset
-from codecraft_model.evaluate import measure_perplexity, measure_throughput, report
+from codecraft_model.evaluate import (
+    measure_infill_perplexity,
+    measure_perplexity,
+    measure_throughput,
+    middle_mask,
+    report,
+)
 from codecraft_model.model import CodeCraftLM
 
 CONFIG = ModelConfig(
@@ -147,3 +153,104 @@ def test_a_report_tolerates_a_missing_half(model) -> None:
     """A run directory without val.bin still gets throughput numbers."""
     throughput = measure_throughput(model, prompt_tokens=16, generate_tokens=4, warmup=0)
     assert report(None, throughput)["perplexity"] is None
+
+
+# ------------------------------------------------------------- middles only
+
+MIDDLE = 60
+PREFIX_MARKER = 61
+SUFFIX_MARKER = 62
+
+
+@pytest.fixture
+def infill_dataset(tmp_path):
+    """A stream of documents, each one rearranged the way training does it."""
+    document = (
+        [PREFIX_MARKER] + [1, 2, 3, 4] * 8
+        + [SUFFIX_MARKER] + [5, 6, 7, 8] * 8
+        + [MIDDLE] + [9, 10, 11, 12] * 8
+    )
+    directory = tmp_path / "fim"
+    directory.mkdir()
+    write_dataset(np.array(document * 40, dtype=np.uint16), directory)
+    return TokenDataset(directory / "train.bin")
+
+
+def test_the_mask_starts_at_the_marker_and_ends_at_the_next_document() -> None:
+    # Position i predicts the token at i + 1, so the marker's own position is
+    # the first one that predicts a middle token.
+    ids = torch.tensor([[9, 61, 5, 5, 62, 7, 7, 60, 8, 8, 61, 5, 60, 4]])
+
+    mask = middle_mask(ids, 60, (61, 62))
+
+    assert mask.tolist() == [[0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1]]
+
+
+def test_a_window_with_no_marker_scores_nothing() -> None:
+    ids = torch.tensor([[1, 2, 3, 4]])
+    assert middle_mask(ids, 60, (61, 62)).sum() == 0
+
+
+def test_middles_are_scored_where_the_markers_are(model, infill_dataset) -> None:
+    measured = measure_infill_perplexity(
+        model,
+        infill_dataset,
+        fim_middle=MIDDLE,
+        boundaries=(PREFIX_MARKER, SUFFIX_MARKER),
+        windows=8,
+        batch_size=4,
+        block_size=64,
+        answer_tokens=16,
+    )
+
+    assert measured is not None
+    # Sixteen positions per window, and nothing outside them.
+    assert measured.middle_tokens > 0
+    assert measured.middle_tokens <= 8 * 16 + 8 * 16
+    assert measured.coverage < 1.0
+
+
+def test_a_corpus_without_middles_has_no_number_to_report(model, dataset) -> None:
+    """Which is what a corpus prepared without fill-in-the-middle looks like."""
+    assert (
+        measure_infill_perplexity(
+            model, dataset, fim_middle=MIDDLE, boundaries=(PREFIX_MARKER,),
+            windows=4, block_size=32,
+        )
+        is None
+    )
+
+
+def test_the_same_checkpoint_measures_the_same_way_twice(model, infill_dataset) -> None:
+    options = dict(
+        fim_middle=MIDDLE, boundaries=(PREFIX_MARKER, SUFFIX_MARKER),
+        windows=6, batch_size=3, block_size=64, answer_tokens=16,
+    )
+    first = measure_infill_perplexity(model, infill_dataset, **options)
+    second = measure_infill_perplexity(model, infill_dataset, **options)
+
+    assert first is not None and second is not None
+    assert first.loss == pytest.approx(second.loss)
+    assert first.middle_tokens == second.middle_tokens
+
+
+def test_an_untrained_model_is_near_the_baseline_on_middles_too(model, infill_dataset) -> None:
+    measured = measure_infill_perplexity(
+        model, infill_dataset, fim_middle=MIDDLE,
+        boundaries=(PREFIX_MARKER, SUFFIX_MARKER),
+        windows=8, batch_size=4, block_size=64, answer_tokens=16,
+    )
+
+    assert measured is not None
+    assert abs(measured.loss - math.log(CONFIG.vocab_size)) < 1.5
+
+
+def test_the_report_carries_the_middles_when_there_are_any(model, infill_dataset) -> None:
+    measured = measure_infill_perplexity(
+        model, infill_dataset, fim_middle=MIDDLE,
+        boundaries=(PREFIX_MARKER, SUFFIX_MARKER),
+        windows=4, batch_size=2, block_size=64, answer_tokens=8,
+    )
+
+    assert report(None, None, measured)["infill"]["middle_tokens"] == measured.middle_tokens
+    assert report(None, None, None)["infill"] is None

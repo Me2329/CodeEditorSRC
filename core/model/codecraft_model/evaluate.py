@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from .data import TokenDataset
 from .device import autocast_dtype, synchronize
@@ -39,6 +40,20 @@ class Perplexity:
     bits_per_token: float
     bits_per_character: float
     tokens_scored: int
+    batches: int
+
+
+@dataclass(frozen=True)
+class InfillPerplexity:
+    """Loss on the middles only, which is the part an editor actually asks for."""
+
+    loss: float
+    perplexity: float
+    middle_tokens: int
+    tokens_seen: int
+    #: Scored tokens as a fraction of those read. Each window is mostly the
+    #: context the model needed in order to be asked the question.
+    coverage: float
     batches: int
 
 
@@ -112,6 +127,128 @@ def measure_perplexity(
 
 
 @torch.no_grad()
+def measure_infill_perplexity(
+    model: CodeCraftLM,
+    dataset: TokenDataset,
+    *,
+    fim_middle: int,
+    boundaries: tuple[int, ...],
+    windows: int = 48,
+    batch_size: int = 4,
+    block_size: int | None = None,
+    answer_tokens: int = 64,
+    device: torch.device | None = None,
+    seed: int = 1234,
+) -> InfillPerplexity | None:
+    """Mean loss over what the model is asked to write, and nothing else.
+
+    Ordinary perplexity scores every token in the stream, and nearly all of it
+    is prefix and suffix: text the model is given rather than asked for. An
+    editor only ever asks for the middle. A checkpoint can get better at reading
+    code while getting worse at writing the part that goes in the hole, and one
+    number cannot show that.
+
+    The windows are placed rather than sampled. Each one ends `answer_tokens`
+    after a fill-in-the-middle marker, so the model has read a full prefix and
+    suffix and is scored on the first tokens of the answer — which is the whole
+    of what an editor ever sees. Sampling windows at random would instead land
+    mostly inside long prefixes and score a handful of middle tokens by luck:
+    measured on this corpus, 0.2% of what was read.
+
+    Returns None when the held-out set has no markers in it, which is what a
+    corpus prepared without fill-in-the-middle looks like.
+    """
+    device = device or next(model.parameters()).device
+    block = block_size or model.config.max_seq_len
+    answer = max(1, min(answer_tokens, block - 1))
+    amp_dtype = autocast_dtype(device)
+
+    markers = dataset.find(fim_middle)
+    lead = block - answer
+    # A marker needs a whole window of context behind it and one token of
+    # lookahead in front, or the window would run off an end of the stream.
+    usable = markers[(markers >= lead) & (markers + answer + 1 < len(dataset))]
+    if len(usable) == 0:
+        return None
+
+    generator = np.random.default_rng(seed)
+    if len(usable) > windows:
+        usable = generator.choice(usable, size=windows, replace=False)
+    usable = np.sort(usable)
+
+    was_training = model.training
+    model.eval()
+
+    total_loss = torch.zeros((), device=device, dtype=torch.float64)
+    middle_tokens = 0
+    seen = 0
+    batches = 0
+
+    for offset in range(0, len(usable), batch_size):
+        starts = [int(marker) - lead for marker in usable[offset : offset + batch_size]]
+        inputs, targets = dataset.windows_at(starts, block, device=device)
+        mask = middle_mask(inputs, fim_middle, boundaries)
+        seen += inputs.numel()
+        batches += 1
+        if not bool(mask.any()):
+            continue
+
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+        ):
+            logits, _, _ = model(inputs, targets=targets)
+        # Per token rather than per batch: only some of these positions are the
+        # answer to a caret, and the rest must not be averaged in.
+        losses = F.cross_entropy(
+            logits.float().view(-1, logits.size(-1)),
+            targets.reshape(-1),
+            reduction="none",
+        ).view_as(targets)
+        total_loss += (losses * mask).sum().double()
+        middle_tokens += int(mask.sum())
+
+    if was_training:
+        model.train()
+
+    if middle_tokens == 0:
+        return None
+
+    mean_loss = float(total_loss) / middle_tokens
+    return InfillPerplexity(
+        loss=mean_loss,
+        perplexity=math.exp(min(mean_loss, 20)),
+        middle_tokens=middle_tokens,
+        tokens_seen=seen,
+        coverage=middle_tokens / max(seen, 1),
+        batches=batches,
+    )
+
+
+def middle_mask(
+    inputs: torch.Tensor, fim_middle: int, boundaries: tuple[int, ...]
+) -> torch.Tensor:
+    """Which predictions are of middle tokens.
+
+    Position `i` predicts `inputs[i + 1]`, so a position counts when the token
+    at it opens or continues a middle: the marker itself, and everything after
+    it until the next document begins.
+
+    Done with running maxima rather than a loop over the batch, because the
+    question "was the most recent marker a start or an end" is exactly what a
+    cumulative maximum of positions answers.
+    """
+    positions = torch.arange(inputs.size(-1), device=inputs.device).expand_as(inputs)
+    starts = inputs == fim_middle
+    ends = torch.zeros_like(starts)
+    for token in boundaries:
+        ends |= inputs == token
+
+    last_start = torch.cummax(torch.where(starts, positions, -1), dim=-1).values
+    last_end = torch.cummax(torch.where(ends, positions, -1), dim=-1).values
+    return (last_start > last_end).to(torch.float32)
+
+
+@torch.no_grad()
 def measure_throughput(
     model: CodeCraftLM,
     *,
@@ -175,8 +312,13 @@ def measure_throughput(
     )
 
 
-def report(perplexity: Perplexity | None, throughput: Throughput | None) -> dict:
+def report(
+    perplexity: Perplexity | None,
+    throughput: Throughput | None,
+    infill: InfillPerplexity | None = None,
+) -> dict:
     return {
         "perplexity": asdict(perplexity) if perplexity else None,
+        "infill": asdict(infill) if infill else None,
         "throughput": asdict(throughput) if throughput else None,
     }

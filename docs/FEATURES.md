@@ -920,6 +920,20 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 591 | On by default, `heal: false` to turn it off | `--no-heal` on the probe |
 | 592 | Measured: four of six carets answered with nothing without it | the first token the model wanted was a line break |
 
+## Scoring the part the editor asks for
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 593 | Held-out loss over the middles alone | the rest of the stream is what the model was given, not asked for |
+| 594 | Windows placed at the markers, not sampled | random windows scored 0.2% of what they read |
+| 595 | Each window ends a fixed distance after its marker | the first tokens of the answer are all an editor sees |
+| 596 | A marker without a whole window of context behind it is skipped | |
+| 597 | A second marker inside a window counts too | it is still a middle, with context |
+| 598 | Reported as None when the corpus has no middles | which is what a corpus prepared without them looks like |
+| 599 | The same checkpoint measures the same way twice | fixed seed, sorted windows |
+| 600 | `--infill-windows`, and `--no-infill` to skip the pass | |
+| 601 | Carried in the JSON report | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
