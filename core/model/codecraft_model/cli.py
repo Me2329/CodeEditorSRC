@@ -721,8 +721,21 @@ def command_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def limit_threads(args: argparse.Namespace) -> None:
+    """Keep a measurement off cores something else is using.
+
+    A number taken while the machine is training is a number about the machine,
+    not about the model. Left alone PyTorch takes every core, so the run being
+    measured and the run being trained slow each other down and neither result
+    means anything.
+    """
+    if getattr(args, "threads", None) and resolve_device(args.device).type == "cpu":
+        torch.set_num_threads(args.threads)
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     """Measure a checkpoint, rather than reading samples and forming a view."""
+    limit_threads(args)
     run = Path(args.run)
     # Any checkpoint, not only the run's own: a soup, a fine-tune or an
     # adapter-merged model is measured against the same held-out data, which is
@@ -860,6 +873,7 @@ def command_infill(args: argparse.Namespace) -> int:
 
 def command_probe(args: argparse.Namespace) -> int:
     """Ask one checkpoint, or two, the same fixed set of questions."""
+    limit_threads(args)
     from .probe import Answer, labels, load_cases, caret_line, report, show, summarise
     from .serve import Engine
 
@@ -1249,6 +1263,12 @@ def main(argv: list[str] | None = None) -> int:
     evaluator.add_argument("--batches", type=int, default=50)
     evaluator.add_argument("--batch", type=int, default=8)
     evaluator.add_argument("--block", type=int, default=512)
+    evaluator.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to measure with; leave unset to take every core",
+    )
     evaluator.add_argument("--prompt-tokens", type=int, default=256)
     evaluator.add_argument("--generate-tokens", type=int, default=64)
     evaluator.add_argument(
@@ -1320,6 +1340,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-scope",
         action="store_true",
         help="do not cut a completion that runs past the caret it belongs to",
+    )
+    prober.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to answer with; leave unset to take every core",
     )
     prober.add_argument("--json", default=None, help="write the answers to this file")
     add_device(prober)

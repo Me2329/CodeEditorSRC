@@ -361,3 +361,34 @@ def test_context_and_dropout_can_be_overridden(tmp_path, sources, capsys) -> Non
     )
     output = capsys.readouterr().out
     assert "context 128" in output and "dropout 0.2" in output
+
+
+def test_a_measurement_can_be_kept_off_the_cores_in_use(tmp_path, sources, monkeypatch) -> None:
+    """A number taken while the machine is training is a number about the machine."""
+    import torch
+
+    asked: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", asked.append)
+
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "3",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "3",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+    asked.clear()
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([{"prefix": "def f(", "suffix": ")"}]))
+    assert (
+        main(["probe", "--run", str(run), "--cases", str(cases), "--tokens", "2", "--threads", "1"])
+        == 0
+    )
+
+    assert asked == [1]
