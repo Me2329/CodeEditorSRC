@@ -34,6 +34,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useExecutionSocket, type RunOutcome } from '../hooks/useExecutionSocket';
 import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
+import {
+  declarationsOf,
+  definitionFrom,
+  describeDeclarations,
+  wordAt,
+} from '../lib/definitions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import {
   order as byRecency,
@@ -167,6 +173,9 @@ export function CodeCraftIDE() {
   // Told apart from "this file declares nothing", which looks identical in an
   // empty list and means something completely different.
   const [symbolsUnavailable, setSymbolsUnavailable] = useState(false);
+  // Read by the definition lookup, which is registered once and must not go
+  // stale as the index is refreshed.
+  const symbolsRef = useRef<WorkspaceSymbol[]>([]);
   const [stdin, setStdin] = useState('');
   const [argsText, setArgsText] = useState('');
   const [statusNote, setStatusNote] = useState('');
@@ -469,6 +478,7 @@ export function CodeCraftIDE() {
   tabSizeRef.current = preferences.tabSize;
   activeFileIdRef.current = activeFile?.id ?? '';
   filesRef.current = files;
+  symbolsRef.current = symbols;
 
   /**
    * Persist the workspace so a refresh does not discard work in progress.
@@ -872,6 +882,50 @@ export function CodeCraftIDE() {
     [runtimes, notify],
   );
 
+  /**
+   * Go to where the name under the caret was declared.
+   *
+   * No language server: this is the workspace index the outline already uses,
+   * matched by name. It cannot tell two methods called `save` apart, so the one
+   * in the file you are in wins and the notification says how many there were.
+   */
+  const handleGoToDefinition = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const name = wordAt(model.getValue(), model.getOffsetAt(position));
+    if (!name) {
+      notify('Put the caret on a name first.');
+      return;
+    }
+
+    const here = activeFileNameRef.current;
+    const target = definitionFrom(symbolsRef.current, name, here, position.lineNumber);
+    if (!target) {
+      notify(describeDeclarations(name, declarationsOf(symbolsRef.current, name, here)));
+      return;
+    }
+
+    notify(describeDeclarations(name, declarationsOf(symbolsRef.current, name, here)));
+    if (target.file === here) {
+      handleJumpToLine(target.line);
+      return;
+    }
+
+    const file = filesRef.current.find((entry) => entry.name === target.file);
+    if (!file) {
+      notify(`${target.file} is not open in this workspace.`);
+      return;
+    }
+    setActiveFileId(file.id);
+    // Let Monaco swap models before the caret is moved, as the search panel
+    // does for the same reason.
+    window.setTimeout(() => handleJumpToLine(target.line), 60);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -1120,6 +1174,45 @@ export function CodeCraftIDE() {
 
     return () => provider.dispose();
   }, [monacoReady, preferences.snippets]);
+
+  /**
+   * What a name is, on hover.
+   *
+   * The declaration line from the workspace index, which is the one piece of
+   * information a hover can give honestly without a language server: this is
+   * where the name was declared and this is what the line says. No types, no
+   * documentation, no inference.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+
+    const provider = monaco.languages.registerHoverProvider('*', {
+      provideHover: (model, position) => {
+        const name = wordAt(model.getValue(), model.getOffsetAt(position));
+        if (!name) return null;
+
+        const found = declarationsOf(symbolsRef.current, name, activeFileNameRef.current);
+        if (found.length === 0) return null;
+
+        const [first, ...rest] = found;
+        if (!first) return null;
+        const lines = [
+          `**${first.kind}** \`${first.name}\``,
+          '```',
+          first.detail || first.name,
+          '```',
+          `${first.file}:${first.line}`,
+        ];
+        if (rest.length > 0) {
+          lines.push(`and ${rest.length} more ${rest.length === 1 ? 'declaration' : 'declarations'} of this name`);
+        }
+        return { contents: [{ value: lines.join('\n') }] };
+      },
+    });
+
+    return () => provider.dispose();
+  }, [monacoReady]);
 
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -1521,6 +1614,13 @@ export function CodeCraftIDE() {
         category: 'Navigate',
         shortcut: 'Ctrl+Shift+O',
         run: () => setPaletteMode('symbols'),
+      },
+      {
+        id: 'navigate.definition',
+        title: 'Go to definition',
+        category: 'Navigate',
+        shortcut: 'F12',
+        run: handleGoToDefinition,
       },
       {
         id: 'view.settings',

@@ -934,6 +934,21 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 600 | `--infill-windows`, and `--no-infill` to skip the pass | |
 | 601 | Carried in the JSON report | |
 
+## Going to where a name was declared
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 602 | Go to definition, F12 or the palette | from the workspace index, not a language server |
+| 603 | The name the caret is on, or has just finished typing | a caret sits between characters |
+| 604 | A number is not a name | nothing to go to |
+| 605 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
+| 606 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
+| 607 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
+| 608 | It says how many declarations there were | so a wrong jump is explainable rather than mysterious |
+| 609 | A name nothing declares says so | rather than doing nothing |
+| 610 | Hovering a name shows its declaration | kind, the line it was declared on, and where |
+| 611 | And says how many others share the name | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
@@ -945,8 +960,10 @@ Stated plainly so the list above can be trusted:
 - A debugger. No breakpoints, stepping or variable inspection.
 - Package installation inside a run. The sandbox is airgapped, so a program
   cannot fetch dependencies.
-- Language servers. Completion comes from the local index, not from a
-  per-language LSP.
+- Language servers. Completion, go-to-definition and hover come from the local
+  index, which matches names and nothing more: it cannot tell two methods called
+  `save` apart, and there are no types, no inference and no cross-file
+  resolution beyond the name.
 - Git integration. Local history is snapshots in the browser, not version control.
 - Firecracker microVMs, Kubernetes and GPU execution tiers.
 - Installing extensions from a registry. The host loads bundled extensions and
@@ -954,6 +971,9 @@ Stated plainly so the list above can be trusted:
   sandbox around extension code: an extension runs with the page's privileges.
   Treat the contract as the extension point, not as a security boundary.
 - A locally trained model that is useful for real coding help. The pipeline is
-  real and the largest configuration is genuinely a billion parameters, but a
-  checkpoint trained on one repository for twenty minutes writes text that looks
-  like code and means very little. Capability follows corpus and compute.
+  real and the largest configuration is genuinely a billion parameters, but the
+  checkpoint that exists is 6.5M parameters trained on twenty million tokens of
+  real Python, and what it writes at a caret is well-formed and nearly always
+  wrong. That has been measured rather than assumed: `core/model/README.md`
+  records what it writes at six fixed carets, what six times the corpus changed,
+  and why the conclusion is that the binding constraint is the model's size.
