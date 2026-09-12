@@ -582,6 +582,32 @@ def test_best_of_costs_what_it_says(run_directory) -> None:
     assert many >= single
 
 
+def test_candidates_share_one_prefill(run_directory) -> None:
+    """Four candidates of one prompt are four samples, not four readings.
+
+    Behavioural rather than timed: the prompt is identical for every candidate,
+    so every candidate after the first should find it already read.
+    """
+    engine = Engine(run_directory)
+    head = CORPUS[:400]
+
+    engine.infill_best_of(head + "return ", "\n", candidates=4, max_tokens=4, temperature=0.8)
+
+    assert engine.prefix_cache.stats.partial == 3
+
+
+def test_a_fresh_sample_still_reads_the_prompt_once(run_directory) -> None:
+    """`use_cache=False` asks for a different answer, not for slower work."""
+    engine = Engine(run_directory)
+    head = CORPUS[:400]
+
+    engine.infill(head + "return ", "\n", max_tokens=4, use_cache=False)
+    engine.infill(head + "return ", "\n", max_tokens=4, use_cache=False)
+
+    # Nothing was remembered, because nothing asked for the prefill to be kept.
+    assert engine.prefix_cache.stats.partial == 0
+
+
 def test_a_cancelled_search_stops_between_candidates(run_directory) -> None:
     """The expensive request is the one most likely to be running when the next
     one arrives, so it stops between candidates as well as between tokens."""

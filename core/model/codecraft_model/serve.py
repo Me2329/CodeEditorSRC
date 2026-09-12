@@ -299,6 +299,7 @@ class Engine:
         no_repeat_ngram: int = 4,
         stop: list[str] | None = None,
         use_cache: bool = True,
+        reuse_prefill: bool | None = None,
         ticket: Ticket | None = None,
         report: dict | None = None,
     ) -> tuple[str, int]:
@@ -318,8 +319,15 @@ class Engine:
         answer it gave last time, which also keeps a suggestion stable as the
         editor re-requests it rather than flickering between samples. A request
         that merely extends an earlier one reuses that prefill and pays only for
-        the tokens that are new. `use_cache=False` turns both off, which is what
-        a caller asking for a different suggestion to the same question wants.
+        the tokens that are new.
+
+        They are separate switches because they answer different questions.
+        `use_cache=False` asks for a fresh sample rather than the remembered
+        answer; it defaults `reuse_prefill` to match, which is what a caller
+        wanting a different suggestion means. Set `reuse_prefill=True` alongside
+        it to sample again from a prompt already read, which is what drawing
+        several candidates from one prompt is: the prefill is identical every
+        time and only the sampling differs.
 
         Returns the completion and the number of tokens generated, which is zero
         for an answer that came from the cache.
@@ -344,6 +352,9 @@ class Engine:
                     report.update(cached=True, confidence=None, stop=None, superseded=False)
                 return remembered, 0
 
+        if reuse_prefill is None:
+            reuse_prefill = use_cache
+
         ids = self.tokenizer.encode_infill(
             prefix, suffix, max_context=self.model.config.max_seq_len - max_tokens
         )
@@ -354,7 +365,7 @@ class Engine:
             dtype=self.amp_dtype,
             enabled=self.amp_dtype is not None,
         ):
-            reuse = self.prefix_cache.take(ids) if use_cache else None
+            reuse = self.prefix_cache.take(ids) if reuse_prefill else None
             prefix_caches, reused = reuse if reuse else (None, 0)
 
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -381,7 +392,7 @@ class Engine:
                 # the next request extends the prompt, never the suggestion.
                 on_prefill=(
                     (lambda caches, length: self._remember_prefill(ids, caches, length))
-                    if use_cache
+                    if reuse_prefill
                     else None
                 ),
             ):
@@ -459,7 +470,11 @@ class Engine:
             # remembered answer every time and the sampling would do nothing.
             scored: dict = {}
             text, count = self.infill(
-                prefix, suffix, temperature=temperature, use_cache=False,
+                prefix, suffix, temperature=temperature,
+                # No remembered answer, or every candidate would be the same
+                # one. The prefill is another matter: the prompt is identical
+                # for all of them, so reading it once is the whole saving here.
+                use_cache=False, reuse_prefill=True,
                 report=scored, ticket=ticket, **options,
             )
             total += count

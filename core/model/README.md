@@ -893,9 +893,20 @@ property of the sampler rather than of the model.
 Mean rather than total, or the shortest candidate wins every time by having
 fewer chances to be wrong.
 
-It costs what it says: four candidates, four generations. That is worth it for a
-completion someone is waiting on and reading, and not worth it for anything
-generated in bulk, so it is off unless asked for and capped at eight.
+It costs four generations and one reading of the prompt. The prompt is identical
+for every candidate, so only the sampling is repeated, and the two caches are
+separate switches for exactly this reason: no remembered answer, or every
+candidate would be the same one, but the prefill kept, because reading it again
+buys nothing.
+
+On this checkpoint at a 502-token prompt, that first reading is 1198ms and each
+reuse of it is 7.3ms. End-to-end numbers are not quoted because the machine
+these were taken on was training at the same time, and repeated runs of the same
+configuration varied between 1.8 and 17.7 seconds: the isolated measurement is
+the one that means anything.
+
+Still worth it only for a completion someone is waiting on and reading, so it is
+off unless asked for and capped at eight.
 
 The response carries `confidence` either way, which is the same number and is
 what a client would threshold on to decide whether to show a suggestion at all.
@@ -1164,7 +1175,7 @@ whatever it is shown.
 make test-model
 ```
 
-454 tests: parameter counts against real modules, tokenizer round trips over
+456 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
