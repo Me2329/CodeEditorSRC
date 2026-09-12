@@ -13,9 +13,15 @@ import type { Extension, TextActionContribution } from '../types';
 export const toUpper = (text: string) => text.toUpperCase();
 export const toLower = (text: string) => text.toLowerCase();
 
-/** Upper-case the first character, leaving an empty string alone. */
+/**
+ * Upper-case the first character.
+ *
+ * The rest is left as it was. Lower-casing it is what most implementations do
+ * and it turns `HTTPServer` into `Httpserver`, which is a worse answer than
+ * leaving a word alone.
+ */
 function capitalise(word: string): string {
-  return word ? word[0]!.toUpperCase() + word.slice(1).toLowerCase() : word;
+  return word ? word[0]!.toUpperCase() + word.slice(1) : word;
 }
 
 export function toTitleCase(text: string): string {
@@ -58,59 +64,78 @@ export const toConstantCase = (text: string) =>
 
 // -------------------------------------------------------------------- lines
 
-const lines = (text: string) => text.split('\n');
-
-export const sortLines = (text: string) =>
-  lines(text).sort((a, b) => a.localeCompare(b)).join('\n');
-
-export const sortLinesDescending = (text: string) =>
-  lines(text).sort((a, b) => b.localeCompare(a)).join('\n');
-
-/** Sort by the number embedded in each line, so `item10` follows `item9`. */
-export const sortLinesNaturally = (text: string) =>
-  lines(text)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
-    .join('\n');
-
-export const reverseLines = (text: string) => lines(text).reverse().join('\n');
-
-export function uniqueLines(text: string): string {
-  const seen = new Set<string>();
-  return lines(text)
-    .filter((line) => !seen.has(line) && (seen.add(line), true))
-    .join('\n');
+/**
+ * Split into lines, remembering whether the text ended with one.
+ *
+ * The trailing newline has to be held out and put back. Sorting a file that
+ * ends with one used to produce an empty line at the top and no newline at the
+ * end, because the empty string after the last newline sorted first and then
+ * joined like any other line.
+ */
+function split(text: string): { rows: string[]; trailing: boolean } {
+  const trailing = text.endsWith('\n');
+  return { rows: (trailing ? text.slice(0, -1) : text).split('\n'), trailing };
 }
 
-export const removeEmptyLines = (text: string) =>
-  lines(text)
-    .filter((line) => line.trim() !== '')
-    .join('\n');
+/** Put the lines back, with the newline the text came with. */
+function rejoin(rows: string[], trailing: boolean): string {
+  return rows.join('\n') + (trailing ? '\n' : '');
+}
+
+/**
+ * Apply a line operation, preserving the trailing newline.
+ *
+ * Wrapping every operation rather than fixing each one: they all had the same
+ * bug available to them, and one place to be right about it is better than
+ * twelve.
+ */
+function onLines(transform: (rows: string[]) => string[]): (text: string) => string {
+  return (text: string) => {
+    const { rows, trailing } = split(text);
+    return rejoin(transform(rows), trailing);
+  };
+}
+
+const lines = (text: string) => split(text).rows;
+
+export const sortLines = onLines((rows) => [...rows].sort((a, b) => a.localeCompare(b)));
+
+export const sortLinesDescending = onLines((rows) => [...rows].sort((a, b) => b.localeCompare(a)));
+
+/** Sort by the number embedded in each line, so `item10` follows `item9`. */
+export const sortLinesNaturally = onLines((rows) =>
+  [...rows].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })),
+);
+
+export const reverseLines = onLines((rows) => [...rows].reverse());
+
+export const uniqueLines = onLines((rows) => [...new Set(rows)]);
+
+export const removeEmptyLines = onLines((rows) => rows.filter((line) => line.trim() !== ''));
 
 /** Collapse runs of blank lines to one, the usual style rule. */
 export const collapseBlankLines = (text: string) => text.replace(/\n{3,}/g, '\n\n');
 
-export const trimTrailingWhitespace = (text: string) =>
-  lines(text)
-    .map((line) => line.replace(/[ \t]+$/, ''))
-    .join('\n');
+export const trimTrailingWhitespace = onLines((rows) =>
+  rows.map((line) => line.replace(/[ \t]+$/, '')),
+);
 
-export function numberLines(text: string): string {
-  const all = lines(text);
-  const width = String(all.length).length;
-  return all.map((line, index) => `${String(index + 1).padStart(width, ' ')}  ${line}`).join('\n');
-}
+export const numberLines = onLines((rows) => {
+  const width = String(rows.length).length;
+  return rows.map((line, index) => `${String(index + 1).padStart(width, ' ')}  ${line}`);
+});
 
-export const shuffleLines = (text: string) => {
-  const all = lines(text);
+export const shuffleLines = onLines((rows) => {
+  const all = [...rows];
   // Fisher-Yates, walking down so every permutation stays equally likely.
   for (let index = all.length - 1; index > 0; index -= 1) {
     const swap = Math.floor(Math.random() * (index + 1));
     [all[index], all[swap]] = [all[swap]!, all[index]!];
   }
-  return all.join('\n');
-};
+  return all;
+});
 
-export const joinLines = (text: string) => lines(text).join(' ');
+export const joinLines = (text: string) => split(text).rows.join(' ');
 
 // ------------------------------------------------------------------ encoding
 

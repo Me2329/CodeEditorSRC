@@ -691,49 +691,29 @@ way to make a folder is to name a file into one.
 | 469 | Never recomputes with a key/value cache | a block that appends to one would append twice |
 | 470 | Off unless asked for | a run that fits should not pay a third more time |
 
-## Text transforms
+## Text transforms, fixed
 
-Each of these is a minute of careful editing or a keystroke, and the minute is
-the kind that introduces a typo three lines from where you were looking. They
-apply to the selection, or to the whole file when there is none.
-
-| # | Feature | Notes |
-| --- | --- | --- |
-| 471 | Sort lines | naturally, so item9 comes before item10 |
-| 472 | Reverse lines | |
-| 473 | Remove duplicate lines | keeping the first of each |
-| 474 | Remove blank lines | whitespace-only ones included |
-| 475 | Trim trailing whitespace | invisible, and in every diff until someone removes it |
-| 476 | Join lines | collapsing the whitespace at the joins |
-| 477 | Number lines | right-aligned, so the text still lines up |
-| 478 | Upper, lower and title case | title case leaves existing capitals alone |
-| 479 | To camelCase and to snake_case | `parseHTTPResponse` becomes `parse_http_response` |
-| 480 | Format and minify JSON | text that is not JSON is left alone, not replaced with an error |
-| 481 | Escape as a JSON string | |
-| 482 | Base64 in both directions | through UTF-8, so it survives anything above U+00FF |
-| 483 | A trailing newline is kept where it was | a transform that strips it makes every file look changed |
-| 484 | `/tokenize` on the model server | the number a client sizing a prompt was guessing at |
-| 485 | Pieces only when asked for | a count is small; a piece per token on a long file is not |
-
-## Asking for a better completion
+The Text Toolkit extension has shipped thirty of these since it was written. An
+audit for duplicate code found two real bugs in it.
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 486 | "Complete here, best of four" | asked for, rather than offered on every pause |
-| 487 | Inserted through the editor | so one Ctrl+Z takes it back |
-| 488 | `candidates` carried through the gateway | sent only when asked for, so an older model server never sees it |
-| 489 | `confidence` carried through the gateway | reported, not acted on |
-| 490 | A model that reports no confidence is not an error | an older server, or one answering from its cache |
-| 491 | No confidence threshold | measured, it does not separate a good completion from a bad one |
+| 471 | Sorting keeps the trailing newline | it used to put an empty line at the top and drop the newline |
+| 472 | Every line operation goes through one wrapper | they all had the same bug available to them |
+| 473 | Title case leaves what is capitalised alone | it used to turn `HTTPServer` into `Httpserver` |
+| 474 | A file that is only a newline stays that way | |
+| 475 | Every action tested against an empty file | |
+| 476 | `/tokenize` on the model server | the number a client sizing a prompt was guessing at |
+| 477 | Pieces only when asked for | a count is small; a piece per token on a long file is not |
 
 ## Counting tokens
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 492 | "Count the tokens in this file" | by the model's own tokenizer, not an estimate |
-| 493 | Reported as a share of the context | which is the number that decides whether a prompt fits |
-| 494 | On demand, not as you type | a round trip whose answer only changes when the file does |
-| 495 | `/api/v1/assistant/tokenize` on the gateway | bounded at a megabyte |
+| 478 | "Count the tokens in this file" | by the model's own tokenizer, not an estimate |
+| 479 | Reported as a share of the context | which is the number that decides whether a prompt fits |
+| 480 | On demand, not as you type | a round trip whose answer only changes when the file does |
+| 481 | `/api/v1/assistant/tokenize` on the gateway | bounded at a megabyte |
 
 ## Not implemented
 
