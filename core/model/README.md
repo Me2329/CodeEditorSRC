@@ -828,6 +828,28 @@ because it is what best-of-n selects on, where it is comparing several
 completions of *one* prompt rather than comparing prompts. Filtering on it
 across prompts would be a knob that looks like it is working.
 
+## Tried, measured, and not kept
+
+Two ideas that looked right and did not survive contact with a measurement. They
+are here because the reasoning behind each is still sound and a larger model may
+well revisit them, and because a record of what was rejected is worth as much as
+the list of what was kept.
+
+**A confidence threshold on inline suggestions.** Every completion comes back
+with a mean log-probability, so the obvious move is to refuse to show one that
+scores too low. Measured across five prompts, the highest score of all went to
+`xqzzy qqq `, which is not code, and the four real prompts scored below it. The
+number is real and it is reported, but it separates completions of one prompt
+from each other, not one prompt from another. The table is above.
+
+**A file-name marker in the caret prompt.** The corpus marks every document with
+`<|file|>name` before it is rearranged for fill-in-the-middle, so most training
+examples begin with a file name, and the prompt an editor sends has none. Adding
+it back should give the model the language for free. On the checkpoint here it
+changed the answers without improving them: one case got worse, one got slightly
+more code-like, one was a wash. Three cases is not evidence, and shipping a knob
+on that basis is how a codebase fills up with options nobody can evaluate.
+
 ## Abandoning work nobody wants
 
 An editor sends a completion request per pause in typing. If the user keeps
