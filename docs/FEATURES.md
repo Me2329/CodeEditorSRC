@@ -831,6 +831,15 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 532 | Completions stop at the corpus file marker | it is ordinary text in the training data, so the model emits one |
 | 533 | A caller's own stops replace the default | passing stops is a decision about where to end |
 
+## Not showing a suggestion that changes the subject
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 534 | A completion that starts a new line is refused when the line cannot end | `self.text = ` answered with an import block |
+| 535 | And allowed when it can | a caret after `def f():` is where a completion should start a line |
+| 536 | The operator set is the one that holds in every language here | an assignment, an open bracket, a comma, an arithmetic operator |
+| 537 | The check is opt-in | a caller that passes no prefix gets the behaviour it had |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

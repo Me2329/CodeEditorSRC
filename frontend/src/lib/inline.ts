@@ -109,15 +109,45 @@ export function tidy(completion: string, suffix: string, maxLines = 6): string {
  * A single closing bracket the editor would have auto-inserted anyway is worse
  * than nothing: it flickers, and accepting it produces a duplicate.
  */
-export function worthShowing(completion: string, suffix: string): boolean {
+export function worthShowing(completion: string, suffix: string, prefix = ''): boolean {
   if (!completion) return false;
   if (completion.length < 2) return false;
 
   // Already there, immediately after the caret.
   if (suffix.startsWith(completion)) return false;
   if (/^[)\]}>;,]+$/.test(completion.trim())) return false;
+  if (abandonsTheLine(completion, prefix)) return false;
 
   return true;
+}
+
+/**
+ * Characters a line cannot end on.
+ *
+ * An assignment, an open bracket, a comma or an arithmetic operator all require
+ * something to their right. This is deliberately not every operator in every
+ * language: it is the set where ending the line is wrong in all of the ones
+ * this editor runs.
+ */
+const NEEDS_A_RIGHT_HAND_SIDE = /[=([{,+\-*/%<>&|^~]$/;
+
+/**
+ * Whether the completion answers a half-written line by starting a new one.
+ *
+ * Seen repeatedly from a small model: a caret after `self.text = ` answered
+ * with a blank line and an import block, and a caret after `print(` answered
+ * with a bullet list. Both are well-formed text from somewhere else in the
+ * training data, and neither finishes the line the user is in the middle of.
+ *
+ * Only when the line cannot end where the caret is. A caret after `def f():`
+ * or at the start of a line is a perfectly good place for a completion to begin
+ * with a line break, and plenty of real ones do.
+ */
+function abandonsTheLine(completion: string, prefix: string): boolean {
+  if (!prefix || !/^\s*[\r\n]/.test(completion)) return false;
+
+  const line = prefix.slice(prefix.lastIndexOf('\n') + 1).trimEnd();
+  return line.length > 0 && NEEDS_A_RIGHT_HAND_SIDE.test(line);
 }
 
 /**

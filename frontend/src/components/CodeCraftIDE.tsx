@@ -941,7 +941,9 @@ export function CodeCraftIDE() {
           // arrived, not because the model had nothing to say.
           if (answer.superseded) return { items: [] };
           const completion = tidy(answer.completion, suffix);
-          if (!worthShowing(completion, suffix)) return { items: [] };
+          // The prefix decides whether a completion that starts a new line is
+          // finishing the thought or changing the subject.
+          if (!worthShowing(completion, suffix, prefix)) return { items: [] };
 
           return {
             items: [{ insertText: completion, range: new monaco.Range(

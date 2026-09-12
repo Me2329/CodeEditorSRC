@@ -190,3 +190,35 @@ describe('holding the window still', () => {
     expect(contextAround(long, 5000).suffix.length).toBe(SUFFIX_BUDGET);
   });
 });
+
+
+describe('a completion that abandons the line', () => {
+  // Seen repeatedly from a small model: well-formed text from somewhere else
+  // in its training data, which does not finish the line being typed.
+  test('is not shown when the line cannot end there', () => {
+    expect(worthShowing('\n\nfrom pydantic import BaseModel', '\n', 'self.text = ')).toBe(false);
+    expect(worthShowing('\n* [a](https://x)', '\n', 'print(')).toBe(false);
+    expect(worthShowing('\n    total = 0', '\n', 'values = [')).toBe(false);
+  });
+
+  test('is shown when the line can end there', () => {
+    // A caret after a colon is exactly where a completion should start a line.
+    expect(worthShowing('\n    return 1', '\n', 'def f():')).toBe(true);
+    expect(worthShowing('\n    pass', '\n', 'class A:')).toBe(true);
+  });
+
+  test('is shown at the start of a line', () => {
+    expect(worthShowing('\n    x = 1', '\n', '    ')).toBe(true);
+  });
+
+  test('a completion that continues the line is unaffected', () => {
+    expect(worthShowing('a + b', '\n', 'return ')).toBe(true);
+    expect(worthShowing('value', '\n', 'self.text = ')).toBe(true);
+  });
+
+  test('with no prefix given, nothing is rejected for this reason', () => {
+    // The check is opt-in: a caller that does not pass the prefix gets the
+    // behaviour it had before.
+    expect(worthShowing('\n\nimport os', '\n')).toBe(true);
+  });
+});
