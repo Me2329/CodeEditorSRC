@@ -113,6 +113,64 @@ void test_delimiter_diagnostics() {
     check(has_rule(text, "unterminated-string"), "flags an unterminated string");
 }
 
+void test_indentation_diagnostics() {
+    std::cout << "indentation\n";
+
+    const auto consistent = codecraft::analyze(
+        "def f():\n    return 1\n\n\ndef g():\n    return 2\n", "python");
+    check(!has_rule(consistent, "mixed-indentation"), "says nothing about a consistent file");
+
+    const auto tabs_only = codecraft::analyze("def f():\n\treturn 1\n", "python");
+    check(!has_rule(tabs_only, "mixed-indentation"), "tabs throughout are consistent");
+
+    const auto within_a_line = codecraft::analyze("def f():\n \treturn 1\n", "python");
+    check(has_rule(within_a_line, "mixed-indentation"), "flags one line indented with both");
+
+    const auto across_lines = codecraft::analyze(
+        "def f():\n    return 1\n\n\ndef g():\n\treturn 2\n", "python");
+    check(has_rule(across_lines, "mixed-indentation"), "flags a line that disagrees with the file");
+
+    // In Python this is what the interpreter itself refuses; elsewhere it is a
+    // file that will look different in the next editor that opens it.
+    bool python_is_an_error = false;
+    for (const auto& diagnostic : across_lines.diagnostics) {
+        if (diagnostic.rule == "mixed-indentation") {
+            python_is_an_error = diagnostic.severity == codecraft::Severity::Error;
+        }
+    }
+    check(python_is_an_error, "an indentation-scoped language reports it as an error");
+
+    const auto braced = codecraft::analyze(
+        "int f() {\n    return 1;\n}\nint g() {\n\treturn 2;\n}\n", "cpp");
+    bool braced_is_a_warning = false;
+    for (const auto& diagnostic : braced.diagnostics) {
+        if (diagnostic.rule == "mixed-indentation") {
+            braced_is_a_warning = diagnostic.severity == codecraft::Severity::Warning;
+        }
+    }
+    check(braced_is_a_warning, "a braced language reports it as a warning");
+
+    // A docstring holding a tab-indented example is content, not structure.
+    const auto docstring = codecraft::analyze(
+        "def f():\n"
+        "    \"\"\"Example:\n"
+        "\tf()\n"
+        "    \"\"\"\n"
+        "    return 1\n",
+        "python");
+    check(!has_rule(docstring, "mixed-indentation"),
+          "indentation inside a string is content rather than structure");
+
+    const auto once = codecraft::analyze(
+        "def f():\n\treturn 1\n\n\ndef g():\n    return 2\n\n\ndef h():\n    return 3\n",
+        "python");
+    int reported = 0;
+    for (const auto& diagnostic : once.diagnostics) {
+        if (diagnostic.rule == "mixed-indentation") ++reported;
+    }
+    check(reported == 1, "reported once, at the first line that disagrees");
+}
+
 void test_comments_and_strings_are_not_code() {
     std::cout << "Lexical edge cases\n";
     // Braces inside comments and strings must not affect the scope tree.
@@ -201,6 +259,7 @@ int main() {
     test_cpp_structure();
     test_python_structure();
     test_delimiter_diagnostics();
+    test_indentation_diagnostics();
     test_comments_and_strings_are_not_code();
     test_empty_and_binary_input();
     test_json_output_is_well_formed();

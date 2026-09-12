@@ -54,6 +54,24 @@ std::string recover_name(const std::vector<Token>& tokens, std::size_t keyword_i
     return {};
 }
 
+// Which whitespace a line is indented with. A line indented with neither is
+// Neither; one indented with both is Both, which is the interesting case.
+enum class Indent { Neither, Spaces, Tabs, Both };
+
+Indent indentation_kind(const std::string& line) {
+    bool spaces = false;
+    bool tabs = false;
+    for (const char ch : line) {
+        if (ch == ' ') spaces = true;
+        else if (ch == '\t') tabs = true;
+        else break;
+    }
+    if (spaces && tabs) return Indent::Both;
+    if (spaces) return Indent::Spaces;
+    if (tabs) return Indent::Tabs;
+    return Indent::Neither;
+}
+
 std::size_t indentation_width(const std::string& line) {
     std::size_t width = 0;
     for (const char ch : line) {
@@ -337,6 +355,57 @@ Analysis analyze(const std::string& source, const std::string& language) {
         if (!closed) {
             diagnostics.push_back({Severity::Error, "unterminated-string",
                                    "String literal is never closed.", token.line, token.column});
+        }
+    }
+
+    // Indentation that mixes tabs and spaces. Certain from the source, unlike
+    // most style questions: in an indentation-scoped language it is what the
+    // interpreter itself refuses, and everywhere else it is a file that will
+    // look different in the next editor that opens it.
+    //
+    // Lines inside a multi-line string or comment are skipped, because their
+    // indentation is content rather than structure, and a docstring holding a
+    // tab-indented example is not a mistake.
+    {
+        std::vector<bool> is_content(lines.size() + 2, false);
+        for (const Token& token : tokens) {
+            if (token.kind != TokenKind::String && token.kind != TokenKind::Comment) continue;
+            std::size_t line = token.line;
+            for (const char ch : token.text) {
+                if (ch != '\n') continue;
+                ++line;
+                if (line < is_content.size()) is_content[line] = true;
+            }
+        }
+
+        Indent prevailing = Indent::Neither;
+        for (std::size_t index = 0; index < lines.size(); ++index) {
+            const std::size_t line_number = index + 1;
+            if (line_number < is_content.size() && is_content[line_number]) continue;
+            if (trim(lines[index]).empty()) continue;
+
+            const Indent kind = indentation_kind(lines[index]);
+            if (kind == Indent::Neither) continue;
+            if (kind == Indent::Both) {
+                diagnostics.push_back(
+                    {dialect.indentation_scoped ? Severity::Error : Severity::Warning,
+                     "mixed-indentation",
+                     "This line is indented with both tabs and spaces.", line_number, 1});
+                break;
+            }
+            if (prevailing == Indent::Neither) {
+                prevailing = kind;
+            } else if (kind != prevailing) {
+                diagnostics.push_back(
+                    {dialect.indentation_scoped ? Severity::Error : Severity::Warning,
+                     "mixed-indentation",
+                     std::string("This line is indented with ")
+                         + (kind == Indent::Tabs ? "tabs" : "spaces")
+                         + ", and the rest of the file with "
+                         + (prevailing == Indent::Tabs ? "tabs." : "spaces."),
+                     line_number, 1});
+                break;
+            }
         }
     }
 

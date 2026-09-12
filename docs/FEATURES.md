@@ -986,6 +986,17 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 632 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
 | 633 | A completion prefix is bounded as the word it is | not as a document |
 
+## Indentation the next editor will disagree with
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 633 | A line indented with both tabs and spaces is reported | certain from the source, unlike most style questions |
+| 634 | And a line whose indentation disagrees with the rest of the file | |
+| 635 | An error in an indentation-scoped language | it is what the interpreter itself refuses |
+| 636 | A warning elsewhere | there it is a file that looks different in the next editor that opens it |
+| 637 | Indentation inside a string or block comment is skipped | a docstring holding a tab-indented example is not a mistake |
+| 638 | Reported once, at the first line that disagrees | one decision, not one per line |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
