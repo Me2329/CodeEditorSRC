@@ -1128,7 +1128,7 @@ whatever it is shown.
 make test-model
 ```
 
-459 tests: parameter counts against real modules, tokenizer round trips over
+453 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
