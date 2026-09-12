@@ -21,8 +21,8 @@ export interface InlineRequest {
 }
 
 /** How much context to send. Enough to be useful, small enough to be quick. */
-export const PREFIX_BUDGET = 2000;
-export const SUFFIX_BUDGET = 1000;
+const PREFIX_BUDGET = 2000;
+const SUFFIX_BUDGET = 1000;
 
 /**
  * Whether a completion is worth asking for at this caret.

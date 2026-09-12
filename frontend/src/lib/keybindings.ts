@@ -125,6 +125,7 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'navigate.forward', keys: 'alt+ArrowRight' },
   { command: 'view.nextProblem', keys: 'F8' },
   { command: 'view.previousProblem', keys: 'shift+F8' },
+  { command: 'view.lastFile', keys: 'mod+e' },
 ];
 
 /**

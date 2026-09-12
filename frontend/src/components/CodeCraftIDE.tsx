@@ -37,11 +37,12 @@ import { editorContextFrom, useExtensions } from '../hooks/useExtensions';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import {
   order as byRecency,
+  previous as previousFile,
   prune as pruneRecent,
   touch as touchRecent,
 } from '../lib/recent';
 import { decide as decideDropped, explain as explainRefused, uniqueName } from '../lib/drop';
-import { nextAfter, previousBefore } from '../lib/problems';
+import { nextAfter, position as problemPosition, previousBefore } from '../lib/problems';
 import { loadSession, reconcile, saveSession } from '../lib/session';
 import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
@@ -72,6 +73,7 @@ import {
 } from '../lib/tabs';
 import { ApiError, api } from '../lib/api';
 import {
+  clearHistory,
   type History,
   loadHistory,
   record as recordRevision,
@@ -1557,8 +1559,11 @@ export function CodeCraftIDE() {
         shortcut: 'F8',
         when: () => allDiagnostics.length > 0,
         run: () => {
-          const line = nextAfter(allDiagnostics.map((d) => d.line), caret.line);
-          if (line !== null) handleJumpToLine(line);
+          const lines = allDiagnostics.map((diagnostic) => diagnostic.line);
+          const line = nextAfter(lines, caret.line);
+          if (line === null) return;
+          handleJumpToLine(line);
+          notify(`Problem ${problemPosition(lines, line)}`);
         },
       },
       {
@@ -1568,8 +1573,24 @@ export function CodeCraftIDE() {
         shortcut: 'Shift+F8',
         when: () => allDiagnostics.length > 0,
         run: () => {
-          const line = previousBefore(allDiagnostics.map((d) => d.line), caret.line);
-          if (line !== null) handleJumpToLine(line);
+          const lines = allDiagnostics.map((diagnostic) => diagnostic.line);
+          const line = previousBefore(lines, caret.line);
+          if (line === null) return;
+          handleJumpToLine(line);
+          notify(`Problem ${problemPosition(lines, line)}`);
+        },
+      },
+      {
+        id: 'view.lastFile',
+        title: 'Switch to the last file',
+        category: 'Navigate',
+        shortcut: 'Ctrl+E',
+        when: () => previousFile(recent) !== null,
+        run: () => {
+          // The second entry, not the first: the first is what is on screen, so
+          // this makes the shortcut a toggle between two files.
+          const back = previousFile(recent);
+          if (back) setActiveFileId(back);
         },
       },
       {
@@ -1642,6 +1663,16 @@ export function CodeCraftIDE() {
           if (!activeFile) return;
           const [newest] = revisionsFor(history, activeFile.id);
           if (newest) handleRestore(activeFile.id, newest.content);
+        },
+      },
+      {
+        id: 'history.clearAll',
+        title: 'Discard all local history',
+        category: 'Edit',
+        when: () => Object.keys(history).length > 0,
+        run: () => {
+          setHistory(clearHistory());
+          notify('Local history discarded for every file.');
         },
       },
       {

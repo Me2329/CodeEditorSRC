@@ -727,6 +727,19 @@ audit for duplicate code found two real bugs in it.
 | 487 | Validation scores the same windows every time | so "keep the best" compares checkpoints, not samples |
 | 488 | A different seed scores different windows | fixed within a run, not for all time |
 
+## Everything exported is used
+
+An audit for exports nothing calls turned up five, and each one was a decision
+rather than a deletion.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 489 | Ctrl+E switches to the last file | the second entry in the recency list, so the key is a toggle |
+| 490 | Jumping to a problem says which of how many | "Problem 2 of 5" |
+| 491 | Selecting a file opens the folders on the way to it | a search hit in a closed folder was simply not on screen |
+| 492 | "Discard all local history" | the per-file button covered one file at a time |
+| 493 | Context budgets and single-file search are no longer exported | they were implementation detail |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

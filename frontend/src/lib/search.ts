@@ -77,7 +77,7 @@ export function compile(query: string, options: SearchOptions): RegExp | null {
 }
 
 /** Every match in one file, with the line and column an editor would show. */
-export function searchFile(file: VirtualFile, pattern: RegExp, limit = MATCH_LIMIT): Match[] {
+function searchFile(file: VirtualFile, pattern: RegExp, limit = MATCH_LIMIT): Match[] {
   const matches: Match[] = [];
   const lines = file.content.split('\n');
 

@@ -20,9 +20,9 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-import { buildTree, flatten, toggle } from '../lib/tree';
+import { buildTree, flatten, reveal, toggle } from '../lib/tree';
 import { validateFileName } from '../lib/vfs';
 import type { VirtualFile } from '../lib/types';
 
@@ -54,6 +54,14 @@ export function FileExplorer({
   const [renameError, setRenameError] = useState<string | null>(null);
 
   const rows = useMemo(() => flatten(buildTree(files), collapsed), [files, collapsed]);
+
+  // Showing a file in a folder that is closed should open the folder. Search
+  // hits, symbol jumps and the palette all select a file without touching the
+  // explorer, and without this the selected row is simply not on screen.
+  const activeName = files.find((file) => file.id === activeFileId)?.name;
+  useEffect(() => {
+    if (activeName) setCollapsed((current) => reveal(current, activeName));
+  }, [activeName]);
 
   const submitRename = () => {
     if (!renaming) return;
