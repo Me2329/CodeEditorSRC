@@ -1010,6 +1010,16 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 645 | Extension hovers and the index's own appear together | a keyword is never also a declaration, so they rarely collide |
 | 646 | Turning the extension off removes the hovers | as with every other contribution |
 
+## Not asking a model that is not there
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 647 | Inline completion does not ask when no model is running | every pause in typing was spending a round trip to find that out again |
+| 648 | One failed request is enough to stop asking | a 503 is remembered |
+| 649 | And the probe retries once a minute while the answer is no | nothing else would ever notice a model being started |
+| 650 | No polling at all once the answer is yes | it is a fact that rarely changes in that direction |
+| 651 | An answer to an explicit request proves the model is there | whatever the last probe found |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

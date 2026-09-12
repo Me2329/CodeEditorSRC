@@ -133,6 +133,8 @@ import { SettingsPanel } from './SettingsPanel';
 import { TerminalPane, type TerminalHandle } from './TerminalPane';
 
 const ANALYSIS_DEBOUNCE_MS = 700;
+/** How long to wait before asking again whether a model has appeared. */
+const MODEL_RETRY_MS = 60_000;
 
 /** How long the typing has to stop before the file is worth snapshotting. */
 const SNAPSHOT_IDLE_MS = 2500;
@@ -1029,6 +1031,10 @@ export function CodeCraftIDE() {
 
         // Most keystrokes are not a moment worth interrupting.
         if (!shouldRequest(prefix, suffix)) return { items: [] };
+        // And there is nothing to interrupt when no model is running. Without
+        // this, every pause in typing spends a round trip finding that out
+        // again.
+        if (modelStatusRef.current?.available === false) return { items: [] };
 
         const controller = new AbortController();
         // Monaco cancels as soon as the user types again; without this the
@@ -1057,9 +1063,14 @@ export function CodeCraftIDE() {
               position.lineNumber, position.column, position.lineNumber, position.column,
             ) }],
           };
-        } catch {
+        } catch (error) {
           // No model running, or the request was cancelled. Either way the
-          // editor shows nothing, which is the correct quiet failure.
+          // editor shows nothing, which is the correct quiet failure. A model
+          // that is not there is remembered, so the next keystroke does not
+          // spend another round trip discovering it.
+          if (error instanceof ApiError && error.status === 503) {
+            setModelStatus({ available: false });
+          }
           return { items: [] };
         }
       },
@@ -1120,6 +1131,10 @@ export function CodeCraftIDE() {
           ), text: completion },
       ]);
       now.focus();
+      // An answer is proof the model is there, whatever the last probe found.
+      setModelStatus((current) =>
+        current?.available ? current : { available: true, model: answer.model },
+      );
       // Why it is shorter than the budget asked for, when the model did not
       // choose to stop: the suggestion left the block it started in, or closed
       // a bracket the file already closes.
@@ -1131,6 +1146,12 @@ export function CodeCraftIDE() {
             : '';
       notify(`Completed ${answer.tokens} tokens from ${answer.model}${cut}.`);
     } catch {
+      // Asked for deliberately rather than offered, so this is also the moment
+      // to find out whether a model has appeared since the last probe.
+      void api
+        .modelStatus()
+        .then(setModelStatus)
+        .catch(() => setModelStatus({ available: false }));
       notify('No model is running, so there is nothing to complete with.');
     }
   }, [notify]);
@@ -1450,30 +1471,50 @@ export function CodeCraftIDE() {
   /**
    * Whether the local model is running.
    *
-   * Probed once at startup and again when inline completion is switched on,
-   * rather than polled: a model that is not running is the common case, and
-   * asking every few seconds would be noise for a fact that rarely changes.
+   * Probed at startup and again when inline completion is switched on, rather
+   * than polled: a model that is not running is the common case, and asking
+   * every few seconds would be noise for a fact that rarely changes.
+   *
+   * The one exception is while the answer is "no". Inline completion stops
+   * asking once it believes that, and the command that would prove otherwise
+   * hides itself for the same reason, so nothing would ever find out that a
+   * model had been started. A slow retry in that state and no polling in the
+   * other is the shape that fits: it costs one request a minute exactly when
+   * the answer is the one that can usefully change.
    */
   const [modelStatus, setModelStatus] = useState<{ available: boolean; model?: string } | null>(
     null,
   );
+  // Read by the inline provider, which is registered once and would otherwise
+  // hold whatever the status was when the editor mounted.
+  const modelStatusRef = useRef<{ available: boolean; model?: string } | null>(null);
+  modelStatusRef.current = modelStatus;
   useEffect(() => {
     if (!preferences.inlineCompletion) return;
     let cancelled = false;
 
-    api
-      .modelStatus()
-      .then((status) => {
-        if (!cancelled) setModelStatus(status);
-      })
-      .catch(() => {
-        if (!cancelled) setModelStatus({ available: false });
-      });
+    const probe = () =>
+      api
+        .modelStatus()
+        .then((status) => {
+          if (!cancelled) setModelStatus(status);
+        })
+        .catch(() => {
+          if (!cancelled) setModelStatus({ available: false });
+        });
+
+    void probe();
+    // Only while the answer is "no". `modelStatus` is a dependency, so this
+    // effect is torn down and rebuilt as soon as one succeeds, and the timer
+    // goes with it.
+    const timer =
+      modelStatus?.available === false ? window.setInterval(probe, MODEL_RETRY_MS) : null;
 
     return () => {
       cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
     };
-  }, [preferences.inlineCompletion]);
+  }, [preferences.inlineCompletion, modelStatus?.available]);
   extensionHostRef.current = extensions;
 
   /** The snapshot handed to commands and status bar items. */
