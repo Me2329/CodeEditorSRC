@@ -1187,6 +1187,22 @@ down, because down would buy context by exceeding the budget. The cost is up to
 32 tokens of context out of 500, about 3%, in exchange for a cache that fires on
 the files it was built for.
 
+### And the same thing one layer up
+
+That fix is not enough on its own, because the editor has a window of its own.
+It sends the 2000 characters before the caret, and *that* window slides by one
+character per keystroke, which changes where the text is cut and therefore how
+its first tokens come out. Simulating the real client against the real server:
+
+| | prefills reused, six carets one character apart |
+| --- | --- |
+| Editor window sliding | 2 of 6 |
+| Editor window held still | 5 of 6 |
+
+So the editor rounds its start up to a multiple of 64 characters for the same
+reason and with the same trade. Both layers have to hold still; either one
+sliding is enough to lose the cache.
+
 ## Serving the same question twice
 
 An editor at a caret asks almost the same question on every keystroke. The

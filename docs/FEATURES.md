@@ -810,25 +810,26 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | # | Feature | Notes |
 | --- | --- | --- |
 | 523 | The trimming window holds still for 32 keystrokes | a window that slides by one token per character shares nothing with the last prompt |
-| 524 | Rounded up, never down | down would buy context by exceeding the budget |
-| 525 | A prompt that fits is not trimmed at all | the stride costs nothing when there is nothing to trim |
-| 526 | The sliding case is kept as a negative control | so the test measures the fix rather than agreeing with it |
+| 524 | The editor's own window holds still for 64 characters | both layers have to; either one sliding loses the cache |
+| 525 | Rounded up, never down | down would buy context by exceeding the budget |
+| 526 | A prompt that fits is not trimmed at all | the stride costs nothing when there is nothing to trim |
+| 527 | The sliding case is kept as a negative control | so the test measures the fix rather than agreeing with it |
 
 ## The save whose failure matters
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 527 | Saving the workspace reports whether it happened | the files are the one thing here that cannot be rebuilt by clicking |
-| 528 | A full quota costs local history, not the work | a megabyte and a half of old versions is what stops the files fitting |
-| 529 | And says so | silently ceasing to save is how someone loses an afternoon to a reload |
-| 530 | A browser that refuses storage entirely says to export | |
+| 528 | Saving the workspace reports whether it happened | the files are the one thing here that cannot be rebuilt by clicking |
+| 529 | A full quota costs local history, not the work | a megabyte and a half of old versions is what stops the files fitting |
+| 530 | And says so | silently ceasing to save is how someone loses an afternoon to a reload |
+| 531 | A browser that refuses storage entirely says to export | |
 
 ## A completion stops where the file did
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 531 | Completions stop at the corpus file marker | it is ordinary text in the training data, so the model emits one |
-| 532 | A caller's own stops replace the default | passing stops is a decision about where to end |
+| 532 | Completions stop at the corpus file marker | it is ordinary text in the training data, so the model emits one |
+| 533 | A caller's own stops replace the default | passing stops is a decision about where to end |
 
 ## Not implemented
 

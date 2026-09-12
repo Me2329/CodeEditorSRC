@@ -1,6 +1,15 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { contextAround, debounce, shouldRequest, tidy, worthShowing } from './inline';
+import {
+  PREFIX_BUDGET,
+  SUFFIX_BUDGET,
+  WINDOW_STRIDE,
+  contextAround,
+  debounce,
+  shouldRequest,
+  tidy,
+  worthShowing,
+} from './inline';
 
 describe('deciding whether to ask', () => {
   test('a caret after an opening bracket is a good moment', () => {
@@ -135,5 +144,49 @@ describe('holding off until typing pauses', () => {
   test('cancelling with nothing pending is harmless', () => {
     const { cancel } = debounce(() => {}, 100);
     expect(() => cancel()).not.toThrow();
+  });
+});
+
+
+describe('holding the window still', () => {
+  const long = 'x'.repeat(9000);
+
+  test('the start does not move while a few characters are typed', () => {
+    // A window that slides by one character per keystroke changes where the
+    // text is cut, which changes its first tokens, which turns the model
+    // server's cached prefill into a miss.
+    const starts = [0, 1, 2, 3, 4, 5].map((typed) => {
+      const at = 5000 + typed;
+      return at - contextAround(long, at).prefix.length;
+    });
+
+    expect(new Set(starts).size).toBe(1);
+  });
+
+  test('it does move eventually, by a stride at a time', () => {
+    const near = 5000 - contextAround(long, 5000).prefix.length;
+    const far = 5000 + WINDOW_STRIDE - contextAround(long, 5000 + WINDOW_STRIDE).prefix.length;
+
+    expect(far - near).toBe(WINDOW_STRIDE);
+  });
+
+  test('the prefix never exceeds the budget', () => {
+    // Rounded up rather than down: down would buy context by sending more than
+    // the budget allows.
+    for (let typed = 0; typed < WINDOW_STRIDE * 2; typed += 7) {
+      expect(contextAround(long, 4000 + typed).prefix.length).toBeLessThanOrEqual(PREFIX_BUDGET);
+    }
+  });
+
+  test('near the start of a file the window begins at the start', () => {
+    const { prefix } = contextAround('short file', 5);
+
+    expect(prefix).toBe('short');
+  });
+
+  test('the suffix is unaffected', () => {
+    // Only the prefix has a start that can slide; the suffix begins at the
+    // caret, which is where it has to begin.
+    expect(contextAround(long, 5000).suffix.length).toBe(SUFFIX_BUDGET);
   });
 });

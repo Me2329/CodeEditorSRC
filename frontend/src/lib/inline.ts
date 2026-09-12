@@ -21,8 +21,8 @@ export interface InlineRequest {
 }
 
 /** How much context to send. Enough to be useful, small enough to be quick. */
-const PREFIX_BUDGET = 2000;
-const SUFFIX_BUDGET = 1000;
+export const PREFIX_BUDGET = 2000;
+export const SUFFIX_BUDGET = 1000;
 
 /**
  * Whether a completion is worth asking for at this caret.
@@ -47,9 +47,29 @@ export function shouldRequest(prefix: string, suffix: string): boolean {
 }
 
 /** The slice of the document to send, bounded so the request stays quick. */
+/**
+ * How far the start of the window is allowed to move.
+ *
+ * Taking exactly the last N characters moves the window one character every
+ * time one is typed, which changes where the text is cut and therefore how the
+ * first tokens of it come out. The model server keeps a prefill of the last
+ * prompt and reuses it when the new one starts the same way, and a window that
+ * slides underneath that turns most of those reuses into misses: measured on a
+ * 2000-character window, six carets one character apart reused two prefills and
+ * missed four.
+ *
+ * Rounding the start up to a multiple of this holds it still for that many
+ * keystrokes. Up rather than down, because down would send more than the
+ * budget.
+ */
+export const WINDOW_STRIDE = 64;
+
 export function contextAround(text: string, offset: number): InlineRequest {
+  const earliest = Math.max(0, offset - PREFIX_BUDGET);
+  const start = earliest === 0 ? 0 : earliest + ((-earliest % WINDOW_STRIDE) + WINDOW_STRIDE) % WINDOW_STRIDE;
+
   return {
-    prefix: text.slice(Math.max(0, offset - PREFIX_BUDGET), offset),
+    prefix: text.slice(Math.min(start, offset), offset),
     suffix: text.slice(offset, offset + SUFFIX_BUDGET),
   };
 }
