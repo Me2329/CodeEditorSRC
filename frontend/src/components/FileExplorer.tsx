@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-import { buildTree, flatten, reveal, toggle } from '../lib/tree';
+import { buildTree, flatten, navigate, reveal, toggle } from '../lib/tree';
 import { validateFileName } from '../lib/vfs';
 import type { VirtualFile } from '../lib/types';
 
@@ -52,8 +52,33 @@ export function FileExplorer({
   // The file being renamed, and what it is being renamed to.
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  // Which row the arrow keys act on. One row is focusable at a time, which is
+  // how a tree widget keeps Tab moving past it rather than through it.
+  const [rawCursor, setCursor] = useState(0);
 
   const rows = useMemo(() => flatten(buildTree(files), collapsed), [files, collapsed]);
+
+  // Deleting a file shortens the list, and a cursor left past the end would
+  // focus nothing and make the next arrow key do nothing either.
+  const cursor = Math.min(rawCursor, Math.max(0, rows.length - 1));
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    const move = navigate(rows, cursor, event.key, collapsed);
+    const changed =
+      move.index !== cursor || move.collapsed !== collapsed || move.activate;
+    if (!changed) return;
+
+    event.preventDefault();
+    setCursor(move.index);
+    setCollapsed(move.collapsed);
+
+    if (move.activate) {
+      const row = rows[move.index];
+      if (!row) return;
+      if (row.node.kind === 'folder') setCollapsed(toggle(move.collapsed, row.node.path));
+      else onSelect(row.node.file.id);
+    }
+  };
 
   // Showing a file in a folder that is closed should open the folder. Search
   // hits, symbol jumps and the palette all select a file without touching the
@@ -110,8 +135,15 @@ export function FileExplorer({
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2 font-mono text-xs">
-        {rows.map(({ node, depth }) => {
+      <div
+        role="tree"
+        aria-label="Workspace files"
+        tabIndex={rows.length > 0 ? 0 : -1}
+        onKeyDown={onKeyDown}
+        className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2 font-mono text-xs outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+      >
+        {rows.map(({ node, depth }, rowIndex) => {
+          const focused = rowIndex === cursor;
           // Indentation carries the nesting; a tree drawn with lines costs more
           // width than a 224px panel has to spare.
           const indent = { paddingLeft: `${depth * 12 + 8}px` };
@@ -122,10 +154,18 @@ export function FileExplorer({
               <button
                 key={`folder:${node.path}`}
                 type="button"
-                onClick={() => setCollapsed((current) => toggle(current, node.path))}
+                role="treeitem"
+                tabIndex={-1}
+                onClick={() => {
+                  setCursor(rowIndex);
+                  setCollapsed((current) => toggle(current, node.path));
+                }}
                 aria-expanded={!isCollapsed}
+                aria-level={depth + 1}
                 style={indent}
-                className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-slate-400 transition-colors hover:bg-slate-800/40 hover:text-slate-200"
+                className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left transition-colors hover:bg-slate-800/40 hover:text-slate-200 ${
+                  focused ? 'bg-slate-800/60 text-slate-200' : 'text-slate-400'
+                }`}
               >
                 {isCollapsed ? (
                   <ChevronRight className="h-3 w-3 shrink-0 text-slate-600" aria-hidden />
@@ -177,7 +217,13 @@ export function FileExplorer({
             <div key={file.id} className="group relative">
               <button
                 type="button"
-                onClick={() => onSelect(file.id)}
+                role="treeitem"
+                tabIndex={-1}
+                aria-level={depth + 1}
+                onClick={() => {
+                  setCursor(rowIndex);
+                  onSelect(file.id);
+                }}
                 // The gesture people try first, before looking for a button.
                 onDoubleClick={() => {
                   setRenaming({ id: file.id, value: file.name });
@@ -188,7 +234,9 @@ export function FileExplorer({
                 className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${
                   isActive
                     ? 'border border-indigo-800/50 bg-indigo-950/60 text-indigo-200'
-                    : 'border border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+                    : focused
+                      ? 'border border-transparent bg-slate-800/60 text-slate-200'
+                      : 'border border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
                 title={file.name}
               >

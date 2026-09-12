@@ -6,6 +6,7 @@ import {
   buildTree,
   flatten,
   folderPaths,
+  navigate,
   reveal,
   toggle,
 } from './tree';
@@ -149,5 +150,78 @@ describe('revealing', () => {
     const collapsed = new Set(['a', 'a/b', 'unrelated']);
 
     expect([...reveal(collapsed, 'a/b/c.py')]).toEqual(['unrelated']);
+  });
+});
+
+
+describe('keyboard navigation', () => {
+  // lib/          (folder, row 0)
+  //   deep/       (folder, row 1)
+  //     c.py      (row 2)
+  //   b.py        (row 3)
+  // a.py          (row 4)
+  const files = [file('lib/deep/c.py'), file('lib/b.py'), file('a.py')];
+  const rows = flatten(buildTree(files));
+  const open = new Set<string>();
+
+  test('down and up move one visible row', () => {
+    expect(navigate(rows, 0, 'ArrowDown', open).index).toBe(1);
+    expect(navigate(rows, 2, 'ArrowUp', open).index).toBe(1);
+  });
+
+  test('they stop at the ends rather than wrapping', () => {
+    // A tree that wraps loses your place; a list that stops does not.
+    expect(navigate(rows, 0, 'ArrowUp', open).index).toBe(0);
+    expect(navigate(rows, rows.length - 1, 'ArrowDown', open).index).toBe(rows.length - 1);
+  });
+
+  test('Home and End go to the ends', () => {
+    expect(navigate(rows, 3, 'Home', open).index).toBe(0);
+    expect(navigate(rows, 0, 'End', open).index).toBe(rows.length - 1);
+  });
+
+  test('right opens a closed folder', () => {
+    const closed = new Set(['lib']);
+    const move = navigate(flatten(buildTree(files), closed), 0, 'ArrowRight', closed);
+
+    expect(move.collapsed.has('lib')).toBe(false);
+    expect(move.index).toBe(0);
+  });
+
+  test('right steps into a folder that is already open', () => {
+    expect(navigate(rows, 0, 'ArrowRight', open).index).toBe(1);
+  });
+
+  test('right on a file does nothing', () => {
+    expect(navigate(rows, 4, 'ArrowRight', open).index).toBe(4);
+  });
+
+  test('left closes an open folder', () => {
+    expect(navigate(rows, 0, 'ArrowLeft', open).collapsed.has('lib')).toBe(true);
+  });
+
+  test('left on a file steps out to its folder', () => {
+    // Row 2 is c.py at depth 2; its parent is deep at row 1.
+    expect(navigate(rows, 2, 'ArrowLeft', open).index).toBe(1);
+  });
+
+  test('left at the top level stays put', () => {
+    expect(navigate(rows, 4, 'ArrowLeft', open).index).toBe(4);
+  });
+
+  test('Enter and Space mean use this row', () => {
+    expect(navigate(rows, 2, 'Enter', open).activate).toBe(true);
+    expect(navigate(rows, 0, ' ', open).activate).toBe(true);
+  });
+
+  test('any other key changes nothing', () => {
+    const move = navigate(rows, 2, 'q', open);
+
+    expect(move.index).toBe(2);
+    expect(move.activate).toBe(false);
+  });
+
+  test('an empty tree has nowhere to go', () => {
+    expect(navigate([], 0, 'ArrowDown', open).index).toBe(0);
   });
 });

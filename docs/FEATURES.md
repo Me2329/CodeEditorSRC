@@ -781,6 +781,22 @@ the extension was listed as installed, enabled, and doing nothing.
 | 510 | `prepare` says what the validation set is | the tail of the corpus: whole files, not a sample of the training ones |
 | 511 | Reloading is testable without a clock | a test that sleeps for it fails on a loaded machine, which is when the suite runs |
 
+## Walking the tree from the keyboard
+
+`flatten` was written so that "keyboard navigation and virtualisation, if
+either arrives, work on a list rather than a shape". Navigation arrived.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 512 | Up and down move one visible row | and stop at the ends rather than wrapping |
+| 513 | Right opens a closed folder, then steps into it | |
+| 514 | Left closes an open folder, then steps out to the parent | the nearest row above at one less depth |
+| 515 | Enter and Space use the row | opening a file or toggling a folder |
+| 516 | Home and End | |
+| 517 | One row focusable at a time | so Tab moves past the tree rather than through every file |
+| 518 | Rows carry their tree role and depth | |
+| 519 | The cursor is clamped when files are deleted | a cursor past the end focuses nothing and answers no key |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

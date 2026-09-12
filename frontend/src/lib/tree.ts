@@ -157,3 +157,76 @@ export function reveal(collapsed: ReadonlySet<string>, path: string): Set<string
   for (const folder of ancestors(path)) next.delete(folder);
   return next;
 }
+
+
+/** What a key press does to the selection, and to the open folders. */
+export interface Move {
+  /** Row to focus next. */
+  index: number;
+  /** Folders collapsed after the move. */
+  collapsed: ReadonlySet<string>;
+  /** True when the key means "use this row" rather than "move". */
+  activate: boolean;
+}
+
+/**
+ * Arrow-key navigation over the flattened rows.
+ *
+ * The shape every tree widget uses, and the reason `flatten` exists: up and
+ * down move one visible row, right opens a folder and then steps into it, left
+ * closes one and then steps out to its parent, and Enter uses whatever is under
+ * the cursor. Home and End go to the ends.
+ *
+ * Pure, so the behaviour is tested without rendering anything. The component
+ * keeps the index and the collapsed set and hands them back.
+ */
+export function navigate(
+  rows: readonly Row[],
+  index: number,
+  key: string,
+  collapsed: ReadonlySet<string>,
+): Move {
+  const stay: Move = { index, collapsed, activate: false };
+  if (rows.length === 0) return stay;
+
+  const current = rows[index];
+
+  switch (key) {
+    case 'ArrowDown':
+      return { ...stay, index: Math.min(index + 1, rows.length - 1) };
+    case 'ArrowUp':
+      return { ...stay, index: Math.max(index - 1, 0) };
+    case 'Home':
+      return { ...stay, index: 0 };
+    case 'End':
+      return { ...stay, index: rows.length - 1 };
+    case 'Enter':
+    case ' ':
+      return { ...stay, activate: true };
+
+    case 'ArrowRight': {
+      if (!current || current.node.kind !== 'folder') return stay;
+      // Closed: open it. Already open: step into it, which is the next row.
+      if (collapsed.has(current.node.path)) {
+        return { ...stay, collapsed: toggle(collapsed, current.node.path) };
+      }
+      return { ...stay, index: Math.min(index + 1, rows.length - 1) };
+    }
+
+    case 'ArrowLeft': {
+      if (!current) return stay;
+      // An open folder closes. Anything else steps out to its parent, which is
+      // the nearest row above at one less depth.
+      if (current.node.kind === 'folder' && !collapsed.has(current.node.path)) {
+        return { ...stay, collapsed: toggle(collapsed, current.node.path) };
+      }
+      for (let above = index - 1; above >= 0; above -= 1) {
+        if (rows[above]!.depth < current.depth) return { ...stay, index: above };
+      }
+      return stay;
+    }
+
+    default:
+      return stay;
+  }
+}
