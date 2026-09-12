@@ -733,6 +733,26 @@ engine, which is shared between request threads, so two concurrent requests
 could read each other's answer. The information a caller needs now goes into a
 dictionary it passes in.
 
+## What confidence turned out to be worth
+
+Every completion comes back with a mean log-probability, and the obvious thing
+to do with it is refuse to show a suggestion that scores too low. Measured on
+this checkpoint, that would be a threshold that does nothing:
+
+| prompt | confidence | what it wrote |
+| --- | --- | --- |
+| `return ` in a two-argument function | -1.759 | ` 0x08 -> int:` |
+| `return json.` after opening a file | -2.301 | a comment about added code |
+| `print(` inside a loop | -1.641 | a hex escape |
+| `self.text = ` in a constructor | -1.797 | `, _text, _texts, _text = _` |
+| `xqzzy qqq ` | **-0.995** | a hex escape |
+
+The highest score of the five went to the prompt that is not code at all. The
+number is real and it is reported, because a client may have a use for it and
+because it is what best-of-n selects on, where it is comparing several
+completions of *one* prompt rather than comparing prompts. Filtering on it
+across prompts would be a knob that looks like it is working.
+
 ## Abandoning work nobody wants
 
 An editor sends a completion request per pause in typing. If the user keeps

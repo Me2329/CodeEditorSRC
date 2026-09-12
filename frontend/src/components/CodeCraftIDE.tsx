@@ -926,6 +926,43 @@ export function CodeCraftIDE() {
   }, [monacoReady, preferences.inlineCompletion]);
 
   /**
+   * Ask for a completion here, and take the best of several.
+   *
+   * Separate from the grey text that appears as you type, which asks for one
+   * and asks often. This asks for four and picks the one the model rates
+   * highest, which costs four generations: worth it for a completion someone
+   * has stopped to ask for, and not for one offered on every pause.
+   */
+  const handleCompleteHere = useCallback(async () => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const { prefix, suffix } = contextAround(model.getValue(), model.getOffsetAt(position));
+    notify('Asking for a completion…');
+
+    try {
+      const answer = await api.infill(prefix, suffix, 96, undefined, 4);
+      const completion = tidy(answer.completion, suffix);
+      if (!completion.trim()) {
+        notify('The model had nothing to add here.');
+        return;
+      }
+      // Through the editor, so one Ctrl+Z takes it back.
+      editor.executeEdits('codecraft-complete', [
+        { range: new (monacoRef.current!.Range)(
+            position.lineNumber, position.column, position.lineNumber, position.column,
+          ), text: completion },
+      ]);
+      editor.focus();
+      notify(`Completed ${answer.tokens} tokens from ${answer.model}.`);
+    } catch {
+      notify('No model is running, so there is nothing to complete with.');
+    }
+  }, [notify]);
+
+  /**
    * Insert a snippet at the caret, placeholders and all.
    *
    * Monaco expands snippet syntax through a controller on the editor rather
@@ -1489,6 +1526,13 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'assistant.completeHere',
+        title: 'Complete here, best of four',
+        category: 'Assistant',
+        when: () => modelStatus?.available === true,
+        run: () => void handleCompleteHere(),
+      },
+      {
         id: 'view.nextProblem',
         title: 'Go to the next problem',
         category: 'Navigate',
@@ -1642,6 +1686,8 @@ export function CodeCraftIDE() {
       allDiagnostics,
       caret.line,
       handleJumpToLine,
+      handleCompleteHere,
+      modelStatus,
       handleInsertSnippet,
     ],
   );

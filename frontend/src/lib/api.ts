@@ -100,20 +100,35 @@ export const api = {
    * Served by the local model rather than the index: this is the one request
    * that has to invent text rather than look something up.
    */
-  infill: (prefix: string, suffix: string, maxTokens = 64, signal?: AbortSignal) =>
+  infill: (
+    prefix: string,
+    suffix: string,
+    maxTokens = 64,
+    signal?: AbortSignal,
+    /** Sample this many and keep the best. Each one is a whole generation, so
+     *  this is for a completion asked for rather than offered. */
+    candidates = 1,
+  ) =>
     request<{
       completion: string;
       tokens: number;
       model: string;
       seconds: number;
       superseded?: boolean;
+      confidence?: number | null;
     }>('/api/v1/assistant/infill', {
       method: 'POST',
       // `source` identifies this tab so the model server abandons this tab's
       // previous request when a newer one arrives. Aborting is not enough on
       // its own: generation is serialised, so a request nobody wants is not
       // merely wasted, it is in front of the one that matters.
-      body: JSON.stringify({ prefix, suffix, max_tokens: maxTokens, source: SOURCE }),
+      body: JSON.stringify({
+        prefix,
+        suffix,
+        max_tokens: maxTokens,
+        source: SOURCE,
+        candidates,
+      }),
       signal,
     }),
 

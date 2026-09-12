@@ -66,6 +66,10 @@ class InfillRequest(BaseModel):
     # sources and neither supersedes the other. Bounded because it is used as a
     # dictionary key on the model server.
     source: str = Field(default="", max_length=64)
+    # Sample several completions and keep the one the model rates highest. Each
+    # is a whole generation, so this multiplies the wait: it is for a request
+    # someone is waiting on, not for one issued per keystroke.
+    candidates: int = Field(default=1, ge=1, le=8)
 
 
 @router.post("/api/v1/assistant/complete")
@@ -381,6 +385,7 @@ async def infill(payload: InfillRequest) -> dict:
             max_tokens=payload.max_tokens,
             temperature=payload.temperature,
             source=payload.source,
+            candidates=payload.candidates,
         )
     except modelclient.ModelUnavailable as exc:
         # 503 rather than 500: the editor treats this as "no suggestion" and
@@ -397,6 +402,11 @@ async def infill(payload: InfillRequest) -> dict:
         # completion is empty, and the editor should show nothing rather than
         # treating it as "the model had no suggestion".
         "superseded": result.superseded,
+        # Mean log-probability under the model's own distribution. Reported
+        # rather than acted on: measured on the checkpoint here it does not
+        # separate a good completion from a bad one, so filtering on it would
+        # be a threshold that does nothing.
+        "confidence": result.confidence,
     }
 
 

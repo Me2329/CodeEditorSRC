@@ -33,6 +33,7 @@ class Infill:
     model: str
     seconds: float
     superseded: bool = False
+    confidence: float | None = None
 
 
 def _post(path: str, payload: dict, timeout: float, headers: dict | None = None) -> dict:
@@ -60,7 +61,13 @@ def _post(path: str, payload: dict, timeout: float, headers: dict | None = None)
 
 
 async def infill(
-    prefix: str, suffix: str, *, max_tokens: int, temperature: float, source: str = ""
+    prefix: str,
+    suffix: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    source: str = "",
+    candidates: int = 1,
 ) -> Infill:
     """Ask for the text that belongs between `prefix` and `suffix`.
 
@@ -73,6 +80,10 @@ async def infill(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    # Sent only when asked for, so a model server old enough not to know the
+    # field never sees it.
+    if candidates > 1:
+        payload["candidates"] = candidates
     # Passed as a header rather than in the body: it says who is asking, not
     # what is being asked, and the model server reads it before parsing.
     headers = {"X-Request-Source": source} if source else None
@@ -86,6 +97,9 @@ async def infill(
         model=str(body.get("model", "unknown")),
         seconds=float(body.get("seconds", 0.0)),
         superseded=bool(body.get("superseded", False)),
+        confidence=(
+            float(body["confidence"]) if isinstance(body.get("confidence"), (int, float)) else None
+        ),
     )
 
 

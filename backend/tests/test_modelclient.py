@@ -159,6 +159,44 @@ async def test_a_superseded_completion_is_reported_as_one(model_server) -> None:
 
 
 @pytest.mark.asyncio
+async def test_asking_for_one_candidate_sends_no_field(model_server) -> None:
+    """So a model server old enough not to know it never sees it."""
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert "candidates" not in (Handler.seen or {})
+
+
+@pytest.mark.asyncio
+async def test_asking_for_several_candidates_says_so(model_server) -> None:
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0, candidates=4)
+
+    assert Handler.seen["candidates"] == 4
+
+
+@pytest.mark.asyncio
+async def test_confidence_comes_back_when_the_model_reports_it(model_server) -> None:
+    model_server.response = (200, {"completion": "x", "confidence": -1.25})
+
+    result = await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert result.confidence == -1.25
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_reports_no_confidence_is_not_an_error(model_server) -> None:
+    """An older server, or one answering from its cache."""
+    model_server.response = (200, {"completion": "x"})
+
+    result = await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert result.confidence is None
+
+
+@pytest.mark.asyncio
 async def test_a_response_missing_fields_still_parses(model_server) -> None:
     """A partial answer is better than an exception in the editor's path."""
     model_server.response = (200, {})

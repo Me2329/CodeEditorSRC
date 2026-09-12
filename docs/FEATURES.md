@@ -715,6 +715,17 @@ apply to the selection, or to the whole file when there is none.
 | 484 | `/tokenize` on the model server | the number a client sizing a prompt was guessing at |
 | 485 | Pieces only when asked for | a count is small; a piece per token on a long file is not |
 
+## Asking for a better completion
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 486 | "Complete here, best of four" | asked for, rather than offered on every pause |
+| 487 | Inserted through the editor | so one Ctrl+Z takes it back |
+| 488 | `candidates` carried through the gateway | sent only when asked for, so an older model server never sees it |
+| 489 | `confidence` carried through the gateway | reported, not acted on |
+| 490 | A model that reports no confidence is not an error | an older server, or one answering from its cache |
+| 491 | No confidence threshold | measured, it does not separate a good completion from a bad one |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
