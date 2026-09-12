@@ -1526,6 +1526,25 @@ export function CodeCraftIDE() {
         run: () => setBottomTab('extensions'),
       },
       {
+        id: 'assistant.countTokens',
+        title: 'Count the tokens in this file',
+        category: 'Assistant',
+        when: () => modelStatus?.available === true && activeFile !== null,
+        run: () => {
+          if (!activeFile) return;
+          void api
+            .tokenize(activeFile.content)
+            .then(({ tokens, characters, context }) => {
+              const share = context > 0 ? Math.round((tokens / context) * 100) : 0;
+              notify(
+                `${tokens.toLocaleString()} tokens, ${characters.toLocaleString()} characters` +
+                  (context > 0 ? ` — ${share}% of the model's ${context}-token context` : ''),
+              );
+            })
+            .catch(() => notify('No model is running, so there is nothing to count with.'));
+        },
+      },
+      {
         id: 'assistant.completeHere',
         title: 'Complete here, best of four',
         category: 'Assistant',

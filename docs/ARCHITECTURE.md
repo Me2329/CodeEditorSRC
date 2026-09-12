@@ -46,6 +46,8 @@ document explains what each one owns and why the seams fall where they do.
          ┌───────────────────────┴───────────────────────────────┐
          │ MODEL      Python · CodeCraft LM, trained here         │
          │   Byte-level BPE · transformer · trainer · sampler     │
+         │   Serving: prefix and response caches · superseding    │
+         │   Adapters merged on load · reload while training      │
          └───────────────────────────────────────────────────────┘
 ```
 
@@ -148,11 +150,39 @@ closest to untrusted code. Each ships a small amount of JSON handling rather tha
 pulling in a crate or a library, which keeps their supply chain empty and lets
 both build offline.
 
+**Generation is serialised, so obsolete work is cancelled rather than queued.**
+One lock guards the model: PyTorch releases the GIL inside its kernels, so two
+concurrent generations would genuinely run at once and thrash a machine sized
+for one. That makes a request nobody wants worse than wasted, because it is *in
+front of* the one that matters. A completion request carries the identity of the
+editor that sent it, and a newer one from the same editor cancels the older
+between tokens. Two editors, or a completion and a chat, are separate
+conversations and neither supersedes the other.
+
+**The editor's derived state is droppable, and stored separately because of it.**
+The files are the truth. Which tabs are open, where the caret has been, which
+folders are collapsed, which files were shown recently and what each file looked
+like ten minutes ago are all rebuildable by clicking, and all kept apart from
+the workspace in storage. Anything that fails to parse is discarded rather than
+repaired: losing a session costs a reload with no tabs open, and a stricter
+reading that throws costs an editor that will not start. The one exception is
+local history, which is the only copy of content that no longer exists anywhere
+else, so a deleted file keeps its snapshots.
+
 **Monaco is bundled, not fetched.** `@monaco-editor/react` loads the editor from
 a CDN by default. A platform meant for airgapped and self-hosted networks cannot
 have its editor disappear when a third party is unreachable, so Monaco is part
 of the bundle and its language workers are wired up explicitly. The same
 reasoning removed the web-font CDN link.
+
+**A model server answers three kinds of question.** `/v1/messages` speaks the
+Messages request and event shape, so pointing a client at it swaps a hosted
+model for a local one with no code change. `/generate` is the native surface for
+a prompt and sampling settings. `/infill` is the one an editor needs, because a
+caret has code on both sides of it and a completion that ignores the right-hand
+side redeclares what already exists two lines down. `/tokenize` exists so a
+client sizing a prompt is not guessing: characters per token varies by a factor
+of three depending on what the code looks like.
 
 ## Wire protocols
 

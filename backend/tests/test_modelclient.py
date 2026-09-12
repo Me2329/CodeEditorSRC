@@ -208,6 +208,35 @@ async def test_a_response_missing_fields_still_parses(model_server) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tokenize_reports_the_split(model_server) -> None:
+    """An editor sizing a prompt has been guessing at this."""
+    model_server.response = (200, {"tokens": 5, "characters": 16, "context": 512})
+
+    split = await modelclient.tokenize("def parse(text):")
+
+    assert (split.tokens, split.characters, split.context) == (5, 16, 512)
+
+
+@pytest.mark.asyncio
+async def test_tokenize_falls_back_to_the_length_it_sent(model_server) -> None:
+    """A partial answer is better than an exception in the editor's path."""
+    model_server.response = (200, {})
+
+    split = await modelclient.tokenize("abcd")
+
+    assert split.characters == 4
+    assert split.tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_tokenize_without_a_model_is_unavailable(monkeypatch) -> None:
+    point_at(monkeypatch, "http://127.0.0.1:9")
+
+    with pytest.raises(modelclient.ModelUnavailable):
+        await modelclient.tokenize("x")
+
+
+@pytest.mark.asyncio
 async def test_health_reports_the_model_card(model_server) -> None:
     model_server.response = (200, {"status": "ok", "parameters": 1234})
     assert (await modelclient.health())["parameters"] == 1234

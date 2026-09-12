@@ -132,6 +132,18 @@ export const api = {
       signal,
     }),
 
+  /**
+   * How many tokens a piece of text is, by the model's own tokenizer.
+   *
+   * On demand rather than as you type: it is a round trip, and the answer only
+   * changes when the file does.
+   */
+  tokenize: (text: string) =>
+    request<{ tokens: number; characters: number; context: number }>(
+      '/api/v1/assistant/tokenize',
+      { method: 'POST', body: JSON.stringify({ text }) },
+    ),
+
   /** Whether the local model is running, and what it is. */
   modelStatus: () =>
     request<{ available: boolean; model?: string; parameters?: number; reason?: string }>(

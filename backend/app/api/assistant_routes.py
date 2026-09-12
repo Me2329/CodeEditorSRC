@@ -410,6 +410,29 @@ async def infill(payload: InfillRequest) -> dict:
     }
 
 
+class TokenizeRequest(BaseModel):
+    """Text to measure against the model's tokenizer."""
+
+    # Bounded well above a source file and well below anything that would make
+    # the model server spend real time on it.
+    text: str = Field(default="", max_length=1_000_000)
+
+
+@router.post("/api/v1/assistant/tokenize")
+async def tokenize(payload: TokenizeRequest) -> dict:
+    """How many tokens a piece of text is, by the model's own tokenizer."""
+    try:
+        split = await modelclient.tokenize(payload.text)
+    except modelclient.ModelUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+    return {
+        "tokens": split.tokens,
+        "characters": split.characters,
+        "context": split.context,
+    }
+
+
 @router.get("/api/v1/assistant/model")
 async def model_health() -> dict:
     """Whether the local model is running, and what it is."""

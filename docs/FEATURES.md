@@ -726,6 +726,15 @@ apply to the selection, or to the whole file when there is none.
 | 490 | A model that reports no confidence is not an error | an older server, or one answering from its cache |
 | 491 | No confidence threshold | measured, it does not separate a good completion from a bad one |
 
+## Counting tokens
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 492 | "Count the tokens in this file" | by the model's own tokenizer, not an estimate |
+| 493 | Reported as a share of the context | which is the number that decides whether a prompt fits |
+| 494 | On demand, not as you type | a round trip whose answer only changes when the file does |
+| 495 | `/api/v1/assistant/tokenize` on the gateway | bounded at a megabyte |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

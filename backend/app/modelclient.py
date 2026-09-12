@@ -103,6 +103,33 @@ async def infill(
     )
 
 
+@dataclass
+class Split:
+    """How the model's tokenizer divides a piece of text."""
+
+    tokens: int
+    characters: int
+    context: int
+
+
+async def tokenize(text: str) -> Split:
+    """How many tokens a piece of text is, and how much context there is.
+
+    An editor sizing a prompt has been guessing at this: characters per token
+    varies by a factor of three depending on what the code looks like, so a
+    character budget is either wasteful or short and there is no way to tell
+    which from the client side.
+    """
+    body = await asyncio.to_thread(
+        _post, "/tokenize", {"text": text}, settings.model_timeout_seconds, None
+    )
+    return Split(
+        tokens=int(body.get("tokens", 0)),
+        characters=int(body.get("characters", len(text))),
+        context=int(body.get("context", 0)),
+    )
+
+
 def _get(path: str, timeout: float) -> dict:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
