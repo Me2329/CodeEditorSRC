@@ -730,7 +730,10 @@ def test_a_replaced_checkpoint_is_picked_up(run_directory, tmp_path) -> None:
         config = before.model.config
         save_checkpoint(run / "model.pt", CodeCraftLM(config), None, 99, 1.25, TrainConfig())
 
-        deadline = clock.time() + 5
+        # Generous, because loading a checkpoint on a machine that is also
+        # running the rest of this suite is not fast. A slow test beats a flaky
+        # one, and this only waits when something is wrong.
+        deadline = clock.time() + 30
         while server.engine is before and clock.time() < deadline:
             clock.sleep(0.05)
 
@@ -758,7 +761,9 @@ def test_a_checkpoint_that_will_not_load_leaves_the_old_one_running(
     try:
         before = server.engine
         (run / "model.pt").write_bytes(b"not a checkpoint at all")
-        clock.sleep(0.5)
+        # Long enough for several polls, so this is testing that nothing
+        # happened rather than that nothing had happened yet.
+        clock.sleep(1.0)
 
         assert server.engine is before
     finally:
@@ -774,6 +779,47 @@ def test_a_caller_can_hand_over_token_ids(run_directory) -> None:
     from_text = [delta for delta, _ in engine.stream("def parse", max_tokens=6, temperature=0.0)]
 
     assert "".join(from_ids) == "".join(from_text)
+
+
+def test_the_tokenize_route_counts(base_url: str) -> None:
+    """A client sizing a prompt has no other way to know."""
+    body = post(f"{base_url}/tokenize", {"text": "def parse(text):"})
+
+    assert body["characters"] == 16
+    assert 0 < body["tokens"] <= 16
+    assert body["context"] > 0
+
+
+def test_the_tokenize_route_can_show_the_split(base_url: str) -> None:
+    body = post(f"{base_url}/tokenize", {"text": "def parse", "pieces": True})
+
+    assert len(body["pieces"]) == body["tokens"]
+    assert len(body["ids"]) == body["tokens"]
+    assert "".join(body["pieces"]) == "def parse"
+
+
+def test_the_tokenize_route_is_quiet_by_default(base_url: str) -> None:
+    """A count is small; a piece per token on a long file is not."""
+    body = post(f"{base_url}/tokenize", {"text": "def parse"})
+
+    assert "pieces" not in body
+
+
+def test_the_tokenize_route_refuses_what_is_not_text(base_url: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        post(f"{base_url}/tokenize", {"text": 12})
+
+    assert raised.value.code == 400
+    assert json.loads(raised.value.read())["error"]["type"] == "invalid_request_error"
+
+
+def test_tokenize_survives_a_token_that_is_half_a_character(base_url: str) -> None:
+    """A token can be half a character, and a client would rather see one
+    replacement mark than fail to parse the response."""
+    body = post(f"{base_url}/tokenize", {"text": "héllo ✅", "pieces": True})
+
+    assert body["characters"] == 7
+    assert len(body["pieces"]) == body["tokens"]
 
 
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:

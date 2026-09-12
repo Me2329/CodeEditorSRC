@@ -669,6 +669,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_generate()
             elif self.path.rstrip("/") == "/infill":
                 self._handle_infill()
+            elif self.path.rstrip("/") == "/tokenize":
+                self._handle_tokenize()
             else:
                 self._send_error(404, "not_found_error", f"no route for POST {self.path}")
         except (BrokenPipeError, ConnectionResetError):
@@ -732,6 +734,43 @@ class Handler(BaseHTTPRequestHandler):
             "done", {"tokens": count, "seconds": round(time.time() - started, 3)}
         )
         self._end_stream()
+
+    def _handle_tokenize(self) -> None:
+        """How this tokenizer splits a piece of text.
+
+        Here because a client sizing a prompt has no other way to know. The
+        editor budgets context in characters, which is a guess that is wrong by
+        a factor of three either way depending on what the code looks like; this
+        is the number it was guessing at.
+
+        The pieces are returned as text, with anything that is not valid UTF-8
+        on its own replaced: a token can be half a character, and a client
+        showing the split would rather see one replacement mark than fail to
+        parse the response.
+        """
+        body = self._read_body()
+        if body is None:
+            return
+
+        text = body.get("text")
+        if not isinstance(text, str):
+            self._send_error(400, "invalid_request_error", "'text' must be a string")
+            return
+
+        ids = self.engine.tokenizer.encode(text)
+        response = {
+            "model": self.engine.name,
+            "tokens": len(ids),
+            "characters": len(text),
+            "context": self.engine.model.config.max_seq_len,
+        }
+        if body.get("pieces"):
+            response["ids"] = ids
+            response["pieces"] = [
+                self.engine.tokenizer.vocab.get(token_id, b"").decode("utf-8", "replace")
+                for token_id in ids
+            ]
+        self._send_json(200, response)
 
     def _handle_infill(self) -> None:
         """Complete at a caret, with the code on both sides of it."""
@@ -1013,6 +1052,7 @@ def serve(
         f"listening on http://{host}:{bound}\n"
         f"  POST /v1/messages   Messages-compatible, set ANTHROPIC_BASE_URL to this\n"
         f"  POST /generate      native prompt completion\n"
+        f"  POST /tokenize      how text splits, for a client sizing a prompt\n"
         f"  GET  /health        model card\n"
         + (
             f"  watching {run / 'model.pt'} every {reload_seconds:g}s\n"

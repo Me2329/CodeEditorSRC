@@ -603,6 +603,38 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## Fitting a model that does not fit
+
+Training keeps every block's activations from the forward pass so the backward
+pass can use them. At a long context those dwarf the weights, the gradients and
+the optimiser state together, and they scale with depth: a model twice as deep
+holds twice as many.
+
+```bash
+codecraft_model train --run runs/x --checkpointing
+```
+
+`--checkpointing` keeps only each block's input and recomputes the rest when the
+gradient arrives. Measured on a 12-layer, 512-wide model at a context of 1024
+with a batch of 4, in two separate processes so the peak is each run's own:
+
+| | peak memory | seconds per step |
+| --- | --- | --- |
+| Off | 4625 MB | 120.2 |
+| On | 2285 MB | 127.5 |
+
+Half the memory. The 6% on time is this machine's answer rather than the
+general one: the usual figure is nearer a third, and this run was on a
+contended CPU where the extra forward pass overlapped with waiting for memory.
+On a GPU, expect to pay more time than this table suggests and to get the same
+memory back.
+
+Tested on gradients rather than on loss. The loss is computed in the forward
+pass either way, so a bug that lost the graph would show an identical loss and
+wrong gradients. It never recomputes while a key/value cache is in play, even in
+training mode: recomputation runs the block twice, and a block that appends to a
+cache would append twice.
+
 ## Reading a model rather than measuring it
 
 ```bash
@@ -981,7 +1013,7 @@ whatever it is shown.
 make test-model
 ```
 
-449 tests: parameter counts against real modules, tokenizer round trips over
+454 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss

@@ -691,6 +691,30 @@ way to make a folder is to name a file into one.
 | 469 | Never recomputes with a key/value cache | a block that appends to one would append twice |
 | 470 | Off unless asked for | a run that fits should not pay a third more time |
 
+## Text transforms
+
+Each of these is a minute of careful editing or a keystroke, and the minute is
+the kind that introduces a typo three lines from where you were looking. They
+apply to the selection, or to the whole file when there is none.
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 471 | Sort lines | naturally, so item9 comes before item10 |
+| 472 | Reverse lines | |
+| 473 | Remove duplicate lines | keeping the first of each |
+| 474 | Remove blank lines | whitespace-only ones included |
+| 475 | Trim trailing whitespace | invisible, and in every diff until someone removes it |
+| 476 | Join lines | collapsing the whitespace at the joins |
+| 477 | Number lines | right-aligned, so the text still lines up |
+| 478 | Upper, lower and title case | title case leaves existing capitals alone |
+| 479 | To camelCase and to snake_case | `parseHTTPResponse` becomes `parse_http_response` |
+| 480 | Format and minify JSON | text that is not JSON is left alone, not replaced with an error |
+| 481 | Escape as a JSON string | |
+| 482 | Base64 in both directions | through UTF-8, so it survives anything above U+00FF |
+| 483 | A trailing newline is kept where it was | a transform that strips it makes every file look changed |
+| 484 | `/tokenize` on the model server | the number a client sizing a prompt was guessing at |
+| 485 | Pieces only when asked for | a count is small; a piece per token on a long file is not |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

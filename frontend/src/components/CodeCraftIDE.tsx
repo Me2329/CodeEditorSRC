@@ -44,6 +44,7 @@ import { decide as decideDropped, explain as explainRefused, uniqueName } from '
 import { nextAfter, previousBefore } from '../lib/problems';
 import { loadSession, reconcile, saveSession } from '../lib/session';
 import { outstanding, scanWorkspace } from '../lib/todos';
+import { TRANSFORMS } from '../lib/transforms';
 import { zipFiles } from '../lib/zip';
 import {
   matching as matchingSnippets,
@@ -1607,6 +1608,14 @@ export function CodeCraftIDE() {
           notify(`Formatted with ${formatter.id}`);
         },
       },
+      // Applied to the selection, or to the whole file when there is none,
+      // which is the same rule every editor uses for this kind of command.
+      ...TRANSFORMS.map((transform) => ({
+        id: transform.id,
+        title: transform.title,
+        category: transform.category,
+        run: () => applyTextAction(transform.run),
+      })),
       ...extensionCommands,
     ],
     [
