@@ -75,6 +75,7 @@ import {
 import { ApiError, api } from '../lib/api';
 import {
   clearHistory,
+  EMPTY_HISTORY,
   type History,
   loadHistory,
   record as recordRevision,
@@ -464,11 +465,28 @@ export function CodeCraftIDE() {
   activeFileIdRef.current = activeFile?.id ?? '';
   filesRef.current = files;
 
-  // Persist the workspace so a refresh does not discard work in progress.
+  /**
+   * Persist the workspace so a refresh does not discard work in progress.
+   *
+   * The one save in this editor whose failure matters. Everything else stored
+   * here can be rebuilt by clicking, and local history is the biggest of those
+   * things: a megabyte and a half of old versions can be exactly what stops the
+   * files themselves from fitting. So a refusal costs the history rather than
+   * the work, and says so, because silently stopping saving is how someone
+   * loses an afternoon to a reload.
+   */
   useEffect(() => {
     if (files.length === 0 || !activeFileId) return;
-    saveWorkspace({ language, files, activeFileId });
-  }, [language, files, activeFileId]);
+    if (saveWorkspace({ language, files, activeFileId })) return;
+
+    saveHistory(EMPTY_HISTORY);
+    setHistory(clearHistory());
+    if (saveWorkspace({ language, files, activeFileId })) {
+      notify('Storage was full, so local history was discarded to save your files.');
+    } else {
+      notify('This browser will not store the workspace. Export it to keep it.');
+    }
+  }, [language, files, activeFileId, notify]);
 
   // ----------------------------------------------------------------- analysis
   useEffect(() => {

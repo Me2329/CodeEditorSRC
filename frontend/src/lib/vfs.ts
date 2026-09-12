@@ -121,11 +121,21 @@ export interface PersistedWorkspace {
   activeFileId: string;
 }
 
-export function saveWorkspace(state: PersistedWorkspace): void {
+/**
+ * Write the workspace. False when the browser refused it.
+ *
+ * The answer matters, unlike the other things this editor stores. Tabs, history
+ * and recency can all be rebuilt by clicking; the files cannot, and a save that
+ * fails silently means a reload loses work the user watched being typed. The
+ * caller is expected to make room and try again.
+ */
+export function saveWorkspace(state: PersistedWorkspace): boolean {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
   } catch {
-    // Private browsing or a full quota; losing the draft is not worth an error.
+    // A full quota, or a private window that refuses storage entirely.
+    return false;
   }
 }
 

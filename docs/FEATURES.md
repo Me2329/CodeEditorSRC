@@ -814,6 +814,15 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 525 | A prompt that fits is not trimmed at all | the stride costs nothing when there is nothing to trim |
 | 526 | The sliding case is kept as a negative control | so the test measures the fix rather than agreeing with it |
 
+## The save whose failure matters
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 527 | Saving the workspace reports whether it happened | the files are the one thing here that cannot be rebuilt by clicking |
+| 528 | A full quota costs local history, not the work | a megabyte and a half of old versions is what stops the files fitting |
+| 529 | And says so | silently ceasing to save is how someone loses an afternoon to a reload |
+| 530 | A browser that refuses storage entirely says to export | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

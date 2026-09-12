@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createFile, loadWorkspace, monacoLanguageFor, saveWorkspace, validateFileName } from './vfs';
 
@@ -77,6 +77,29 @@ describe('workspace persistence', () => {
     const restored = loadWorkspace();
     expect(restored?.language).toBe('python');
     expect(restored?.files[0]?.content).toBe('print(1)');
+  });
+
+  it('says whether the workspace was actually stored', () => {
+    // The one save whose failure matters: everything else here can be rebuilt
+    // by clicking, and the files cannot.
+    expect(saveWorkspace({ language: 'python', files: [createFile('a.py', 'x')], activeFileId: 'a' }))
+      .toBe(true);
+  });
+
+  it('a browser that refuses storage is reported, not thrown', () => {
+    // Spied on the prototype: assigning to window.localStorage.setItem does not
+    // replace what the storage object actually calls.
+    const refuse = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    });
+
+    try {
+      expect(
+        saveWorkspace({ language: 'python', files: [createFile('a.py', 'x')], activeFileId: 'a' }),
+      ).toBe(false);
+    } finally {
+      refuse.mockRestore();
+    }
   });
 
   it('discards a malformed or empty payload rather than crashing', () => {
