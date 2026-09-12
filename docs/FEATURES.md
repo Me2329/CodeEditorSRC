@@ -962,6 +962,16 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 618 | The report says whether what was chosen was finished | the caller cannot see it from the text without redoing the work |
 | 619 | `--candidates` on the probe | which switches it from greedy to sampling |
 
+## Every use of a name
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 620 | Find every use of the name under the caret, Shift+F12 | a whole-word workspace search, and said to be one |
+| 621 | Whole word by default | or `save` would match `saved` and `autosave` |
+| 622 | The search panel takes a request from elsewhere | rather than only what is typed into it |
+| 623 | Asking twice for the same name is two requests | the request is an object, not a string |
+| 624 | A pending replacement is cleared by an incoming request | someone else asked this question; the old answer is not part of it |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

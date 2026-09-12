@@ -176,6 +176,11 @@ export function CodeCraftIDE() {
   // Read by the definition lookup, which is registered once and must not go
   // stale as the index is refreshed.
   const symbolsRef = useRef<WorkspaceSymbol[]>([]);
+  // A search the editor asked for rather than the user typed. A new object
+  // each time, so asking twice for the same name is two requests.
+  const [searchRequest, setSearchRequest] = useState<
+    { query: string; options?: { wholeWord?: boolean } } | null
+  >(null);
   const [stdin, setStdin] = useState('');
   const [argsText, setArgsText] = useState('');
   const [statusNote, setStatusNote] = useState('');
@@ -926,6 +931,31 @@ export function CodeCraftIDE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Every use of the name under the caret.
+   *
+   * A whole-word search across the workspace, and said to be that: without a
+   * language server there is no way to tell a use of this `save` from a use of
+   * a different one, and a panel that claimed otherwise would be lying.
+   */
+  const handleFindReferences = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const name = wordAt(model.getValue(), model.getOffsetAt(position));
+    if (!name) {
+      notify('Put the caret on a name first.');
+      return;
+    }
+    // Whole word, or `save` would match `saved` and `autosave` and the count
+    // would mean nothing.
+    setSearchRequest({ query: name, options: { wholeWord: true } });
+    setBottomTab('search');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -1632,6 +1662,13 @@ export function CodeCraftIDE() {
         run: handleGoToDefinition,
       },
       {
+        id: 'navigate.references',
+        title: 'Find every use of this name',
+        category: 'Navigate',
+        shortcut: 'Shift+F12',
+        run: handleFindReferences,
+      },
+      {
         id: 'view.settings',
         title: 'Open settings',
         category: 'View',
@@ -2292,6 +2329,7 @@ export function CodeCraftIDE() {
             ) : bottomTab === 'search' ? (
               <SearchPanel
                 files={files}
+                request={searchRequest}
                 onOpen={(fileId, line) => {
                   if (fileId !== activeFileId) setActiveFileId(fileId);
                   // Let the editor swap models before moving the caret.

@@ -8,7 +8,7 @@
  */
 
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, WholeWord } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import {
   DEFAULT_OPTIONS,
@@ -23,9 +23,14 @@ interface Props {
   files: readonly VirtualFile[];
   onOpen: (fileId: string, line: number) => void;
   onReplace: (changes: { fileId: string; name: string; content: string }[]) => void;
+  /** A search asked for from somewhere else, such as the name under the caret.
+   *  Changing it replaces what is typed here; the object identity is what says
+   *  "this is a new request" rather than the text, so asking twice for the same
+   *  name works. */
+  request?: { query: string; options?: Partial<SearchOptions> } | null;
 }
 
-export function SearchPanel({ files, onOpen, onReplace }: Props) {
+export function SearchPanel({ files, onOpen, onReplace, request }: Props) {
   const [query, setQuery] = useState('');
   const [replacement, setReplacement] = useState('');
   const [options, setOptions] = useState<SearchOptions>(DEFAULT_OPTIONS);
@@ -43,6 +48,15 @@ export function SearchPanel({ files, onOpen, onReplace }: Props) {
     () => (showReplace && query ? replaceInWorkspace(files, query, replacement, options) : []),
     [showReplace, files, query, replacement, options],
   );
+
+  useEffect(() => {
+    if (!request) return;
+    setQuery(request.query);
+    setOptions({ ...DEFAULT_OPTIONS, ...request.options });
+    // Someone else asked for this search; a replacement left over from the
+    // last one is not part of the question.
+    setShowReplace(false);
+  }, [request]);
 
   const toggle = (key: keyof SearchOptions) =>
     setOptions((current) => ({ ...current, [key]: !current[key] }));
