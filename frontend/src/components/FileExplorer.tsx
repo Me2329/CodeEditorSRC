@@ -20,7 +20,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 
 import { buildTree, flatten, navigate, reveal, toggle } from '../lib/tree';
 import { validateFileName } from '../lib/vfs';
@@ -35,6 +35,9 @@ interface Props {
   onDelete: (id: string) => void;
   /** A rename is also a move: the folders are part of the name. */
   onRename: (id: string, name: string) => void;
+  /** What goes under the tree, in the same column. The tree answers "which
+   *  file" and whatever is passed here answers "where in it". */
+  outline?: ReactNode;
 }
 
 export function FileExplorer({
@@ -45,6 +48,7 @@ export function FileExplorer({
   onCreate,
   onDelete,
   onRename,
+  outline,
 }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +344,8 @@ export function FileExplorer({
           )}
         </AnimatePresence>
       </div>
+
+      {outline}
     </aside>
   );
 }

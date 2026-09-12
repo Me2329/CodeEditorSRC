@@ -859,6 +859,25 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 550 | The response says why a completion ended | `trimmed` is `dedent`, `bracket`, or nothing |
 | 551 | The trimmed and untrimmed answers are cached separately | they are different questions |
 
+## An outline of the file you are in
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 552 | The index records what each declaration sits inside | a stack of indentation, kept per file |
+| 553 | A method is nested under its class | in braced languages as much as indented ones |
+| 554 | Nesting goes as deep as the code does | a function inside a method inside a class |
+| 555 | Outline panel under the file tree | the tree says which file, the outline says where in it |
+| 556 | Declarations in the order they appear | not the order they were indexed |
+| 557 | The declaration the caret is in is marked | the last one at or above the caret line |
+| 558 | Click a declaration to go to it | |
+| 559 | A filter appears once there is enough to filter | five declarations |
+| 560 | Filtering keeps the parents of what matched | a method without its class has lost half its name |
+| 561 | Marking follows the caret, not the filter | typing in the filter does not move the caret |
+| 562 | An unreachable daemon says so | an empty list means "nothing declared here", which is different |
+| 563 | A repeated container name resolves to the nearest one above | two classes in a file can both have a `save` |
+| 564 | A symbol whose container is not in the file sits at the top | |
+| 565 | An older daemon that reports no containers still produces a flat outline | the field is optional |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

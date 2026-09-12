@@ -242,6 +242,11 @@ pub struct Symbol {
     pub file: String,
     pub line: usize,
     pub detail: String,
+    /// The declaration this one sits inside, by name, or empty at the top
+    /// level. A method's class, a nested function's function. Judged from
+    /// indentation, which is what an outline needs and all these languages
+    /// agree on.
+    pub container: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

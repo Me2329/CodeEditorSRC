@@ -109,6 +109,9 @@ export interface Symbol {
   file: string;
   line: number;
   detail: string;
+  /** The declaration this one sits inside, by name. Empty at the top level,
+   *  and absent from an assistant daemon older than the field. */
+  container?: string;
 }
 
 export interface AnalysisResult {

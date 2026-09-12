@@ -200,12 +200,20 @@ impl Index {
         let mut identifiers: HashMap<String, usize> = HashMap::new();
 
         for file in files {
+            // What each declaration in this file sits inside, as a stack of
+            // (indentation, name). A declaration indented further than the one
+            // on top of the stack is inside it; one indented the same or less
+            // has closed it. That is true of a braced language as much as an
+            // indented one, because nobody writes a method at column zero.
+            let mut containers: Vec<(usize, String)> = Vec::new();
+
             for (offset, raw_line) in file.content.lines().enumerate() {
                 let line_number = offset + 1;
                 let trimmed = raw_line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
+                let indent = raw_line.len() - raw_line.trim_start().len();
 
                 let is_comment = rules
                     .line_comment
@@ -270,13 +278,25 @@ impl Index {
                             let name = clean_name(candidate);
                             if !name.is_empty() && is_identifier_start(name.chars().next().unwrap())
                             {
+                                while containers
+                                    .last()
+                                    .is_some_and(|(outer, _)| *outer >= indent)
+                                {
+                                    containers.pop();
+                                }
+                                let container = containers
+                                    .last()
+                                    .map(|(_, name)| name.clone())
+                                    .unwrap_or_default();
                                 symbols.push(Symbol {
                                     name: name.to_string(),
                                     kind: (*kind).to_string(),
                                     file: file.name.clone(),
                                     line: line_number,
                                     detail: trimmed.chars().take(120).collect(),
+                                    container,
                                 });
+                                containers.push((indent, name.to_string()));
                             }
                         }
                         break;
@@ -320,6 +340,44 @@ mod tests {
         assert!(names.contains(&"start"));
         assert!(names.contains(&"main"));
         assert_eq!(index.find("Engine").unwrap().kind, "class");
+    }
+
+    #[test]
+    fn a_method_knows_the_class_it_is_in() {
+        let files = vec![file(
+            "main.py",
+            "class Engine:\n    def start(self):\n        def inner():\n            pass\n\ndef main():\n    pass\n",
+        )];
+        let index = Index::build("python", &files);
+        assert_eq!(index.find("Engine").unwrap().container, "");
+        assert_eq!(index.find("start").unwrap().container, "Engine");
+        assert_eq!(index.find("inner").unwrap().container, "start");
+        // Back at column zero, so the class it followed has closed.
+        assert_eq!(index.find("main").unwrap().container, "");
+    }
+
+    #[test]
+    fn nesting_is_judged_per_file() {
+        let files = vec![
+            file("a.py", "class First:\n    def only(self):\n        pass\n"),
+            file("b.py", "def loose():\n    pass\n"),
+        ];
+        let index = Index::build("python", &files);
+        assert_eq!(index.find("only").unwrap().container, "First");
+        // A file does not inherit the indentation the previous one ended on.
+        assert_eq!(index.find("loose").unwrap().container, "");
+    }
+
+    #[test]
+    fn a_braced_language_nests_the_same_way() {
+        let files = vec![file(
+            "lib.rs",
+            "impl Server {\n    fn start(&self) {}\n}\n\nfn helper() {}\n",
+        )];
+        let index = Index::build("rust", &files);
+        assert_eq!(index.find("start").unwrap().container, "Server");
+        // The closing brace is at column zero, and so is what follows it.
+        assert_eq!(index.find("helper").unwrap().container, "");
     }
 
     #[test]

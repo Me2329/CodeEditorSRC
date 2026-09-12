@@ -113,6 +113,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { CommandPalette, type PaletteMode } from './CommandPalette';
 import { FileExplorer } from './FileExplorer';
+import { OutlinePanel } from './OutlinePanel';
 import { HistoryPanel } from './HistoryPanel';
 import { PreviewPane } from './PreviewPane';
 import { RunConfigPanel, parseArgs } from './RunConfigPanel';
@@ -162,6 +163,9 @@ export function CodeCraftIDE() {
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
+  // Told apart from "this file declares nothing", which looks identical in an
+  // empty list and means something completely different.
+  const [symbolsUnavailable, setSymbolsUnavailable] = useState(false);
   const [stdin, setStdin] = useState('');
   const [argsText, setArgsText] = useState('');
   const [statusNote, setStatusNote] = useState('');
@@ -531,12 +535,16 @@ export function CodeCraftIDE() {
           selection: '',
         })
         .then((result) => {
-          if (!cancelled) setSymbols(result.items);
+          if (cancelled) return;
+          setSymbols(result.items);
+          setSymbolsUnavailable(false);
         })
         .catch(() => {
           // The assistant daemon may not be running; the outline stays empty
           // and the palette says so rather than showing a stale list.
-          if (!cancelled) setSymbols([]);
+          if (cancelled) return;
+          setSymbols([]);
+          setSymbolsUnavailable(true);
         });
     }, 600);
 
@@ -2020,6 +2028,15 @@ export function CodeCraftIDE() {
               return remaining;
             });
           }}
+          outline={
+            <OutlinePanel
+              symbols={symbols}
+              fileName={activeFile?.name ?? ''}
+              line={caret.line}
+              unavailable={symbolsUnavailable}
+              onJump={handleJumpToLine}
+            />
+          }
         />
         )}
 
