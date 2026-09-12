@@ -32,6 +32,12 @@ MODEL_STEPS  ?= 4000
 MODEL_PORT   ?= 8940
 # auto takes the GPU when there is one. Override with MODEL_DEVICE=cpu.
 MODEL_DEVICE ?= auto
+# Fraction of documents rearranged as prefix/suffix/middle, which is what
+# teaches the model to complete at a caret rather than only at the end.
+MODEL_FIM    ?= 0
+# Seconds between checks for a checkpoint training has replaced; 0 never checks.
+MODEL_RELOAD ?= 0
+PROMPT_TEXT  ?= def parse(text):
 PROMPT       ?= def 
 
 .PHONY: help
@@ -161,7 +167,7 @@ model-sizes: ## List the model sizes and their true parameter counts
 model-prepare: ## Build a corpus and train a tokenizer from this repository
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model prepare \
 		--run ../../$(MODEL_RUN) --roots ../../backend ../../frontend/src ../../core ../../scripts \
-		--vocab $(MODEL_VOCAB) --allow-dir $(MODEL_ALLOW)
+		--vocab $(MODEL_VOCAB) --allow-dir $(MODEL_ALLOW) --fim $(MODEL_FIM)
 
 .PHONY: model-corpus
 model-corpus: ## What a corpus of a given size costs on disk
@@ -191,7 +197,33 @@ model-verify: assistant ## Prove the assistant daemon answers from our own weigh
 .PHONY: model-serve
 model-serve: ## Serve the trained model on MODEL_PORT
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model serve \
-		--run ../../$(MODEL_RUN) --port $(MODEL_PORT) --device $(MODEL_DEVICE)
+		--run ../../$(MODEL_RUN) --port $(MODEL_PORT) --device $(MODEL_DEVICE) \
+		--reload $(MODEL_RELOAD)
+
+.PHONY: model-chat
+model-chat: ## Talk to the trained checkpoint at the terminal
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model chat \
+		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE)
+
+.PHONY: model-tokens
+model-tokens: ## Show how the tokenizer splits PROMPT_TEXT
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model tokens \
+		--run ../../$(MODEL_RUN) --text "$(PROMPT_TEXT)"
+
+.PHONY: model-evaluate
+model-evaluate: ## Measure held-out perplexity and throughput
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model evaluate \
+		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE)
+
+.PHONY: model-average
+model-average: ## Average the best and the latest checkpoint of a run
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model average \
+		--checkpoints ../../$(MODEL_RUN)/model.pt ../../$(MODEL_RUN)/latest.pt \
+		--out ../../$(MODEL_RUN)/soup.pt
+
+.PHONY: model-export
+model-export: ## Write a checkpoint that loads without unpickling
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model export --run ../../$(MODEL_RUN)
 
 # ---------------------------------------------------------------- ops
 .PHONY: doctor

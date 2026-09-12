@@ -152,8 +152,16 @@ make model-sizes                       # six sizes, 1.3M to 1.01B parameters
 make model-prepare                     # corpus and tokenizer from this repo
 make model-train MODEL_SIZE=micro      # a real checkpoint, minutes on a CPU
 make model-sample PROMPT="def parse("
+make model-chat                        # talk to it at the terminal
+make model-tokens                      # how the tokenizer splits a line
+make model-evaluate                    # held-out perplexity and throughput
 make model-serve                       # HTTP on :8940
 ```
+
+`MODEL_FIM=0.5` on `prepare` rearranges half the documents as
+prefix/suffix/middle, which is what teaches completion at a caret rather than
+only at the end. `MODEL_RELOAD=5` on `serve` picks up a checkpoint training has
+replaced.
 
 The parameter counts are derived from the architecture and asserted in the tests
 against what PyTorch allocates, so `xl` really is 1.01 billion parameters. It
