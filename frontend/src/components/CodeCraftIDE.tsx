@@ -936,7 +936,14 @@ export function CodeCraftIDE() {
         token.onCancellationRequested(() => controller.abort());
 
         try {
-          const answer = await api.infill(prefix, suffix, 64, controller.signal);
+          const answer = await api.infill(prefix, suffix, {
+            signal: controller.signal,
+            // The server cannot know the language; this is what tells it that
+            // a bracket after a `#` is not a bracket.
+            lineComment: extensionsRef.current?.languageConfiguration(
+              model.getLanguageId(),
+            )?.lineComment,
+          });
           // A superseded request has an empty completion because a newer one
           // arrived, not because the model had nothing to say.
           if (answer.superseded) return { items: [] };
@@ -982,7 +989,13 @@ export function CodeCraftIDE() {
     notify('Asking for a completion…');
 
     try {
-      const answer = await api.infill(prefix, suffix, 96, undefined, 4);
+      const answer = await api.infill(prefix, suffix, {
+        maxTokens: 96,
+        candidates: 4,
+        lineComment: extensionsRef.current?.languageConfiguration(
+          model.getLanguageId(),
+        )?.lineComment,
+      });
       const completion = tidy(answer.completion, suffix);
       if (!completion.trim()) {
         notify('The model had nothing to add here.');

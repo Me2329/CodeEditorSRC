@@ -34,6 +34,9 @@ class Infill:
     seconds: float
     superseded: bool = False
     confidence: float | None = None
+    # Why the completion ended when the model did not choose to: "dedent" or
+    # "bracket" when it stopped belonging to the caret, otherwise None.
+    trimmed: str | None = None
 
 
 def _post(path: str, payload: dict, timeout: float, headers: dict | None = None) -> dict:
@@ -68,6 +71,7 @@ async def infill(
     temperature: float,
     source: str = "",
     candidates: int = 1,
+    line_comment: str | None = None,
 ) -> Infill:
     """Ask for the text that belongs between `prefix` and `suffix`.
 
@@ -84,6 +88,10 @@ async def infill(
     # field never sees it.
     if candidates > 1:
         payload["candidates"] = candidates
+    # What a comment looks like in this file. Only the editor knows, and
+    # without it the server counts brackets inside comments.
+    if line_comment:
+        payload["line_comment"] = line_comment
     # Passed as a header rather than in the body: it says who is asking, not
     # what is being asked, and the model server reads it before parsing.
     headers = {"X-Request-Source": source} if source else None
@@ -100,6 +108,7 @@ async def infill(
         confidence=(
             float(body["confidence"]) if isinstance(body.get("confidence"), (int, float)) else None
         ),
+        trimmed=(str(body["trimmed"]) if isinstance(body.get("trimmed"), str) else None),
     )
 
 

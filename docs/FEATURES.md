@@ -840,6 +840,25 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 536 | The operator set is the one that holds in every language here | an assignment, an open bracket, a comma, an arithmetic operator |
 | 537 | The check is opt-in | a caller that passes no prefix gets the behaviour it had |
 
+## Stopping a completion on the shape of the code
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 538 | A completion stops before closing a bracket the suffix closes | otherwise accepting it leaves `foo(a, b))` behind |
+| 539 | And may close brackets it opened itself | depth is counted relative to the caret |
+| 540 | The bracket rule is off when the suffix closes nothing | there the model's closing bracket is the one the code needs |
+| 541 | A completion stops when it leaves the caret's block | a line less indented than the caret's line is a different subject |
+| 542 | Blank lines before that line go too | a suggestion should not end in trailing newlines |
+| 543 | The dedent rule is off at column zero | nothing to fall out of |
+| 544 | Brackets inside strings do not count | the caret's own line says which string it is inside |
+| 545 | Brackets after a line comment do not count | the editor sends the marker, since only it knows the language |
+| 546 | A quote left open at a line end is treated as a mistake | believing it would switch every rule off for the rest |
+| 547 | Both rules decide as tokens arrive | generation stops at the token that broke the structure |
+| 548 | Trailing whitespace is held back until the line speaks | the line it starts may turn out to be the one that ends the completion |
+| 549 | Either rule can be turned off per request | `scope` on `/infill` |
+| 550 | The response says why a completion ended | `trimmed` is `dedent`, `bracket`, or nothing |
+| 551 | The trimmed and untrimmed answers are cached separately | they are different questions |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

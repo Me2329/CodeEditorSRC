@@ -43,6 +43,7 @@ from .device import (
 from .inflight import Supersede, Ticket
 from .reload import Watcher
 from .stopping import StopWatcher
+from .structure import ScopeWatcher
 from .tokenizer import Tokenizer
 from .train import load_checkpoint
 
@@ -306,6 +307,8 @@ class Engine:
         # second run of indentation would be worse than the loop.
         no_repeat_ngram: int = 4,
         stop: list[str] | None = None,
+        scope: bool = True,
+        line_comment: str | None = None,
         use_cache: bool = True,
         reuse_prefill: bool | None = None,
         ticket: Ticket | None = None,
@@ -352,12 +355,17 @@ class Engine:
             repetition_penalty=repetition_penalty,
             no_repeat_ngram=no_repeat_ngram,
             stop=tuple(stop) if stop else (),
+            scope=scope,
+            line_comment=line_comment,
         )
         if use_cache:
             remembered = self.response_cache.get(key)
             if remembered is not None:
                 if report is not None:
-                    report.update(cached=True, confidence=None, stop=None, superseded=False)
+                    report.update(
+                    cached=True, confidence=None,
+                    stop=None, trimmed=None, superseded=False,
+                )
                 return remembered, 0
 
         if reuse_prefill is None:
@@ -380,6 +388,14 @@ class Engine:
 
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
             watcher = StopWatcher(stop or ())
+            # Two watchers over one stream: one ends the completion at text the
+            # model wrote, the other at structure it broke. Whichever fires
+            # first is where the suggestion ends.
+            scoper = (
+                ScopeWatcher(prefix, suffix, line_comment=line_comment)
+                if scope
+                else None
+            )
             count = 0
             logprobs: list[float] = []
 
@@ -413,13 +429,23 @@ class Engine:
                     break
                 piece = self.tokenizer.vocab.get(token_id)
                 if piece is not None:
-                    _, hit = watcher.feed(decoder.decode(piece))
+                    text = decoder.decode(piece)
+                    _, hit = watcher.feed(text)
+                    if scoper is not None and scoper.feed(text)[1]:
+                        hit = True
                     if hit:
                         break
             else:
-                watcher.feed(decoder.decode(b"", final=True))
+                tail = decoder.decode(b"", final=True)
+                watcher.feed(tail)
+                if scoper is not None:
+                    scoper.feed(tail)
 
         completion = watcher.text
+        # Both watchers hold the same generated text, so the shorter answer is
+        # a prefix of the longer one and taking it needs no reconciling.
+        if scoper is not None and len(scoper.text) < len(completion):
+            completion = scoper.text
         confidence = sum(logprobs) / len(logprobs) if logprobs else float("-inf")
         self.last_confidence = confidence
         if report is not None:
@@ -427,6 +453,7 @@ class Engine:
                 cached=False,
                 confidence=confidence,
                 stop=watcher.matched,
+                trimmed=scoper.reason if scoper is not None else None,
                 superseded=bool(ticket is not None and ticket.cancelled),
             )
         # A half-finished answer is not the answer to this prompt, and caching
@@ -494,7 +521,10 @@ class Engine:
 
         cancelled = bool(ticket is not None and ticket.cancelled)
         if outer is not None:
-            outer.update(cached=False, confidence=best_score, stop=None, superseded=cancelled)
+            outer.update(
+                cached=False, confidence=best_score,
+                stop=None, trimmed=None, superseded=cancelled,
+            )
         # Half a search is not the answer to the question, for the same reason
         # half a generation is not.
         return ("" if cancelled else best_text), total
@@ -845,7 +875,16 @@ class Handler(BaseHTTPRequestHandler):
             "max_tokens": max(1, min(int(body.get("max_tokens", 64)), 512)),
             "no_repeat_ngram": max(0, min(int(body.get("no_repeat_ngram", 4)), 16)),
             "stop": _stop_sequences(body),
+            "scope": bool(body.get("scope", True)),
+            # The caller knows the language and the server does not, so it says
+            # what a comment looks like or the rule stays off.
+            "line_comment": (
+                body["line_comment"]
+                if isinstance(body.get("line_comment"), str) and body["line_comment"]
+                else None
+            ),
         }
+        report: dict = {}
 
         try:
             if candidates > 1:
@@ -855,6 +894,7 @@ class Handler(BaseHTTPRequestHandler):
                     candidates=candidates,
                     temperature=float(body.get("temperature", 0.6)),
                     ticket=ticket,
+                    report=report,
                     **shared,
                 )
             else:
@@ -863,6 +903,7 @@ class Handler(BaseHTTPRequestHandler):
                     suffix,
                     temperature=float(body.get("temperature", 0.2)),
                     ticket=ticket,
+                    report=report,
                     **shared,
                 )
         finally:
@@ -875,6 +916,11 @@ class Handler(BaseHTTPRequestHandler):
                 "tokens": count,
                 "candidates": candidates,
                 "confidence": round(self.engine.last_confidence, 4),
+                # Why the completion ended, when it was not the model's choice:
+                # "dedent" and "bracket" for structure, otherwise the stop
+                # sequence that matched.
+                "trimmed": report.get("trimmed"),
+                "stop": report.get("stop"),
                 "superseded": ticket.cancelled,
                 "seconds": round(time.time() - started, 3),
             },

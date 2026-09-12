@@ -70,6 +70,11 @@ class InfillRequest(BaseModel):
     # is a whole generation, so this multiplies the wait: it is for a request
     # someone is waiting on, not for one issued per keystroke.
     candidates: int = Field(default=1, ge=1, le=8)
+    # What a line comment looks like in this file, which decides whether a
+    # bracket the model writes is structure or prose. The editor knows the
+    # language; the model server does not. Bounded because a comment marker is
+    # two or three characters in every language that has one.
+    line_comment: str | None = Field(default=None, max_length=8)
 
 
 @router.post("/api/v1/assistant/complete")
@@ -386,6 +391,7 @@ async def infill(payload: InfillRequest) -> dict:
             temperature=payload.temperature,
             source=payload.source,
             candidates=payload.candidates,
+            line_comment=payload.line_comment,
         )
     except modelclient.ModelUnavailable as exc:
         # 503 rather than 500: the editor treats this as "no suggestion" and
@@ -407,6 +413,10 @@ async def infill(payload: InfillRequest) -> dict:
         # separate a good completion from a bad one, so filtering on it would
         # be a threshold that does nothing.
         "confidence": result.confidence,
+        # "dedent" or "bracket" when the completion was cut for running past
+        # the caret it belongs to. Reported so the editor can say why a
+        # suggestion is shorter than the budget it asked for.
+        "trimmed": result.trimmed,
     }
 
 

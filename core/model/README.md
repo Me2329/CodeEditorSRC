@@ -632,6 +632,25 @@ lines from somewhere else in its training data rather than degenerate ones from
 nowhere. Six and a half million parameters is the binding constraint, and the
 next thing to change is the model rather than the corpus.
 
+### Training it longer was not the answer either
+
+The obvious next thing was more steps, so the run was resumed from 6000 with the
+budget raised to 14000. It was abandoned at 6340, because by then the numbers
+had already answered the question:
+
+| | loss |
+| --- | --- |
+| training batches | 1.8 – 2.4 |
+| held-out validation | 3.618 |
+
+A model whose training loss sits a nat and a half below its validation loss is
+not learning the language any more, it is learning the corpus. Validation had
+also moved the wrong way from the 3.504 the first schedule ended on, because
+resuming restarts the learning-rate warmup and the first few hundred steps of a
+fresh schedule undo some of what a decayed one settled into. Neither number
+argues for spending three more hours on it. The conclusion above stands: the
+model is too small, and steps and tokens are not what is missing.
+
 The third of those answers was a real find rather than a bad sample. The corpus
 writes `<|file|>name` ahead of every document as ordinary text, not as a special
 token, so the model learned it as the string that follows the end of a file and
@@ -973,6 +992,54 @@ server caps them at 64 characters and eight of them.
 
 Both `stop` and `stop_sequences` are accepted, because the second is what a
 Messages client sends and the first is what most other APIs call it.
+
+## Stopping on structure
+
+Stopping on text needs to know what the model will say. The two ways a small
+model ruins a completion at a caret need to know what the code looks like, and
+contain no particular string at all:
+
+```
+    print(⟨here⟩)        value)               a bracket the suffix already closes
+    total = ⟨here⟩       0
+                         return total
+                                              everything past here belongs to
+                         def other():         some other part of the file
+                             pass
+```
+
+So there is a second watcher over the same stream, cutting the completion where
+it stops belonging to the caret. It ends a completion that closes a bracket it
+did not open, and one that starts a line less indented than the line the caret
+is on. Both are decided character by character as tokens arrive, so generation
+stops at the token that broke the structure rather than after the whole budget.
+
+Neither rule fires where it has nothing to say. The bracket rule is off unless
+the suffix already closes something, which is the normal case at a caret in an
+editor that closes brackets as you type and the only case where the model's
+closing bracket is a duplicate rather than the one the code needs. The dedent
+rule is off at column zero, where there is no block to fall out of. Brackets
+inside strings and comments are text, which is why `/infill` takes a
+`line_comment`: the editor knows the language and the model server does not.
+
+Measured on the 20M checkpoint, at four carets, with everything else equal:
+
+```
+    result += ⟨here⟩   without:  = [\n    "So, Scrapy: Init, dt.A",\n    "Scrapy", …
+                          with:  = [
+
+    return ⟨here⟩      without: .\n\nimport pytest\n\nfrom pydantic import BaseModel…
+                          with: .
+
+    print(⟨here⟩)      without: .\n\n# The `name` argument is a list of the `name`…
+                          with: .
+```
+
+Three of the four were cut, one from 48 tokens to one. This does not make the
+model good — none of those completions is worth accepting, and the editor throws
+away what is left as too short to show. What it does is make a bad suggestion
+short instead of long, and it removes the failure where accepting one leaves a
+duplicate bracket behind.
 
 ## Running out of context
 

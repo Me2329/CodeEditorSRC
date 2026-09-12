@@ -103,11 +103,22 @@ export const api = {
   infill: (
     prefix: string,
     suffix: string,
-    maxTokens = 64,
-    signal?: AbortSignal,
-    /** Sample this many and keep the best. Each one is a whole generation, so
-     *  this is for a completion asked for rather than offered. */
-    candidates = 1,
+    {
+      maxTokens = 64,
+      signal,
+      candidates = 1,
+      lineComment,
+    }: {
+      maxTokens?: number;
+      signal?: AbortSignal;
+      /** Sample this many and keep the best. Each one is a whole generation, so
+       *  this is for a completion asked for rather than offered. */
+      candidates?: number;
+      /** What a line comment looks like in this file. The server stops a
+       *  completion that closes a bracket the suffix closes, and without this
+       *  it would count brackets inside comments. */
+      lineComment?: string;
+    } = {},
   ) =>
     request<{
       completion: string;
@@ -116,6 +127,10 @@ export const api = {
       seconds: number;
       superseded?: boolean;
       confidence?: number | null;
+      /** Why the completion ended, when the model did not choose to: "dedent"
+       *  or "bracket" for structure, or the stop sequence that matched. */
+      trimmed?: string | null;
+      stop?: string | null;
     }>('/api/v1/assistant/infill', {
       method: 'POST',
       // `source` identifies this tab so the model server abandons this tab's
@@ -128,6 +143,7 @@ export const api = {
         max_tokens: maxTokens,
         source: SOURCE,
         candidates,
+        line_comment: lineComment,
       }),
       signal,
     }),

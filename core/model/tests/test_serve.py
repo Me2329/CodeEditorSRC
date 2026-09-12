@@ -929,3 +929,64 @@ def test_the_infill_route_rejects_a_missing_prefix(base_url: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as raised:
         post(f"{base_url}/infill", {"suffix": "x"})
     assert raised.value.code == 400
+
+
+def speaking(engine: Engine, text: str):
+    """Make the model say exactly this, so the trimming can be tested at all.
+
+    A two-layer model with random weights says nothing in particular, and a
+    test that waits for it to produce a dedent would wait forever.
+    """
+    ids = engine.tokenizer.encode(text)
+
+    def generate(*_args, **_kwargs):
+        return iter(ids)
+
+    engine.model.generate = generate
+    return engine
+
+
+def test_infill_stops_where_the_completion_leaves_the_block(run_directory) -> None:
+    engine = speaking(
+        Engine(run_directory), "0\n    return total\n\ndef other():\n    pass\n"
+    )
+    report: dict = {}
+    text, _ = engine.infill("def f():\n    total = ", "", report=report)
+    assert text == "0\n    return total"
+    assert report["trimmed"] == "dedent"
+
+
+def test_infill_stops_before_closing_what_the_suffix_closes(run_directory) -> None:
+    engine = speaking(Engine(run_directory), "value)\nprint(again)")
+    report: dict = {}
+    text, _ = engine.infill("print(", ")\n", report=report)
+    assert text == "value"
+    assert report["trimmed"] == "bracket"
+
+
+def test_the_structural_stop_can_be_turned_off(run_directory) -> None:
+    engine = speaking(Engine(run_directory), "0\n    return total\n\ndef other():\n")
+    report: dict = {}
+    text, _ = engine.infill("def f():\n    total = ", "", scope=False, report=report)
+    assert text.startswith("0\n    return total\n\ndef other():")
+    assert report["trimmed"] is None
+
+
+def test_turning_it_off_is_a_different_question_for_the_cache(run_directory) -> None:
+    engine = speaking(Engine(run_directory), "1\n\nprint(x)\n")
+    trimmed, _ = engine.infill("    x = ", "")
+    whole, _ = engine.infill("    x = ", "", scope=False)
+    assert trimmed == "1"
+    assert whole.startswith("1\n\nprint(x)")
+
+
+def test_a_comment_marker_keeps_brackets_inside_comments_quiet(run_directory) -> None:
+    engine = speaking(Engine(run_directory), "x  # ))) still fine")
+    text, _ = engine.infill("call(", ")", line_comment="#")
+    assert text == "x  # ))) still fine"
+
+
+def test_the_infill_route_says_why_the_completion_ended(base_url: str) -> None:
+    body = post(f"{base_url}/infill", {"prefix": "def f(", "suffix": "):\n    pass\n",
+                                       "max_tokens": 8})
+    assert "trimmed" in body and "stop" in body

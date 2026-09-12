@@ -178,6 +178,43 @@ async def test_asking_for_several_candidates_says_so(model_server) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_comment_marker_is_forwarded_when_the_editor_knows_one(model_server) -> None:
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0, line_comment="#")
+
+    assert Handler.seen["line_comment"] == "#"
+
+
+@pytest.mark.asyncio
+async def test_no_comment_marker_means_no_field(model_server) -> None:
+    """A language without line comments must not switch the rule on by accident."""
+    model_server.response = (200, {"completion": ""})
+
+    await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert "line_comment" not in (Handler.seen or {})
+
+
+@pytest.mark.asyncio
+async def test_why_the_completion_was_cut_comes_back(model_server) -> None:
+    model_server.response = (200, {"completion": "x", "trimmed": "dedent"})
+
+    answer = await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert answer.trimmed == "dedent"
+
+
+@pytest.mark.asyncio
+async def test_a_model_server_that_says_nothing_about_trimming_is_fine(model_server) -> None:
+    model_server.response = (200, {"completion": "x"})
+
+    answer = await modelclient.infill("a", "b", max_tokens=4, temperature=0.0)
+
+    assert answer.trimmed is None
+
+
+@pytest.mark.asyncio
 async def test_confidence_comes_back_when_the_model_reports_it(model_server) -> None:
     model_server.response = (200, {"completion": "x", "confidence": -1.25})
 
