@@ -952,35 +952,44 @@ class ModelServer(ThreadingHTTPServer):
         self._reloader: threading.Thread | None = None
         self._stop_reloading = threading.Event()
 
-    def watch_checkpoint(self, seconds: float = 5.0) -> None:
-        """Reload the engine when the checkpoint on disk is replaced.
+    def reload_if_changed(self, watcher: Watcher) -> bool:
+        """One poll. True when the engine was replaced.
 
-        For watching a run improve without restarting what you are testing
-        with. The new engine is built completely before it is swapped in, so a
-        request in flight finishes against the weights it started with and the
-        next one gets the new ones. A failed load leaves the old engine in
-        place: a server that keeps answering with slightly stale weights is
-        better than one that stops.
+        Separate from the thread that calls it so the behaviour can be tested
+        without waiting on a clock: a test that sleeps for a reload is a test
+        that fails on a loaded machine, which is exactly when the suite runs.
+
+        The new engine is built completely before it is swapped in, so a request
+        in flight finishes against the weights it started with and the next one
+        gets the new ones. A failed load leaves the old engine in place: a
+        server that keeps answering with slightly stale weights is better than
+        one that stops.
         """
+        if not watcher.poll():
+            return False
+
+        try:
+            replacement = Engine(self.engine.run, str(self.engine.device))
+        except Exception as error:  # noqa: BLE001 - any failure means keep the old one
+            print(f"reload failed, keeping the running model: {error}")
+            return False
+
+        previous = self.engine
+        self.engine = replacement
+        print(
+            f"reloaded at step {replacement.payload.get('step')}, "
+            f"val loss {replacement.payload.get('val_loss'):.3f} "
+            f"(was step {previous.payload.get('step')})"
+        )
+        return True
+
+    def watch_checkpoint(self, seconds: float = 5.0) -> None:
+        """Poll the checkpoint on an interval, for watching a run improve."""
 
         def loop() -> None:
             watcher = Watcher(self.engine.run / "model.pt")
             while not self._stop_reloading.wait(seconds):
-                if not watcher.poll():
-                    continue
-                try:
-                    replacement = Engine(self.engine.run, str(self.engine.device))
-                except Exception as error:  # noqa: BLE001 - any failure means keep the old one
-                    print(f"reload failed, keeping the running model: {error}")
-                    continue
-
-                previous = self.engine
-                self.engine = replacement
-                print(
-                    f"reloaded at step {replacement.payload.get('step')}, "
-                    f"val loss {replacement.payload.get('val_loss'):.3f} "
-                    f"(was step {previous.payload.get('step')})"
-                )
+                self.reload_if_changed(watcher)
 
         self._reloader = threading.Thread(target=loop, daemon=True, name="reload")
         self._reloader.start()

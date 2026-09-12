@@ -170,6 +170,16 @@ def command_prepare(args: argparse.Namespace) -> int:
             f"  {metadata['fim_documents']:,} documents rearranged for "
             "fill-in-the-middle"
         )
+    # Worth saying rather than leaving to be inferred: the split is the tail of
+    # the corpus, not a random sample of it, so validation is whole files the
+    # model never sees and, when the corpus is built repository by repository,
+    # whole repositories. A gap between training and validation loss is then
+    # mostly the difference between projects, and reading it as memorisation
+    # leads to adding dropout that was never needed.
+    print(
+        "  validation is the last 5% of the corpus: whole files the model "
+        "never sees, not a sample of the ones it does"
+    )
     return 0
 
 

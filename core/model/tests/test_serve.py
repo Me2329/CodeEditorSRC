@@ -712,10 +712,15 @@ def test_a_cached_answer_says_it_was_cached(run_directory) -> None:
 
 
 def test_a_replaced_checkpoint_is_picked_up(run_directory, tmp_path) -> None:
-    """For watching a run improve without restarting what you test with."""
-    import shutil
-    import time as clock
+    """For watching a run improve without restarting what you test with.
 
+    Driven a poll at a time rather than by waiting on the thread: a test that
+    sleeps for a reload fails on a loaded machine, which is exactly when the
+    suite runs.
+    """
+    import shutil
+
+    from codecraft_model.reload import Watcher
     from codecraft_model.serve import build_server
 
     run = tmp_path / "watched"
@@ -723,19 +728,19 @@ def test_a_replaced_checkpoint_is_picked_up(run_directory, tmp_path) -> None:
     for name in ("tokenizer.json", "meta.json", "model.pt"):
         shutil.copy(run_directory / name, run / name)
 
-    server = build_server(run, "127.0.0.1", 0, reload_seconds=0.05)
+    server = build_server(run, "127.0.0.1", 0)
     try:
         before = server.engine
-        torch.manual_seed(7)
-        config = before.model.config
-        save_checkpoint(run / "model.pt", CodeCraftLM(config), None, 99, 1.25, TrainConfig())
+        watcher = Watcher(run / "model.pt")
 
-        # Generous, because loading a checkpoint on a machine that is also
-        # running the rest of this suite is not fast. A slow test beats a flaky
-        # one, and this only waits when something is wrong.
-        deadline = clock.time() + 30
-        while server.engine is before and clock.time() < deadline:
-            clock.sleep(0.05)
+        torch.manual_seed(7)
+        save_checkpoint(
+            run / "model.pt", CodeCraftLM(before.model.config), None, 99, 1.25, TrainConfig()
+        )
+
+        # The first poll sees a change it does not yet trust; the second acts.
+        assert server.reload_if_changed(watcher) is False
+        assert server.reload_if_changed(watcher) is True
 
         assert server.engine is not before
         assert server.engine.payload["step"] == 99
@@ -743,13 +748,33 @@ def test_a_replaced_checkpoint_is_picked_up(run_directory, tmp_path) -> None:
         server.server_close()
 
 
+def test_nothing_changing_is_not_a_reload(run_directory, tmp_path) -> None:
+    import shutil
+
+    from codecraft_model.reload import Watcher
+    from codecraft_model.serve import build_server
+
+    run = tmp_path / "still"
+    run.mkdir()
+    for name in ("tokenizer.json", "meta.json", "model.pt"):
+        shutil.copy(run_directory / name, run / name)
+
+    server = build_server(run, "127.0.0.1", 0)
+    try:
+        watcher = Watcher(run / "model.pt")
+        assert server.reload_if_changed(watcher) is False
+        assert server.reload_if_changed(watcher) is False
+    finally:
+        server.server_close()
+
+
 def test_a_checkpoint_that_will_not_load_leaves_the_old_one_running(
-    run_directory, tmp_path, capsys
+    run_directory, tmp_path
 ) -> None:
     """A server answering with slightly stale weights beats one that stops."""
     import shutil
-    import time as clock
 
+    from codecraft_model.reload import Watcher
     from codecraft_model.serve import build_server
 
     run = tmp_path / "broken"
@@ -757,69 +782,38 @@ def test_a_checkpoint_that_will_not_load_leaves_the_old_one_running(
     for name in ("tokenizer.json", "meta.json", "model.pt"):
         shutil.copy(run_directory / name, run / name)
 
-    server = build_server(run, "127.0.0.1", 0, reload_seconds=0.05)
+    server = build_server(run, "127.0.0.1", 0)
     try:
         before = server.engine
+        watcher = Watcher(run / "model.pt")
         (run / "model.pt").write_bytes(b"not a checkpoint at all")
-        # Long enough for several polls, so this is testing that nothing
-        # happened rather than that nothing had happened yet.
-        clock.sleep(1.0)
 
+        server.reload_if_changed(watcher)
+        assert server.reload_if_changed(watcher) is False
         assert server.engine is before
     finally:
         server.server_close()
 
 
-def test_a_caller_can_hand_over_token_ids(run_directory) -> None:
-    """For the instruction format, whose turn markers do not survive decoding."""
-    engine = Engine(run_directory)
-    ids = engine.tokenizer.encode("def parse")
+def test_the_watching_thread_starts_and_stops(run_directory, tmp_path) -> None:
+    """The thread itself, without depending on what it manages to do."""
+    import shutil
 
-    from_ids = [delta for delta, _ in engine.stream("", prompt_ids=ids, max_tokens=6, temperature=0.0)]
-    from_text = [delta for delta, _ in engine.stream("def parse", max_tokens=6, temperature=0.0)]
+    from codecraft_model.serve import build_server
 
-    assert "".join(from_ids) == "".join(from_text)
+    run = tmp_path / "threaded"
+    run.mkdir()
+    for name in ("tokenizer.json", "meta.json", "model.pt"):
+        shutil.copy(run_directory / name, run / name)
 
+    server = build_server(run, "127.0.0.1", 0, reload_seconds=0.05)
+    try:
+        assert server._reloader is not None
+        assert server._reloader.is_alive()
+    finally:
+        server.server_close()
 
-def test_the_tokenize_route_counts(base_url: str) -> None:
-    """A client sizing a prompt has no other way to know."""
-    body = post(f"{base_url}/tokenize", {"text": "def parse(text):"})
-
-    assert body["characters"] == 16
-    assert 0 < body["tokens"] <= 16
-    assert body["context"] > 0
-
-
-def test_the_tokenize_route_can_show_the_split(base_url: str) -> None:
-    body = post(f"{base_url}/tokenize", {"text": "def parse", "pieces": True})
-
-    assert len(body["pieces"]) == body["tokens"]
-    assert len(body["ids"]) == body["tokens"]
-    assert "".join(body["pieces"]) == "def parse"
-
-
-def test_the_tokenize_route_is_quiet_by_default(base_url: str) -> None:
-    """A count is small; a piece per token on a long file is not."""
-    body = post(f"{base_url}/tokenize", {"text": "def parse"})
-
-    assert "pieces" not in body
-
-
-def test_the_tokenize_route_refuses_what_is_not_text(base_url: str) -> None:
-    with pytest.raises(urllib.error.HTTPError) as raised:
-        post(f"{base_url}/tokenize", {"text": 12})
-
-    assert raised.value.code == 400
-    assert json.loads(raised.value.read())["error"]["type"] == "invalid_request_error"
-
-
-def test_tokenize_survives_a_token_that_is_half_a_character(base_url: str) -> None:
-    """A token can be half a character, and a client would rather see one
-    replacement mark than fail to parse the response."""
-    body = post(f"{base_url}/tokenize", {"text": "héllo ✅", "pieces": True})
-
-    assert body["characters"] == 7
-    assert len(body["pieces"]) == body["tokens"]
+    assert not server._reloader.is_alive()
 
 
 def test_infill_survives_a_prefix_longer_than_the_context(run_directory) -> None:

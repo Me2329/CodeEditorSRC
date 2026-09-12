@@ -129,6 +129,20 @@ def test_serving_can_be_told_how_many_threads_to_use(tmp_path, monkeypatch) -> N
     assert asked == [2]
 
 
+def test_prepare_says_what_the_validation_set_is(tmp_path, sources, capsys) -> None:
+    """The pair "training 2.77, validation 4.11" reads as overfitting and is not.
+
+    The split is the tail of the corpus, so validation is whole files the model
+    never sees. Leaving that to be worked out from the split point leads to
+    adding dropout that was never needed.
+    """
+    run = tmp_path / "run"
+
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    assert "whole files the model never sees" in capsys.readouterr().out
+
+
 def test_tokens_shows_the_split(tmp_path, sources, capsys) -> None:
     """Nearly every surprise about what a model does with a prompt turns out to
     be a surprise about how the prompt was split."""

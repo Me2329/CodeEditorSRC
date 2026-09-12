@@ -774,6 +774,13 @@ the extension was listed as installed, enabled, and doing nothing.
 | 508 | A theme that is no longer contributed falls back | rather than leaving Monaco a name it cannot resolve |
 | 509 | The choice survives the extension being disabled | forgetting it is worse than holding a name that currently resolves to nothing |
 
+## Saying what the numbers mean
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 510 | `prepare` says what the validation set is | the tail of the corpus: whole files, not a sample of the training ones |
+| 511 | Reloading is testable without a clock | a test that sleeps for it fails on a loaded machine, which is when the suite runs |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

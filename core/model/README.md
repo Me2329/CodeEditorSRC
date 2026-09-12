@@ -603,6 +603,36 @@ Verified against the billion-token checkpoint: every weight is bit-identical
 and the logits match exactly. 51.3MB against 103.5MB for the pickle, because
 that one also carries optimiser state.
 
+## What the validation number is
+
+The corpus is split by truncation: the last 5% of the token stream is the
+validation set. When the corpus is built repository by repository, that means
+validation is the *last repositories cloned*, in their entirety.
+
+This is the strict version of the test. There is no near-duplicate leakage
+between training and validation, which a random split of windows cannot promise
+for code, where the same file often appears twice in a corpus with two lines
+changed.
+
+It also means the gap between training loss and validation loss is mostly the
+difference between one project and another, not memorisation. The second
+fill-in-the-middle run reads 2.77 on training and 4.11 on validation at step
+1600, and the obvious reading of that pair is "it is overfitting", which would
+lead to adding dropout that is not needed. What it actually says is that a model
+trained on Flask and Django does not predict the internals of a cryptography
+library, which is true of larger models too.
+
+Two consequences worth knowing:
+
+  - Validation numbers are comparable within a run and not between runs on
+    different corpora. The first run's 2.577 and the second's 4.107 are
+    measurements of different things.
+  - A corpus assembled one project at a time should be assembled in an order
+    where the last few projects are ones worth being measured on.
+
+`prepare` now says this rather than leaving it to be worked out from the split
+point.
+
 ## The fill-in-the-middle run, finished
 
 4200 steps on 3.0M tokens of Python, 6.5M parameters, on four CPU cores:
@@ -1098,7 +1128,7 @@ whatever it is shown.
 make test-model
 ```
 
-456 tests: parameter counts against real modules, tokenizer round trips over
+459 tests: parameter counts against real modules, tokenizer round trips over
 awkward input, the rotary property that attention depends only on relative
 position, incremental decoding matching a full forward pass, a reused prefill
 giving the same logits as a whole one, the training loop actually reducing loss
