@@ -618,9 +618,23 @@ It also means the gap between training loss and validation loss is mostly the
 difference between one project and another, not memorisation. The second
 fill-in-the-middle run reads 2.77 on training and 4.11 on validation at step
 1600, and the obvious reading of that pair is "it is overfitting", which would
-lead to adding dropout that is not needed. What it actually says is that a model
-trained on Flask and Django does not predict the internals of a cryptography
-library, which is true of larger models too.
+lead to adding dropout that is not needed.
+
+The way to tell the two apart is to score the same checkpoint on windows drawn
+from the training half and from the validation half with the same settings.
+At step 1800:
+
+| windows from | loss | perplexity |
+| --- | --- | --- |
+| the training projects | 2.7264 | 15.3 |
+| the held-out projects | 4.1731 | 64.9 |
+
+With one caveat stated rather than buried: at that point the run had drawn about
+a third as many windows as the training split contains, so some of the
+training-side windows had been seen before and some had not. That confounds the
+size of the gap and not its direction. A model trained on Flask and Click does
+not predict the internals of a cryptography library, which is true of larger
+models too.
 
 Two consequences worth knowing:
 
