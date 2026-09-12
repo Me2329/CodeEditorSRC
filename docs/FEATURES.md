@@ -940,8 +940,8 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | # | Feature | Notes |
 | --- | --- | --- |
 | 603 | Go to definition, F12 or the palette | from the workspace index, not a language server |
-| 604 | The name the caret is on, or has just finished typing | a caret sits between characters |
-| 605 | A number is not a name | nothing to go to |
+| 604 | The name the caret is on, by the editor's own idea of a word | it knows the language's rules, and answers without copying the file |
+| 605 | A number is a word but not a name | nothing to go to |
 | 606 | The declaration in the file you are in wins | name matching cannot tell two `save` methods apart, and does not pretend to |
 | 607 | The declaration the caret is already on is skipped | jumping to the line you are on looks like the key did nothing |
 | 608 | Cross-file jumps open the file first | and let the editor swap models before moving the caret |
