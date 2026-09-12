@@ -53,3 +53,4 @@ window.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+

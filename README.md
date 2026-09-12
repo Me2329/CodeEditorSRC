@@ -69,7 +69,7 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 658 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 659 with what each one does,
 and states plainly what is *not* built.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
@@ -267,7 +267,7 @@ make test   # every suite
 
 Every suite, run together: 34 sandbox conformance checks with 17 skipped for
 toolchains this machine does not have, 16 supervisor tests, 40 analyzer checks,
-108 gateway tests, 71 assistant tests, 538 model tests and 546 frontend tests.
+108 gateway tests, 71 assistant tests, 538 model tests and 552 frontend tests.
 
 | Suite | Covers |
 | --- | --- |

@@ -282,3 +282,20 @@ export function applyTheme(theme: Theme): void {
   }
   root.dataset.theme = theme.id;
 }
+
+/**
+ * A contributed theme id, as a name Monaco will accept.
+ *
+ * Monaco refuses a theme name containing anything but letters, digits and
+ * hyphens, and it refuses it by throwing: `defineTheme('codecraft.midnight')`
+ * raises "Illegal theme name!" from inside an effect, which takes the whole
+ * editor down with it. Contribution ids are dotted, like every other id in the
+ * extension contract, so the two have to be reconciled somewhere and this is
+ * the boundary where it belongs.
+ *
+ * Not a validation rule on the contract: an extension should not have to know
+ * which of its ids ends up in a Monaco call.
+ */
+export function monacoThemeName(id: string): string {
+  return id.replace(/[^A-Za-z0-9-]+/g, '-');
+}

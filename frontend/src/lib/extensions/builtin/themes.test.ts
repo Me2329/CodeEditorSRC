@@ -1,10 +1,20 @@
 import { describe, expect, test } from 'vitest';
 
+import { monacoThemeName } from '../../preferences';
 import { THEMES, themePack } from './themes';
 
 describe('the contributed themes', () => {
   test('each has a distinct id', () => {
     expect(new Set(THEMES.map((theme) => theme.id)).size).toBe(THEMES.length);
+  });
+
+  test('each id survives being turned into a name Monaco accepts', () => {
+    // The ids are dotted and Monaco refuses a dotted theme name by throwing,
+    // from inside an effect, which takes the editor down with it. That is a
+    // real bug this list has had.
+    const names = THEMES.map((theme) => monacoThemeName(theme.id));
+    for (const name of names) expect(name).toMatch(/^[A-Za-z0-9-]+$/);
+    expect(new Set(names).size).toBe(THEMES.length);
   });
 
   test('each id is namespaced to its extension', () => {

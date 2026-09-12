@@ -96,6 +96,7 @@ import {
   applyTheme,
   DEFAULT_PREFERENCES,
   loadPreferences,
+  monacoThemeName,
   savePreferences,
   themeById,
   THEMES,
@@ -1395,7 +1396,7 @@ export function CodeCraftIDE() {
    * the interface theme's base otherwise.
    */
   const editorTheme = extensions.host.allThemes().some((theme) => theme.id === preferences.editorTheme)
-    ? preferences.editorTheme
+    ? monacoThemeName(preferences.editorTheme)
     : themeById(preferences.theme).monacoBase;
 
   /**
@@ -1411,7 +1412,8 @@ export function CodeCraftIDE() {
     if (!monaco) return;
 
     for (const theme of extensions.host.allThemes()) {
-      monaco.editor.defineTheme(theme.id, {
+      // Monaco will not take a dotted name, and says so by throwing.
+      monaco.editor.defineTheme(monacoThemeName(theme.id), {
         base: theme.base,
         // Inherited, so a contribution is a short list of overrides rather than
         // a complete scheme that would still miss whatever Monaco adds next.
