@@ -67,6 +67,63 @@ def test_prepare_train_sample_round_trip(tmp_path, sources, capsys) -> None:
     assert "def parse" in capsys.readouterr().out
 
 
+def test_probe_asks_every_case_and_says_what_came_back(tmp_path, sources, capsys) -> None:
+    """The whole command, against a real checkpoint, comparing a run with itself."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "5",
+                "--batch", "2", "--block", "64", "--warmup", "2", "--eval-every", "5",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([{"name": "only", "prefix": "def f(", "suffix": "):\n    pass\n"}]))
+    written = tmp_path / "probe.json"
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "probe", "--run", str(run), "--compare", str(run),
+                "--cases", str(cases), "--tokens", "4", "--json", str(written),
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "only" in output
+    assert "1 cases" in output
+    answers = json.loads(written.read_text())
+    # Compared with itself, which is the one comparison whose answer is known:
+    # two rows, told apart by number, saying exactly the same thing.
+    assert len(answers) == 2
+    first, second = answers.values()
+    assert first["cases"] == 1
+    assert first["answers"] == second["answers"]
+
+
+def test_probe_without_a_checkpoint_says_to_train_first(tmp_path, capsys) -> None:
+    assert main(["probe", "--run", str(tmp_path)]) == 1
+    assert "train first" in capsys.readouterr().err
+
+
+def test_probe_refuses_a_cases_file_it_cannot_use(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    broken = tmp_path / "cases.json"
+    broken.write_text("not json at all")
+
+    assert main(["probe", "--run", str(run), "--cases", str(broken)]) == 1
+    assert "could not read the cases" in capsys.readouterr().err
+
+
 def test_prepare_reports_a_tree_with_nothing_in_it(tmp_path, capsys) -> None:
     assert main(["prepare", "--run", str(tmp_path / "run"), "--roots", str(tmp_path)]) == 1
     assert "no source files" in capsys.readouterr().err

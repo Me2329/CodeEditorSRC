@@ -823,6 +823,71 @@ def command_infill(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_probe(args: argparse.Namespace) -> int:
+    """Ask one checkpoint, or two, the same fixed set of questions."""
+    from .probe import Answer, labels, load_cases, caret_line, report, show, summarise
+    from .serve import Engine
+
+    try:
+        cases = load_cases(Path(args.cases) if args.cases else None)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"could not read the cases: {error}", file=sys.stderr)
+        return 1
+
+    runs = [Path(args.run)] + ([Path(args.compare)] if args.compare else [])
+    engines = []
+    for run, label in zip(runs, labels(runs)):
+        if not (run / "model.pt").exists():
+            print(f"no checkpoint at {run / 'model.pt'}; train first", file=sys.stderr)
+            return 1
+        engines.append((label, Engine(run, args.device)))
+
+    label_width = max(len(name) for name, _ in engines)
+    collected: dict[str, list] = {name: [] for name, _ in engines}
+
+    for case in cases:
+        print(f"\n\033[1m{case.name}\033[0m  {caret_line(case)!r}")
+        for name, engine in engines:
+            recorded: dict = {}
+            # Every case starts from the same state, so a difference between
+            # two rows is the model rather than where the sampler had got to.
+            torch.manual_seed(args.seed)
+            text, count = engine.infill(
+                case.prefix,
+                case.suffix,
+                max_tokens=args.tokens,
+                temperature=args.temperature,
+                line_comment=case.line_comment,
+                scope=not args.no_scope,
+                use_cache=False,
+                report=recorded,
+            )
+            answer = Answer(
+                case=case.name,
+                completion=text,
+                tokens=count,
+                confidence=float(recorded.get("confidence") or 0.0),
+                trimmed=recorded.get("trimmed"),
+            )
+            collected[name].append(answer)
+            why = f"  \033[33m[{answer.trimmed}]\033[0m" if answer.trimmed else ""
+            print(f"  {name:<{label_width}}  \033[32m{show(text)}\033[0m{why}")
+
+    print()
+    for name, _ in engines:
+        print(f"{name:<{label_width}}  {summarise(collected[name])}")
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(
+                {name: report(answers) for name, answers in collected.items()}, indent=2
+            ),
+            encoding="utf-8",
+        )
+        print(f"\nwritten to {args.json}")
+    return 0
+
+
 def command_serve(args: argparse.Namespace) -> int:
     from .serve import serve
 
@@ -1160,6 +1225,38 @@ def main(argv: list[str] | None = None) -> int:
     infill.add_argument("--temperature", type=float, default=0.2)
     add_device(infill)
     infill.set_defaults(func=command_infill)
+
+    prober = subparsers.add_parser(
+        "probe",
+        help="ask a checkpoint a fixed set of caret questions, and compare two",
+    )
+    prober.add_argument("--run", required=True)
+    prober.add_argument(
+        "--compare",
+        default=None,
+        help="a second run, answered beside the first at every caret",
+    )
+    prober.add_argument(
+        "--cases",
+        default=None,
+        help="JSON list of {name, prefix, suffix, line_comment}; omit for the built-in set",
+    )
+    prober.add_argument("--tokens", type=int, default=48)
+    prober.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="zero, so the same checkpoint answers the same way twice",
+    )
+    prober.add_argument("--seed", type=int, default=1337)
+    prober.add_argument(
+        "--no-scope",
+        action="store_true",
+        help="do not cut a completion that runs past the caret it belongs to",
+    )
+    prober.add_argument("--json", default=None, help="write the answers to this file")
+    add_device(prober)
+    prober.set_defaults(func=command_probe)
 
     server = subparsers.add_parser("serve", help="serve the model over HTTP")
     server.add_argument("--run", required=True)

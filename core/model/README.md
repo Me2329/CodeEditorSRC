@@ -1000,6 +1000,45 @@ server caps them at 64 characters and eight of them.
 Both `stop` and `stop_sequences` are accepted, because the second is what a
 Messages client sends and the first is what most other APIs call it.
 
+## Asking the same questions every time
+
+Perplexity says how surprised a model is by held-out code. It does not say
+whether what it writes at a caret is worth showing to anyone, and the two come
+apart: the run on six times the corpus scored worse and wrote better-formed
+nonsense. The only way to know is to look, and looking is worth doing the same
+way twice.
+
+```bash
+make model-probe                              # the checkpoint, six carets
+make model-probe COMPARE=runs/fim             # two checkpoints, side by side
+python -m codecraft_model probe --run runs/fim2 --cases mine.json --json out.json
+```
+
+Six built-in carets, chosen so a model with nothing to say has nowhere to hide:
+finish this call, finish this assignment, add to this accumulator, write this
+function's body, continue this import block, finish this condition. Temperature
+zero and a fixed seed, so the same checkpoint answers the same way twice and a
+difference between two rows is a difference between the models.
+
+```
+call argument  '        print('
+  fim2  ,\n            "Field required",\n            "FastAPI",\n         …
+  fim   , value, value, _, _, value, ss, value, m, value, None  [bracket]
+
+assignment  '        self.text = '
+  fim2  (nothing)
+  fim   , _text, _text = _text.text  [dedent]
+
+fim2  6 cases, 1 empty, 2 cut for structure, mean confidence -1.084
+fim   6 cases, 0 empty, 3 cut for structure, mean confidence -1.433
+```
+
+Line breaks are printed rather than taken, because a completion that walks out
+of the function is the failure being looked for and showing it over four lines
+hides exactly that. Passing the same run twice is a supported thing to do: the
+two rows are numbered apart, and identical answers are the check that the probe
+is deterministic.
+
 ## Stopping on structure
 
 Stopping on text needs to know what the model will say. The two ways a small

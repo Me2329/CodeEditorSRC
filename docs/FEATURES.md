@@ -878,6 +878,22 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 564 | A symbol whose container is not in the file sits at the top | |
 | 565 | An older daemon that reports no containers still produces a flat outline | the field is optional |
 
+## Asking a checkpoint the same questions every time
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 566 | `probe` command | six carets, answered the same way every time |
+| 567 | Two checkpoints side by side at every caret | `--compare` |
+| 568 | Temperature zero and a fixed seed by default | a difference between rows is a difference between models |
+| 569 | Every case starts from the same sampler state | not from wherever the last one left it |
+| 570 | Cases can come from a file | `{name, prefix, suffix, line_comment}` |
+| 571 | A case with no prefix is refused, by number | so the file can be fixed |
+| 572 | Line breaks are printed, not taken | a completion leaving the block is the failure being looked for |
+| 573 | Answers count empties and structural cuts | the two numbers that say whether a model is usable at a caret |
+| 574 | The same run given twice is numbered apart | identical answers are the determinism check |
+| 575 | Answers written as JSON | `--json`, for a comparison worth keeping |
+| 576 | `make model-probe`, with `COMPARE=` | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

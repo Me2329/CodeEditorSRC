@@ -215,6 +215,12 @@ model-evaluate: ## Measure held-out perplexity and throughput
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model evaluate \
 		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE)
 
+.PHONY: model-probe
+model-probe: ## Ask the checkpoint a fixed set of caret questions (COMPARE=runs/other)
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model probe \
+		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE) \
+		$(if $(COMPARE),--compare $(COMPARE))
+
 .PHONY: model-average
 model-average: ## Average the best and the latest checkpoint of a run
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model average \
