@@ -977,12 +977,13 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 626 | A workspace sent for symbols or completions is bounded like one that would be run | the daemon indexes every file in it |
+| 626 | A workspace sent for symbols or completions is bounded by file count | but higher than one that would be run: nothing here is executed |
 | 627 | And by total source bytes, not only file count | |
 | 628 | An empty workspace is still a fair question | unlike an execution request, which would have nothing to run |
-| 629 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
-| 630 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
-| 631 | A completion prefix is bounded as the word it is | not as a document |
+| 629 | A few hundred files, as dropping a folder in produces, is answered rather than refused | the limit is the size of an index, not of a sandbox |
+| 630 | A caret's prefix and suffix are bounded | tokenizing a request must not become the expensive part of answering it |
+| 631 | Far above what the editor sends | two thousand characters of prefix, one of suffix |
+| 632 | A completion prefix is bounded as the word it is | not as a document |
 
 ## Not implemented
 

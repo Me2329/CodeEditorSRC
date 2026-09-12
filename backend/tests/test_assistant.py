@@ -284,11 +284,24 @@ async def test_agent_run_without_a_credential_fails_honestly(daemon) -> None:
 # ------------------------------------------------------- what a workspace may be
 
 
-def test_a_workspace_is_bounded_like_one_that_would_be_run(client) -> None:
-    """It is sent to the daemon, which indexes every file in it."""
+def test_a_workspace_may_hold_more_files_than_one_that_would_be_run(client) -> None:
+    """Nothing here is run, and dropping a folder in is an ordinary thing to do.
+
+    The execution limit is the size of a sandbox. This one is the size of an
+    index, so two hundred small files is a question worth answering rather than
+    one worth refusing.
+    """
     response = client.post(
         "/api/v1/assistant/symbols",
         json={"workspace": {"files": [{"name": f"f{i}.py", "content": ""} for i in range(200)]}},
+    )
+    assert response.status_code != 422
+
+
+def test_a_workspace_of_absurdly_many_files_is_still_refused(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={"workspace": {"files": [{"name": f"f{i}.py", "content": ""} for i in range(600)]}},
     )
     assert response.status_code == 422
 

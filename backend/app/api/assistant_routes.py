@@ -28,14 +28,17 @@ MAX_HISTORY_TURNS = 40
 MAX_CARET_CHARS = 200_000
 # A completion prefix is the word being typed, not a document.
 MAX_COMPLETION_PREFIX = 4_096
+# Deliberately not the execution path's file limit, which is the size of a
+# sandbox. Nothing here is run: the daemon reads the files and indexes them, so
+# what matters is the total bytes below, and a workspace of a few hundred small
+# files is an ordinary thing to have open after dropping a folder in.
+MAX_WORKSPACE_FILES = 512
 
 
 class WorkspaceContext(BaseModel):
     language: str = ""
-    # Bounded like an execution request's: this workspace is sent to the
-    # assistant daemon, which indexes every file in it.
     files: list[SourceFile] = Field(
-        default_factory=list, max_length=settings.max_files
+        default_factory=list, max_length=MAX_WORKSPACE_FILES
     )
     active_file: str = ""
     line: int = Field(default=0, ge=0)
@@ -45,7 +48,7 @@ class WorkspaceContext(BaseModel):
     @field_validator("files")
     @classmethod
     def _check_total_size(cls, value: list[SourceFile]) -> list[SourceFile]:
-        """The same ceiling the execution path uses, for the same reason.
+        """The same byte ceiling the execution path uses, for the same reason.
 
         Unlike an execution request this one may be empty: asking for the
         symbols of an empty workspace is a fair question with a short answer.

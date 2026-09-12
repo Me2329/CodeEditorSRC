@@ -265,7 +265,7 @@ make test   # every suite
 
 Every suite, run together: 34 sandbox conformance checks with 17 skipped for
 toolchains this machine does not have, 16 supervisor tests, 32 analyzer checks,
-107 gateway tests, 67 assistant tests, 537 model tests and 532 frontend tests.
+108 gateway tests, 67 assistant tests, 537 model tests and 532 frontend tests.
 
 | Suite | Covers |
 | --- | --- |
