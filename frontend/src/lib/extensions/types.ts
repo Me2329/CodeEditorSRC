@@ -127,6 +127,29 @@ export interface TextActionContribution {
   transform(text: string): string;
 }
 
+/**
+ * Something to say about the word under the pointer.
+ *
+ * Given the word and the line it sits on, because a word alone is often not
+ * enough to know what it is: `class` in a comment is prose, and a hover that
+ * fires there is noise.
+ *
+ * Returning null is the common case and costs nothing.
+ */
+export interface HoverContribution {
+  id: string;
+  /** A language id, or `*` for every language. */
+  language: string;
+  hover(word: string, line: string): HoverText | null;
+}
+
+export interface HoverText {
+  /** A short title, shown in bold. */
+  title: string;
+  /** One or two sentences. Markdown, rendered by the editor. */
+  body: string;
+}
+
 export interface ThemeContribution {
   id: string;
   label: string;
@@ -143,6 +166,7 @@ export interface ExtensionContributions {
   statusBar?: readonly StatusBarContribution[];
   textActions?: readonly TextActionContribution[];
   themes?: readonly ThemeContribution[];
+  hovers?: readonly HoverContribution[];
 }
 
 // ------------------------------------------------------------------- runtime

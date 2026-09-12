@@ -28,6 +28,8 @@ import type {
   ExtensionState,
   ExtensionStorage,
   FormatterContribution,
+  HoverContribution,
+  HoverText,
   LanguageConfiguration,
   LinterContribution,
   SnippetContribution,
@@ -55,6 +57,7 @@ export class ExtensionHost {
   private languages: Owned<LanguageConfiguration>[] = [];
   private linters: Owned<LinterContribution>[] = [];
   private formatters: Owned<FormatterContribution>[] = [];
+  private hovers: Owned<HoverContribution>[] = [];
   private statusBar: Owned<StatusBarContribution>[] = [];
   private textActions: Owned<TextActionContribution>[] = [];
   private themes: Owned<ThemeContribution>[] = [];
@@ -244,6 +247,7 @@ export class ExtensionHost {
     this.statusBar.push(...own(contributes.statusBar));
     this.textActions.push(...own(contributes.textActions));
     this.themes.push(...own(contributes.themes));
+    this.hovers.push(...own(contributes.hovers));
   }
 
   private removeContributions(id: string): void {
@@ -256,6 +260,7 @@ export class ExtensionHost {
     this.statusBar = without(this.statusBar);
     this.textActions = without(this.textActions);
     this.themes = without(this.themes);
+    this.hovers = without(this.hovers);
   }
 
   // ------------------------------------------------------------------ access
@@ -307,6 +312,28 @@ export class ExtensionHost {
         found.push(...entry.value.lint(file));
       } catch (error) {
         console.error(`linter ${entry.value.id} threw on ${file.name}`, error);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * What any extension has to say about the word under the pointer.
+   *
+   * Every contribution for the language is asked, and all their answers are
+   * returned: two extensions may each know something different about `yield`,
+   * and picking one of them arbitrarily would hide the other. A hover that
+   * throws is skipped, for the same reason a linter that throws is.
+   */
+  hover(word: string, line: string, language: string): HoverText[] {
+    const found: HoverText[] = [];
+    for (const entry of this.hovers) {
+      if (entry.value.language !== language && entry.value.language !== '*') continue;
+      try {
+        const text = entry.value.hover(word, line);
+        if (text) found.push(text);
+      } catch (error) {
+        console.error(`hover ${entry.value.id} threw on ${word}`, error);
       }
     }
     return found;

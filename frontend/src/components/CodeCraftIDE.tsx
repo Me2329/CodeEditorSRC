@@ -1238,22 +1238,36 @@ export function CodeCraftIDE() {
         const name = wordAt(model.getValue(), model.getOffsetAt(position));
         if (!name) return null;
 
-        const found = declarationsOf(symbolsRef.current, name, activeFileNameRef.current);
-        if (found.length === 0) return null;
+        const contents: { value: string }[] = [];
 
-        const [first, ...rest] = found;
-        if (!first) return null;
-        const lines = [
-          `**${first.kind}** \`${first.name}\``,
-          '```',
-          first.detail || first.name,
-          '```',
-          `${first.file}:${first.line}`,
-        ];
-        if (rest.length > 0) {
-          lines.push(`and ${rest.length} more ${rest.length === 1 ? 'declaration' : 'declarations'} of this name`);
+        // What extensions know about the word: keywords, and whatever else
+        // anyone contributes. Asked first, because a word that is part of the
+        // language is never also a declaration in the index.
+        for (const text of extensionsRef.current?.hover(
+          name,
+          model.getLineContent(position.lineNumber),
+          model.getLanguageId(),
+        ) ?? []) {
+          contents.push({ value: `**${text.title}**\n\n${text.body}` });
         }
-        return { contents: [{ value: lines.join('\n') }] };
+
+        const found = declarationsOf(symbolsRef.current, name, activeFileNameRef.current);
+        const [first, ...rest] = found;
+        if (first) {
+          const lines = [
+            `**${first.kind}** \`${first.name}\``,
+            '```',
+            first.detail || first.name,
+            '```',
+            `${first.file}:${first.line}`,
+          ];
+          if (rest.length > 0) {
+            lines.push(`and ${rest.length} more ${rest.length === 1 ? 'declaration' : 'declarations'} of this name`);
+          }
+          contents.push({ value: lines.join('\n') });
+        }
+
+        return contents.length > 0 ? { contents } : null;
       },
     });
 

@@ -997,6 +997,19 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 637 | Indentation inside a string or block comment is skipped | a docstring holding a tab-indented example is not a mistake |
 | 638 | Reported once, at the first line that disagrees | one decision, not one per line |
 
+## What a keyword means
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 639 | A hover contribution point | given the word and the line it sits on |
+| 640 | Every extension registered for the language is asked | two of them may each know something different about `yield` |
+| 641 | A hover that throws is skipped | as a linter that throws is |
+| 642 | A builtin that explains keywords in Python, JavaScript, TypeScript and Rust | the words whose meaning is not guessable from their spelling |
+| 643 | One sentence each | a hover is read in the two seconds before the pointer moves |
+| 644 | A keyword in a comment or a string is left alone | there it is prose |
+| 645 | Extension hovers and the index's own appear together | a keyword is never also a declaration, so they rarely collide |
+| 646 | Turning the extension off removes the hovers | as with every other contribution |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

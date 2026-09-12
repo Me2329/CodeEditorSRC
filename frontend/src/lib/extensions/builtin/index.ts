@@ -10,6 +10,7 @@
 import type { Extension } from '../types';
 
 import { formatPack } from './format';
+import { keywordHelp } from './keywords';
 import { lintPack } from './lint';
 import { snippetPack } from './snippets';
 import { statusPack } from './status';
@@ -23,6 +24,7 @@ export const BUILTIN_EXTENSIONS: readonly Extension[] = [
   formatPack,
   statusPack,
   themePack,
+  keywordHelp,
 ];
 
-export { formatPack, lintPack, snippetPack, statusPack, textToolkit, themePack };
+export { formatPack, keywordHelp, lintPack, snippetPack, statusPack, textToolkit, themePack };
