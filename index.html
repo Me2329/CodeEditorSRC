@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>4uTools — Device & Security Toolbox</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">4u</div>
+        <div class="brand-text">
+          <span class="brand-name">4uTools</span>
+          <span class="brand-sub">Device &amp; Security Toolbox</span>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav"><!-- filled by app.js --></nav>
+
+      <div class="sidebar-footer">
+        <div class="badge-local" title="Everything runs locally in your browser">
+          <span class="dot"></span> Local &amp; offline-first
+        </div>
+        <span class="version">v1.0.0</span>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="view-title">Dashboard</h1>
+          <p id="view-desc" class="muted">Overview of your device and environment.</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="clock" class="clock"></span>
+        </div>
+      </header>
+
+      <section class="content" id="content"><!-- rendered per view --></section>
+    </main>
+  </div>
+
+  <!-- Ethics / usage banner -->
+  <div id="notice" class="notice" hidden>
+    <div class="notice-inner">
+      <strong>Use responsibly.</strong>
+      4uTools runs entirely on your machine. The Bruteforce Lab is an
+      educational demo that only targets a secret <em>you</em> set here —
+      it is not a tool for attacking devices, accounts, or networks you
+      don't own. Bluetooth features act only on devices you explicitly select.
+      <button class="btn btn-ghost" id="notice-dismiss">Got it</button>
+    </div>
+  </div>
+
+  <!-- Core -->
+  <script src="js/util.js"></script>
+  <!-- Tool modules register themselves onto window.FourU.tools -->
+  <script src="js/tools/dashboard.js"></script>
+  <script src="js/tools/bluetooth.js"></script>
+  <script src="js/tools/bruteforce.js"></script>
+  <script src="js/tools/hashing.js"></script>
+  <script src="js/tools/encoding.js"></script>
+  <script src="js/tools/password.js"></script>
+  <script src="js/tools/network.js"></script>
+  <!-- Router / shell (loads last) -->
+  <script src="js/app.js"></script>
+</body>
+</html>
