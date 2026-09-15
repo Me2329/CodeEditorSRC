@@ -116,6 +116,11 @@ class ModelConfig:
         return {
             "weights": weights,
             "inference": weights,
+            # Half of fp32, which is what a card with the model already trained
+            # actually has to hold. Reported separately because "can I train
+            # this" and "can I run this" are different questions with answers
+            # eight times apart, and the same table is read for both.
+            "inference_bf16": weights // 2,
             "training": weights * 4,
         }
 
@@ -181,13 +186,20 @@ SIZES: dict[str, ModelConfig] = {
         vocab_size=32768, d_model=2048, n_layers=20, n_heads=16, n_kv_heads=8,
         d_ff=5632, max_seq_len=4096,
     ),
+    # 2.3 billion. Runs on one 16GB card in bfloat16 with room to spare, and
+    # in int8 on 8GB. Training it is a different question with a different
+    # answer: 37GB of optimiser state before activations, which is not one card.
+    "xxl": ModelConfig(
+        vocab_size=32768, d_model=2560, n_layers=32, n_heads=20, n_kv_heads=4,
+        d_ff=6912, max_seq_len=4096,
+    ),
     # 4.3 billion: the shape a model of this class usually takes, with head
     # dimension 128 and seven query heads per key/value head. The arithmetic
-    # that matters before choosing it is in the README under "What a four
-    # billion parameter run actually costs": the weights alone are 17GB in
-    # fp32, AdamW triples that, and a corpus proportionate to the size is about
-    # 86 billion tokens. Nothing about this size is a laptop job.
-    "xxl": ModelConfig(
+    # that matters before choosing it is in the README under "What the largest
+    # sizes actually cost": the weights alone are 17GB in fp32, AdamW
+    # quadruples that, and a corpus proportionate to the size is about 86
+    # billion tokens. Nothing about this size is a laptop job.
+    "max": ModelConfig(
         vocab_size=32768, d_model=3584, n_layers=32, n_heads=28, n_kv_heads=4,
         d_ff=9472, max_seq_len=4096,
     ),

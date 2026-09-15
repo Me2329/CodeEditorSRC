@@ -50,33 +50,41 @@ def command_sizes(args: argparse.Namespace) -> int:
 
     header = (
         f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
-        f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train mem':>11}"
-        + ("  fits" if memory_total_bytes(device) is not None else "")
+        f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train mem':>11}{'run bf16':>10}"
+        + ("  trains here" if memory_total_bytes(device) is not None else "")
     )
     print(header)
     print("-" * len(header))
 
     for name, config in SIZES.items():
-        needed = config.memory_estimate_bytes()["training"]
+        estimate = config.memory_estimate_bytes()
+        needed = estimate["training"]
         # Activations, the batch and allocator fragmentation all sit on top of
         # the four fixed copies, and roughly a third again covers them.
-        fits = "" if budget is None else ("  yes" if needed * 1.35 < budget else "   no")
+        fits = "" if budget is None else ("          yes" if needed * 1.35 < budget else "           no")
         print(
             f"{name:8}{humanise(config.parameter_count()):>12}{config.d_model:>9}"
             f"{config.n_layers:>8}{config.n_heads:>7}{config.n_kv_heads:>5}"
-            f"{config.d_ff:>7}{config.max_seq_len:>9}{needed / 1e9:>10.1f}G{fits}"
+            f"{config.d_ff:>7}{config.max_seq_len:>9}{needed / 1e9:>10.1f}G"
+            f"{estimate['inference_bf16'] / 1e9:>9.1f}G{fits}"
         )
 
     print(
         "\nTraining memory is weights, gradients and two Adam moments at 4 bytes\n"
         "each, before activations. Mixed precision narrows the matmuls, not those\n"
-        "four copies, so it buys speed rather than room."
+        "four copies, so it buys speed rather than room.\n"
+        "\n"
+        "Running a model that is already trained needs one copy at 2 bytes, which\n"
+        "is eight times less: the two columns answer different questions and a\n"
+        "size can easily pass one and fail the other."
     )
     if budget is not None:
         print(
             "The last column allows about a third again for activations and the\n"
             "batch. A size marked 'no' still trains with a smaller batch, gradient\n"
-            "accumulation to make the effective batch back up, and a shorter block."
+            "accumulation to make the effective batch back up, and a shorter block\n"
+            "— but not by four times, so a size needing several times this card's\n"
+            "memory needs more than one card rather than better flags."
         )
     return 0
 

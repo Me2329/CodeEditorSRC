@@ -31,26 +31,38 @@ def test_xl_really_is_about_a_billion() -> None:
     assert 0.95e9 < count < 1.15e9
 
 
-def test_xxl_lands_where_it_was_asked_to() -> None:
-    """Between three and five billion, which is what the size is for."""
-    count = get_size("xxl").parameter_count()
-    assert 3e9 < count < 5e9
-    assert humanise(count) == "4.32B"
+def test_the_two_largest_sizes_land_where_they_were_asked_to() -> None:
+    """One in the two-to-three billion band, one in the three-to-five."""
+    assert 2e9 < get_size("xxl").parameter_count() < 3e9
+    assert 3e9 < get_size("max").parameter_count() < 5e9
+    assert humanise(get_size("xxl").parameter_count()) == "2.29B"
+    assert humanise(get_size("max").parameter_count()) == "4.32B"
 
 
-def test_xxl_is_shaped_the_way_a_model_this_size_is() -> None:
-    config = get_size("xxl")
-    # Head dimension 128, which is what attention kernels are written for.
-    assert config.head_dim == 128
-    # Grouped query attention, or the cache at this context would dominate.
-    assert config.n_kv_heads < config.n_heads
-    assert config.n_heads % config.n_kv_heads == 0
+def test_the_large_sizes_are_shaped_the_way_models_that_size_are() -> None:
+    for name in ("xxl", "max"):
+        config = get_size(name)
+        # Head dimension 128, which is what attention kernels are written for.
+        assert config.head_dim == 128, name
+        # Grouped query attention, or the cache at this context would dominate.
+        assert config.n_kv_heads < config.n_heads, name
+        assert config.n_heads % config.n_kv_heads == 0, name
 
 
-def test_the_largest_size_needs_more_memory_than_a_desktop_has() -> None:
+def test_the_largest_sizes_need_more_memory_to_train_than_one_card_has() -> None:
     """Stated in a test because the table says it and someone will not read it."""
-    needed = get_size("xxl").memory_estimate_bytes()["training"]
-    assert needed > 64e9
+    for name, floor in (("xxl", 32e9), ("max", 64e9)):
+        assert get_size(name).memory_estimate_bytes()["training"] > floor, name
+
+
+def test_running_a_model_costs_an_eighth_of_training_it() -> None:
+    """The two questions a size table is read for, and they are not the same."""
+    estimate = get_size("xxl").memory_estimate_bytes()
+
+    assert estimate["inference_bf16"] * 8 == estimate["training"]
+    # 2.3 billion parameters in bfloat16 is under five gigabytes, which is why
+    # a card that cannot train this size can still run it.
+    assert estimate["inference_bf16"] < 5e9
 
 
 def test_untying_adds_one_embedding_matrix() -> None:

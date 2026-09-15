@@ -741,15 +741,17 @@ Everything around it — the caches, the superseding, the stop sequences, the
 best-of selection — is measured and works. The model is the part that needs a
 bigger corpus and a longer run, which the pipeline is built to give it.
 
-## What a four billion parameter run actually costs
+## What the largest sizes actually cost
 
-`xxl` is 4.32 billion parameters: 3584 wide, 32 layers, head dimension 128, and
-seven query heads per key/value head, which is the shape a model of this class
-usually takes. It instantiates anywhere with the memory, and the tests assert
-the count against what PyTorch allocates, as they do for every other size.
+Two sizes sit above `xl`. `xxl` is 2.29 billion parameters, 2560 wide over 32
+layers; `max` is 4.32 billion, 3584 wide over 32 layers. Both have head
+dimension 128 and grouped query attention, which is the shape a model of this
+class usually takes, and the tests assert both counts against what PyTorch
+allocates, as they do for every other size.
 
-Choosing it is a decision about a machine, not about a config file, so here is
-the arithmetic before anyone spends a week on it:
+Choosing one is a decision about a machine, not about a config file. Here is
+the arithmetic for `max` before anyone spends a week on it, with `xxl` at
+roughly half of each figure:
 
 | | |
 | --- | --- |
@@ -763,7 +765,16 @@ the arithmetic before anyone spends a week on it:
 Two things follow. The first is that 69GB of training state does not fit on a
 consumer GPU and does not fit in most desktops' RAM either: this size needs
 either sharding across several cards or an optimiser that keeps its state
-somewhere other than device memory. The second is that a disk of about 330GB is
+somewhere other than device memory. On one 16GB card the largest size that
+trains is `large`, at 673M parameters and about 14.5GB with activations — and
+that is with the four fp32 copies AdamW keeps, which mixed precision does not
+shrink.
+
+Running a model is the other question, and it has a different answer. One copy
+of the weights in bfloat16 is 4.6GB for `xxl` and 8.6GB for `max`, so a card
+that cannot train either can serve both comfortably, and `--quantize` halves
+that again. `make model-sizes` prints both columns, and on a machine with a
+card it marks which sizes train there. The second is that a disk of about 330GB is
 almost exactly the right size for the job — 173GB of tokens and two checkpoints
 at 52GB each is 277GB — and that is not a coincidence so much as a warning: the
 token stream and the checkpoints are the whole budget, and `prepare` deletes

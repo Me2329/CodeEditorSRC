@@ -1093,7 +1093,13 @@ export function CodeCraftIDE() {
           // that is not there is remembered, so the next keystroke does not
           // spend another round trip discovering it.
           if (error instanceof ApiError && error.status === 503) {
-            setModelStatus({ available: false });
+            // Keeping the same object when the answer has not changed. This
+            // fires once per keystroke while no model is running, and a new
+            // object each time would re-render the whole editor for news it
+            // already had.
+            setModelStatus((current) =>
+              current?.available === false ? current : { available: false },
+            );
           }
           return { items: [] };
         }
@@ -1525,10 +1531,21 @@ export function CodeCraftIDE() {
       api
         .modelStatus()
         .then((status) => {
-          if (!cancelled) setModelStatus(status);
+          if (cancelled) return;
+          // A probe that finds no change is not news either: this one repeats
+          // every minute for as long as no model is running.
+          setModelStatus((current) =>
+            current?.available === status.available && current.model === status.model
+              ? current
+              : status,
+          );
         })
         .catch(() => {
-          if (!cancelled) setModelStatus({ available: false });
+          if (!cancelled) {
+            setModelStatus((current) =>
+              current?.available === false ? current : { available: false },
+            );
+          }
         });
 
     void probe();

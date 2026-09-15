@@ -69,7 +69,7 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 668 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 679 with what each one does,
 and states plainly what is *not* built.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
@@ -148,7 +148,7 @@ this repository, and a checkpoint exists only because this code trained it.
 No pretrained weights are downloaded.
 
 ```bash
-make model-sizes                       # seven sizes, 1.3M to 4.32B parameters
+make model-sizes                       # eight sizes, 1.3M to 4.32B parameters
 make model-prepare                     # corpus and tokenizer from this repo
 make model-train MODEL_SIZE=micro      # a real checkpoint, minutes on a CPU
 make model-sample PROMPT="def parse("
@@ -270,7 +270,7 @@ make test   # every suite
 
 Every suite, run together: 34 sandbox conformance checks with 17 skipped for
 toolchains this machine does not have, 16 supervisor tests, 40 analyzer checks,
-108 gateway tests, 71 assistant tests, 543 model tests and 556 frontend tests.
+108 gateway tests, 71 assistant tests, 543 model tests and 561 frontend tests.
 
 | Suite | Covers |
 | --- | --- |
