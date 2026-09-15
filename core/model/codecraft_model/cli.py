@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from .config import SIZES, get_size, humanise
-from .device import describe_device, memory_total_bytes, resolve_device
+from .device import available_memory_bytes, describe_device, memory_total_bytes, resolve_device
 from .corpus import (
     MEASURED_CHARACTERS_PER_TOKEN,
     Repository,
@@ -45,13 +45,13 @@ from .train import TrainConfig, load_checkpoint, train
 def command_sizes(args: argparse.Namespace) -> int:
     """Print every named size with its true parameter count."""
     device = resolve_device(getattr(args, "device", None))
-    budget = memory_total_bytes(device)
+    budget = available_memory_bytes(device)
     print(f"device: {describe_device(device)}, optimiser: {args.optimizer}\n")
 
     header = (
         f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
         f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train mem':>11}{'run bf16':>10}"
-        + ("  trains here" if memory_total_bytes(device) is not None else "")
+        + ("  trains here" if budget is not None else "")
     )
     print(header)
     print("-" * len(header))
@@ -250,6 +250,26 @@ def _tokenizer_sample(
     return "\n".join(pieces)
 
 
+def largest_that_fits(available: int, vocab_size: int) -> tuple[str, str] | None:
+    """The biggest named size this machine can train, and what it takes.
+
+    Reported when the chosen one does not fit, because "no" is a worse answer
+    than "no, and here is the one that would". Both optimisers are tried at
+    every size, since a size that fits only with Adafactor still fits.
+    """
+    best: tuple[str, str] | None = None
+    for name, preset in SIZES.items():
+        sized = preset.with_vocab(vocab_size)
+        # AdamW first: when both fit there is no reason to recommend the one
+        # that gives up momentum.
+        for optimizer in ("adamw", "adafactor"):
+            needed = sized.memory_estimate_bytes(optimizer=optimizer)["training"] * 1.35
+            if needed < available:
+                best = (name, optimizer)
+                break
+    return best
+
+
 def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     """Say so when the run will not fit, and what to do about it.
 
@@ -258,14 +278,12 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     optimiser someone has offloaded, so refusing on it would block runs that
     would have worked.
     """
-    from .device import host_memory_bytes, memory_total_bytes
-
     chosen = getattr(args, "optimizer", "adamw")
     needed = config.memory_estimate_bytes(optimizer=chosen)["training"]
     # Activations, the batch and allocator fragmentation sit on top of the fixed
     # copies, and roughly a third again covers them.
     needed = int(needed * 1.35)
-    available = memory_total_bytes(device) if device.type == "cuda" else host_memory_bytes()
+    available = available_memory_bytes(device)
     if available is None or needed <= available:
         return
 
@@ -285,6 +303,14 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
         )
     if device.type == "cuda" and args.precision in ("auto", "fp32"):
         advice.append("--precision bf16 halves the activations, though not the four fixed copies")
+
+    fits = largest_that_fits(available, config.vocab_size)
+    if fits is not None:
+        name, optimizer = fits
+        with_flag = "" if optimizer == "adamw" else f" with --optimizer {optimizer}"
+        advice.append(f"the largest size that fits here is '{name}'{with_flag}")
+    else:
+        advice.append("no named size fits here; this is a machine for running a model, not training one")
 
     print(
         f"  warning: this configuration needs about {needed / 1e9:.1f}GB and "

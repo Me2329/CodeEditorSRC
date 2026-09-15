@@ -1080,6 +1080,10 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 696 | A failed checkpoint write does not end the run | a full disk at the last save would otherwise lose the whole thing |
 | 697 | The partial file is removed on failure | gigabytes, on the disk that just proved it had no room |
 | 698 | The count of failed writes is in the summary | a run nobody watched is the one where this matters |
+| 699 | A size that does not fit names the largest one that does | "no" is a worse answer than "no, and here is the one that would" |
+| 700 | And says which optimiser makes it fit | a size that fits only with adafactor still fits |
+| 701 | A machine too small for any size is told that plainly | it is a machine for running a model, not training one |
+| 702 | The fits column works on a CPU as well as a card | the question is the same and only the number differs |
 
 ## Not implemented
 

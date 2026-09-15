@@ -182,6 +182,17 @@ def host_memory_bytes() -> int | None:
         return None
 
 
+def available_memory_bytes(device: torch.device) -> int | None:
+    """What bounds a run on this device: the card's memory, or the machine's.
+
+    The two are asked about in different ways and answer the same question, so
+    the choice between them lives here rather than at each call site.
+    """
+    if device.type == "cuda":
+        return memory_total_bytes(device)
+    return host_memory_bytes()
+
+
 def peak_memory_bytes(device: torch.device) -> int | None:
     """High-water mark since the counter was last reset."""
     if device.type == "cuda" and torch.cuda.is_available():
