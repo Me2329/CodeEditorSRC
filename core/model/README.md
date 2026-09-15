@@ -775,6 +775,13 @@ error: what is left is the weights and their gradients, and nothing else. That
 is the difference between a size that fits on one 16GB card with room for
 activations and a size that does not fit at all.
 
+Measured rather than only computed. Two training steps of `xl` — 1.01 billion
+parameters, the full 32,768-token vocabulary, gradient checkpointing on, batch
+one — peaked at **9.4GB** of resident memory, against the 8.1GB of weights and
+gradients the table predicts. That was in float32 on a CPU; on a card with
+bfloat16 autocast the four-byte copies are the same and the activations are
+smaller, so 9.4GB is a ceiling rather than a floor.
+
 It gives up two things, and both are deliberate. The first moment is off, which
 is what makes the saving complete — momentum cannot be factored, so keeping it
 would put a third full copy back — and in its place comes update clipping,
@@ -786,6 +793,16 @@ that does not.
 A checkpoint records which optimiser wrote it. Resuming with the other one says
 so and starts the state empty, because two optimisers keep different things
 under the same key and loading one into the other fails somewhere unhelpful.
+
+Fitting is the first question and finishing is the second. Training costs about
+`6 * parameters * tokens` floating-point operations, so a billion parameters
+over a corpus proportionate to the size — twenty billion tokens — is 1.2e20
+operations. Divide by what a card actually sustains, which for a consumer GPU
+in bfloat16 is a third or so of its headline number, and the answer is weeks of
+continuous running rather than days. Gradient checkpointing adds another third
+to that, and buys the memory that makes it possible at all. A smaller corpus is
+the honest lever: the same model over five billion tokens is a week, and worse
+in a way that is measurable rather than mysterious.
 
 ## What the largest sizes actually cost
 

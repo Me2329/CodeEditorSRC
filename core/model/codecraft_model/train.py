@@ -199,7 +199,13 @@ def save_checkpoint(
     val_loss: float,
     train_config: TrainConfig,
 ) -> None:
-    """Write weights plus everything needed to reconstruct or resume."""
+    """Write weights plus everything needed to reconstruct or resume.
+
+    Through a temporary file and a rename, which is atomic on every filesystem
+    this runs on. A checkpoint written in place is a checkpoint that can be
+    half-written: the disk filling during `torch.save` leaves a file that is the
+    right size and unreadable, and it has replaced the last good one.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     model = uncompiled(model)
     payload = {
@@ -213,7 +219,15 @@ def save_checkpoint(
     }
     if optimizer is not None:
         payload["optimizer"] = optimizer.state_dict()
-    torch.save(payload, path)
+
+    staged = path.with_name(path.name + ".partial")
+    try:
+        torch.save(payload, staged)
+        staged.replace(path)
+    finally:
+        # A failed write leaves gigabytes behind, on the disk that just proved
+        # it had no room.
+        staged.unlink(missing_ok=True)
 
 
 def load_checkpoint(
@@ -269,6 +283,7 @@ def train(
 
     optimizer = build_optimizer(model, config)
 
+    saves_failed = 0
     start_step = 0
     if resume_from is not None and resume_from.exists():
         payload = torch.load(resume_from, map_location="cpu", weights_only=False)
@@ -392,18 +407,28 @@ def train(
                     flush=True,
                 )
 
-            if val_loss < best_val:
+            improved = val_loss < best_val
+            if improved:
                 best_val = val_loss
-                save_checkpoint(
-                    output_dir / "model.pt", model, optimizer, step + 1, val_loss, config
-                )
 
-            # A separate file that always holds the latest state, so a run that
-            # is stopped and resumed continues from where it was rather than
-            # from whichever step happened to score best.
-            save_checkpoint(
-                output_dir / "latest.pt", model, optimizer, step + 1, val_loss, config
-            )
+            # A failed write must not end the run. A checkpoint at a billion
+            # parameters is four gigabytes, the disk it goes to is shared with
+            # whatever else the machine does, and losing three weeks of training
+            # because the last save found no room would be absurd. The rename in
+            # `save_checkpoint` means the previous checkpoint is still intact,
+            # so the honest thing is to say so and keep going: the next eval is
+            # another chance, and the disk may have room by then.
+            for name, wanted in (("model.pt", improved), ("latest.pt", True)):
+                if not wanted:
+                    continue
+                try:
+                    save_checkpoint(
+                        output_dir / name, model, optimizer, step + 1, val_loss, config
+                    )
+                except (OSError, RuntimeError) as error:
+                    saves_failed += 1
+                    if log:
+                        print(f"  warning: could not write {name}: {error}", flush=True)
 
         if out_of_time:
             if log:
@@ -419,6 +444,10 @@ def train(
         "started_at_step": start_step,
         "steps_run": last_step + 1 - start_step,
         "stopped_early": stopped_early,
+        # Zero unless a disk refused a checkpoint. Recorded rather than only
+        # printed, because a run nobody watched is exactly the one where this
+        # matters.
+        "checkpoint_writes_failed": saves_failed,
         "device": describe_device(device),
         "precision": "fp32" if amp_dtype is None else str(amp_dtype).removeprefix("torch."),
         "peak_memory_gb": round(peak / 1e9, 2) if peak else None,

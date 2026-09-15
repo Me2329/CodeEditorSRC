@@ -457,3 +457,47 @@ def test_resuming_with_a_different_optimiser_starts_its_state_fresh(
 def test_an_unknown_optimiser_is_refused() -> None:
     with pytest.raises(ValueError, match="adafactor"):
         build_optimizer(CodeCraftLM(CONFIG), TrainConfig(optimizer="lion"))
+
+
+def test_a_checkpoint_is_written_through_a_rename(learnable_dataset, monkeypatch) -> None:
+    """A half-written file must never replace a good one."""
+    _, _, directory = learnable_dataset
+    model = CodeCraftLM(CONFIG)
+    save_checkpoint(directory / "model.pt", model, None, 1, 1.0, TrainConfig())
+    good = (directory / "model.pt").read_bytes()
+
+    real_save = torch.save
+
+    def fail_after_writing_something(payload, path, *args, **kwargs):
+        real_save(payload, path, *args, **kwargs)
+        raise RuntimeError("No space left on device")
+
+    monkeypatch.setattr(torch, "save", fail_after_writing_something)
+    with pytest.raises(RuntimeError):
+        save_checkpoint(directory / "model.pt", model, None, 2, 0.5, TrainConfig())
+
+    assert (directory / "model.pt").read_bytes() == good
+    assert not (directory / "model.pt.partial").exists()
+
+
+def test_a_failed_checkpoint_does_not_end_the_run(
+    learnable_dataset, capsys, monkeypatch
+) -> None:
+    """Losing three weeks of training to a full disk would be absurd."""
+    train_set, val_set, directory = learnable_dataset
+
+    def no_room(*_args, **_kwargs):
+        raise RuntimeError("No space left on device")
+
+    monkeypatch.setattr(torch, "save", no_room)
+
+    summary = train(
+        CodeCraftLM(CONFIG), train_set, val_set,
+        TrainConfig(steps=6, batch_size=4, block_size=16, eval_every=3, warmup_steps=1),
+        output_dir=directory, log=True,
+    )
+
+    assert summary["steps_run"] == 6
+    # Two evaluations, each trying model.pt and latest.pt.
+    assert summary["checkpoint_writes_failed"] == 4
+    assert "could not write" in capsys.readouterr().out

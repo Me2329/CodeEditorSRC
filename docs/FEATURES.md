@@ -1075,6 +1075,11 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 691 | The memory warning names the lighter optimiser and what it would need | rather than only saying no |
 | 692 | A checkpoint records which optimiser wrote it | |
 | 693 | Resuming with the other one starts its state fresh, and says so | loading one into the other fails somewhere unhelpful |
+| 694 | Measured: a billion parameters peaked at 9.4GB against 8.1GB predicted | two real steps, not arithmetic |
+| 695 | Checkpoints are written through a rename | a half-written file never replaces a good one |
+| 696 | A failed checkpoint write does not end the run | a full disk at the last save would otherwise lose the whole thing |
+| 697 | The partial file is removed on failure | gigabytes, on the disk that just proved it had no room |
+| 698 | The count of failed writes is in the summary | a run nobody watched is the one where this matters |
 
 ## Not implemented
 
