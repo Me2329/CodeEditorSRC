@@ -188,7 +188,7 @@ nothing here calls a hosted model.
 | 129 | Tied input and output embeddings | counted once by the optimiser and the parameter report |
 | 130 | Depth-scaled residual initialisation | the stream's variance does not grow with layers |
 | 131 | Key/value cache | one step per token instead of re-reading the prefix |
-| 132 | Six named sizes, 1.3M to 1.01B | counts derived from the architecture, asserted against real modules |
+| 132 | Seven named sizes, 1.3M to 4.32B | counts derived from the architecture, asserted against real modules |
 | 133 | Byte-level BPE trained on our own corpus | no unknown token, indentation and emoji survive |
 | 134 | Pre-tokeniser proven to cover every character | a test asserts it reconstructs its input |
 | 135 | Corpus builder with file markers | the model learns where one file ends |
@@ -1027,6 +1027,16 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 658 | No polling at all once the answer is yes | it is a fact that rarely changes in that direction |
 | 659 | An answer to an explicit request proves the model is there | whatever the last probe found |
 
+## A size between three and five billion
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 660 | An `xxl` preset at 4.32B parameters | 3584 wide, 32 layers, head dimension 128 |
+| 661 | Grouped query attention, seven query heads per key/value head | the cache at a 4096 context would otherwise dominate |
+| 662 | The count asserted to land between three and five billion | which is what the size was added for |
+| 663 | And asserted to need more memory than a desktop has | the table says so and someone will not read the table |
+| 664 | What it costs, worked out rather than waved at | 69GB of training state, 52GB per checkpoint, 173GB of tokens |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
@@ -1049,7 +1059,7 @@ Stated plainly so the list above can be trusted:
   sandbox around extension code: an extension runs with the page's privileges.
   Treat the contract as the extension point, not as a security boundary.
 - A locally trained model that is useful for real coding help. The pipeline is
-  real and the largest configuration is genuinely a billion parameters, but the
+  real and the largest configuration is genuinely 4.32 billion parameters, but the
   checkpoint that exists is 6.5M parameters trained on twenty million tokens of
   real Python, and what it writes at a caret is well-formed and nearly always
   wrong. That has been measured rather than assumed: `core/model/README.md`

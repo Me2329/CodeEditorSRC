@@ -181,6 +181,16 @@ SIZES: dict[str, ModelConfig] = {
         vocab_size=32768, d_model=2048, n_layers=20, n_heads=16, n_kv_heads=8,
         d_ff=5632, max_seq_len=4096,
     ),
+    # 4.3 billion: the shape a model of this class usually takes, with head
+    # dimension 128 and seven query heads per key/value head. The arithmetic
+    # that matters before choosing it is in the README under "What a four
+    # billion parameter run actually costs": the weights alone are 17GB in
+    # fp32, AdamW triples that, and a corpus proportionate to the size is about
+    # 86 billion tokens. Nothing about this size is a laptop job.
+    "xxl": ModelConfig(
+        vocab_size=32768, d_model=3584, n_layers=32, n_heads=28, n_kv_heads=4,
+        d_ff=9472, max_seq_len=4096,
+    ),
 }
 
 

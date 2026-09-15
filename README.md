@@ -69,7 +69,7 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 659 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 664 with what each one does,
 and states plainly what is *not* built.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
@@ -148,7 +148,7 @@ this repository, and a checkpoint exists only because this code trained it.
 No pretrained weights are downloaded.
 
 ```bash
-make model-sizes                       # six sizes, 1.3M to 1.01B parameters
+make model-sizes                       # seven sizes, 1.3M to 4.32B parameters
 make model-prepare                     # corpus and tokenizer from this repo
 make model-train MODEL_SIZE=micro      # a real checkpoint, minutes on a CPU
 make model-sample PROMPT="def parse("
@@ -164,8 +164,11 @@ only at the end. `MODEL_RELOAD=5` on `serve` picks up a checkpoint training has
 replaced.
 
 The parameter counts are derived from the architecture and asserted in the tests
-against what PyTorch allocates, so `xl` really is 1.01 billion parameters. It
-instantiates anywhere with the memory; training it usefully is a cluster job.
+against what PyTorch allocates, so `xl` really is 1.01 billion parameters and
+`xxl` really is 4.32 billion. Both instantiate anywhere with the memory;
+training either usefully is a cluster job, and `core/model/README.md` does the
+arithmetic for the larger one — 69GB of training state, and a corpus
+proportionate to the size that is 173GB as a token stream.
 
 Training and generation take the GPU automatically when there is one, in
 bfloat16 with TF32, pinned asynchronous transfers and optional `torch.compile`.
@@ -267,7 +270,7 @@ make test   # every suite
 
 Every suite, run together: 34 sandbox conformance checks with 17 skipped for
 toolchains this machine does not have, 16 supervisor tests, 40 analyzer checks,
-108 gateway tests, 71 assistant tests, 538 model tests and 552 frontend tests.
+108 gateway tests, 71 assistant tests, 541 model tests and 556 frontend tests.
 
 | Suite | Covers |
 | --- | --- |

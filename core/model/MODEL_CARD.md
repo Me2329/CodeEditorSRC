@@ -116,7 +116,7 @@ says so plainly rather than pretending otherwise.
 | | |
 | --- | --- |
 | Architecture | decoder-only transformer, RMSNorm, RoPE, GQA, SwiGLU |
-| Sizes | 1.3M to 1.01B parameters |
+| Sizes | 1.3M to 4.32B parameters, none of them trained beyond the table above |
 | Tokenizer | byte-level BPE trained here; 8,196 tokens for `fim2`, 32,768 for the billion-token corpus |
 | Corpus prepared | 1,000,004,906 tokens of public source code |
 | Corpus read by the usable checkpoint | 24,576,000 tokens, from 20,058,256 of Python |

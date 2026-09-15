@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   DEFAULT_BINDINGS,
+  scopeFor,
   type KeyEventLike,
   conflicts,
   describe as describeKeys,
@@ -195,5 +196,41 @@ describe('every default binding points at a real command', () => {
 
     const dead = DEFAULT_BINDINGS.filter((binding) => !registered.has(binding.command));
     expect(dead.map((binding) => binding.command)).toEqual([]);
+  });
+});
+
+describe('the scope a press belongs to', () => {
+  test('a press inside the editor is an editor press', () => {
+    const editor = document.createElement('div');
+    editor.className = 'monaco-editor';
+    const line = document.createElement('span');
+    editor.append(line);
+    document.body.append(editor);
+
+    expect(scopeFor(line)).toBe('editor');
+  });
+
+  test('a press anywhere else is not', () => {
+    const box = document.createElement('input');
+    document.body.append(box);
+
+    expect(scopeFor(box)).toBe('always');
+  });
+
+  test('a press with no element behind it is not', () => {
+    expect(scopeFor(null)).toBe('always');
+    expect(scopeFor(new EventTarget())).toBe('always');
+  });
+
+  test('the editor bindings are reachable through it', () => {
+    // The bug this exists to prevent: resolve defaults to "always", so a
+    // caller that never works out the scope disables every editor binding.
+    const editor = document.createElement('div');
+    editor.className = 'monaco-editor';
+    document.body.append(editor);
+
+    const press = { key: 'F12', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false };
+    expect(resolve(press, DEFAULT_BINDINGS, scopeFor(editor))).toBe('navigate.definition');
+    expect(resolve(press, DEFAULT_BINDINGS)).toBeNull();
   });
 });

@@ -31,6 +31,28 @@ def test_xl_really_is_about_a_billion() -> None:
     assert 0.95e9 < count < 1.15e9
 
 
+def test_xxl_lands_where_it_was_asked_to() -> None:
+    """Between three and five billion, which is what the size is for."""
+    count = get_size("xxl").parameter_count()
+    assert 3e9 < count < 5e9
+    assert humanise(count) == "4.32B"
+
+
+def test_xxl_is_shaped_the_way_a_model_this_size_is() -> None:
+    config = get_size("xxl")
+    # Head dimension 128, which is what attention kernels are written for.
+    assert config.head_dim == 128
+    # Grouped query attention, or the cache at this context would dominate.
+    assert config.n_kv_heads < config.n_heads
+    assert config.n_heads % config.n_kv_heads == 0
+
+
+def test_the_largest_size_needs_more_memory_than_a_desktop_has() -> None:
+    """Stated in a test because the table says it and someone will not read it."""
+    needed = get_size("xxl").memory_estimate_bytes()["training"]
+    assert needed > 64e9
+
+
 def test_untying_adds_one_embedding_matrix() -> None:
     tied = ModelConfig(vocab_size=1000, d_model=64, n_heads=4, n_kv_heads=2, d_ff=128)
     untied = ModelConfig(
@@ -79,7 +101,7 @@ def test_unknown_size_names_the_alternatives() -> None:
 
 
 def test_sizes_increase_monotonically() -> None:
-    counts = [SIZES[name].parameter_count() for name in ["micro", "tiny", "small", "base"]]
+    counts = [SIZES[name].parameter_count() for name in SIZES]
     assert counts == sorted(counts)
 
 

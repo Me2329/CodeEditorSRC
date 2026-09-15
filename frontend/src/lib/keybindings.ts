@@ -164,6 +164,23 @@ export function resolve(
   return found?.command ?? null;
 }
 
+/**
+ * Which bindings a press is allowed to match, from where it happened.
+ *
+ * A binding declared for the editor must not fire while someone is typing in a
+ * search box, and the only thing that distinguishes those is where the event
+ * came from. Monaco renders inside an element carrying its own class, so the
+ * question is whether the target is inside one.
+ *
+ * Passing the answer is not optional: `resolve` defaults to "always", which
+ * matches only the bindings that are not editor-scoped, so a caller that
+ * forgets this argument silently disables every editor binding there is.
+ */
+export function scopeFor(target: EventTarget | null): 'always' | 'editor' {
+  const element = target instanceof Element ? target : null;
+  return element?.closest('.monaco-editor') ? 'editor' : 'always';
+}
+
 /** Apply user overrides to the defaults, dropping any that will not parse. */
 export function merge(
   defaults: readonly Binding[],

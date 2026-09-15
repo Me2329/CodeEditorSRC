@@ -60,7 +60,12 @@ import { outstanding, scanWorkspace } from '../lib/todos';
 import { zipFiles } from '../lib/zip';
 import type { SnippetContribution } from '../lib/extensions/types';
 import { matching as matchingSnippets, reindent } from '../lib/snippets';
-import { DEFAULT_BINDINGS, merge as mergeBindings, resolve as resolveBinding } from '../lib/keybindings';
+import {
+  DEFAULT_BINDINGS,
+  merge as mergeBindings,
+  resolve as resolveBinding,
+  scopeFor,
+} from '../lib/keybindings';
 import {
   EMPTY as NO_PLACES,
   back as goBack,
@@ -683,18 +688,27 @@ export function CodeCraftIDE() {
       // Bindings live in a table rather than in this handler, so they can be
       // listed, displayed and overridden. The handler's only job is to look one
       // up and run it.
-      const command = resolveBinding(event, bindings);
+      //
+      // The scope has to be worked out from where the press happened, or the
+      // editor-scoped bindings match nothing at all: `resolve` defaults to the
+      // bindings that apply everywhere.
+      const command = resolveBinding(event, bindings, scopeFor(event.target));
       if (!command) return;
 
       const found = commandsRef.current.find((entry) => entry.id === command);
       if (!found || (found.when && !found.when())) return;
 
       event.preventDefault();
+      // Monaco binds several of these itself and stops the event when it does,
+      // so a shortcut this editor declares would never arrive. Claiming it
+      // first is the point of owning a keybinding table.
+      event.stopPropagation();
       found.run();
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    // Capture, for the same reason.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [bindings]);
 
   // ------------------------------------------------------------- interactions

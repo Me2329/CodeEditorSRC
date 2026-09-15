@@ -741,6 +741,40 @@ Everything around it — the caches, the superseding, the stop sequences, the
 best-of selection — is measured and works. The model is the part that needs a
 bigger corpus and a longer run, which the pipeline is built to give it.
 
+## What a four billion parameter run actually costs
+
+`xxl` is 4.32 billion parameters: 3584 wide, 32 layers, head dimension 128, and
+seven query heads per key/value head, which is the shape a model of this class
+usually takes. It instantiates anywhere with the memory, and the tests assert
+the count against what PyTorch allocates, as they do for every other size.
+
+Choosing it is a decision about a machine, not about a config file, so here is
+the arithmetic before anyone spends a week on it:
+
+| | |
+| --- | --- |
+| Weights, fp32 | 17.3 GB |
+| Weights, bf16 | 8.6 GB |
+| Training: weights, gradients and two Adam moments | 69.1 GB |
+| One checkpoint, weights and optimiser state | 51.8 GB |
+| Corpus at twenty tokens per parameter | 86 billion tokens |
+| That corpus as a `uint16` token stream | 173 GB |
+
+Two things follow. The first is that 69GB of training state does not fit on a
+consumer GPU and does not fit in most desktops' RAM either: this size needs
+either sharding across several cards or an optimiser that keeps its state
+somewhere other than device memory. The second is that a disk of about 330GB is
+almost exactly the right size for the job — 173GB of tokens and two checkpoints
+at 52GB each is 277GB — and that is not a coincidence so much as a warning: the
+token stream and the checkpoints are the whole budget, and `prepare` deletes
+each repository after reading it precisely so the source text never has to sit
+there too.
+
+The third thing is the one worth saying plainly. Scaling the throughput this
+repository measured on four CPU cores, 86 billion tokens through a 4.3B model is
+a job measured in centuries. This size is for a machine with several GPUs and a
+schedule, not for the laptop that trained the checkpoint in this repository.
+
 ## Fitting a model that does not fit
 
 Training keeps every block's activations from the forward pass so the backward
