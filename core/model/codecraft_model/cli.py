@@ -46,7 +46,8 @@ def command_sizes(args: argparse.Namespace) -> int:
     """Print every named size with its true parameter count."""
     device = resolve_device(getattr(args, "device", None))
     budget = available_memory_bytes(device)
-    print(f"device: {describe_device(device)}, optimiser: {args.optimizer}\n")
+    fused = ", one gradient at a time" if args.fused_step else ""
+    print(f"device: {describe_device(device)}, optimiser: {args.optimizer}{fused}\n")
 
     header = (
         f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
@@ -57,7 +58,7 @@ def command_sizes(args: argparse.Namespace) -> int:
     print("-" * len(header))
 
     for name, config in SIZES.items():
-        estimate = config.memory_estimate_bytes(optimizer=args.optimizer)
+        estimate = config.memory_estimate_bytes(optimizer=args.optimizer, fused=args.fused_step)
         needed = estimate["training"]
         # Activations, the batch and allocator fragmentation all sit on top of
         # the four fixed copies, and roughly a third again covers them.
@@ -262,10 +263,12 @@ def largest_that_fits(available: int, vocab_size: int) -> tuple[str, str] | None
         sized = preset.with_vocab(vocab_size)
         # AdamW first: when both fit there is no reason to recommend the one
         # that gives up momentum.
-        for optimizer in ("adamw", "adafactor"):
-            needed = sized.memory_estimate_bytes(optimizer=optimizer)["training"] * 1.35
+        for optimizer, fused in (("adamw", False), ("adafactor", False), ("adafactor", True)):
+            needed = (
+                sized.memory_estimate_bytes(optimizer=optimizer, fused=fused)["training"] * 1.35
+            )
             if needed < available:
-                best = (name, optimizer)
+                best = (name, optimizer + (" --fused-step" if fused else ""))
                 break
     return best
 
@@ -279,7 +282,8 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     would have worked.
     """
     chosen = getattr(args, "optimizer", "adamw")
-    needed = config.memory_estimate_bytes(optimizer=chosen)["training"]
+    fused = bool(getattr(args, "fused_step", False))
+    needed = config.memory_estimate_bytes(optimizer=chosen, fused=fused)["training"]
     # Activations, the batch and allocator fragmentation sit on top of the fixed
     # copies, and roughly a third again covers them.
     needed = int(needed * 1.35)
@@ -294,6 +298,12 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
         advice.append(
             f"--optimizer adafactor needs about {lighter / 1e9:.1f}GB instead, by not keeping "
             "two full copies of the parameters"
+        )
+    if not fused:
+        least = config.memory_estimate_bytes(optimizer="adafactor", fused=True)["training"]
+        advice.append(
+            f"--optimizer adafactor --fused-step needs about {least * 1.35 / 1e9:.1f}GB, by "
+            "never holding more than one gradient at a time"
         )
     if not args.checkpointing:
         advice.append("--checkpointing trades a third of the step time for activation memory")
@@ -404,6 +414,7 @@ def command_train(args: argparse.Namespace) -> int:
         compile_model=args.compile,
         max_hours=args.max_hours,
         optimizer=args.optimizer,
+        fused_step=args.fused_step,
     )
 
     device = resolve_device(args.device)
@@ -1076,6 +1087,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=["adamw", "adafactor"],
         help="which optimiser the training column should assume",
     )
+    sizes.add_argument(
+        "--fused-step",
+        action="store_true",
+        help="assume each gradient is consumed and freed during the backward pass",
+    )
     add_device(sizes)
     sizes.set_defaults(func=command_sizes)
 
@@ -1203,6 +1219,15 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "adafactor keeps the second moment as one number per row and column "
             "instead of a full copy, which halves the memory a run needs"
+        ),
+    )
+    trainer.add_argument(
+        "--fused-step",
+        action="store_true",
+        help=(
+            "update each parameter during the backward pass and free its gradient there, "
+            "so the model is never accompanied by a full copy of itself. Needs "
+            "--optimizer adafactor, and gives up gradient accumulation and global clipping"
         ),
     )
     trainer.add_argument("--threads", type=int, default=4, help="CPU threads; ignored on a GPU")

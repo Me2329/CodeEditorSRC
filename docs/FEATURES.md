@@ -1085,6 +1085,24 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 701 | A machine too small for any size is told that plainly | it is a machine for running a model, not training one |
 | 702 | The fits column works on a CPU as well as a card | the question is the same and only the number differs |
 
+## Never holding a second copy of the model
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 703 | Each parameter is updated the moment its gradient is final | inside the backward pass, through a hook |
+| 704 | And its gradient is freed there | peak memory is the weights plus the largest single gradient |
+| 705 | 2.29B goes from 18.3GB to 9.5GB | which is a 16GB card instead of none |
+| 706 | Measured: a real 2.29B step peaked at 10.8GB | against 9.5GB predicted |
+| 707 | Proven identical, not merely similar | with global clipping out of the way, a fused run and an ordinary one give bit-identical weights |
+| 708 | Safe because nothing reads a parameter after its own gradient is done | the gradient flowing past a layer is made from its old weights |
+| 709 | Global gradient clipping is what it gives up | a norm over every gradient needs every gradient |
+| 710 | Adafactor's per-parameter update clipping stands in for it | |
+| 711 | Gradient accumulation goes too, and is refused rather than ignored | there is no gradient left to accumulate into |
+| 712 | Refused with AdamW, whose extra copies are most of what does not fit | |
+| 713 | Refused with a gradient scaler | unscaling needs every gradient at once |
+| 714 | `--fused-step` on both training and the size table | |
+| 715 | The memory warning offers it as the last thing that would fit | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

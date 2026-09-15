@@ -445,12 +445,13 @@ def test_a_size_that_does_not_fit_names_one_that_does() -> None:
     """"No" is a worse answer than "no, and here is the one that would"."""
     from codecraft_model.cli import largest_that_fits
 
-    # A 16GB card, against the eight named sizes.
-    assert largest_that_fits(16e9, 32768) == ("xl", "adafactor")
-    # A 24GB one reaches the same size without the factored optimiser.
-    assert largest_that_fits(24e9, 32768) == ("xl", "adamw")
+    # A 16GB card reaches 2.29B, but only by never holding two gradients.
+    assert largest_that_fits(16e9, 32768) == ("xxl", "adafactor --fused-step")
+    # With 12GB the same billion-parameter size fits the ordinary way, and the
+    # plainer option is the one to recommend when it works.
+    assert largest_that_fits(12e9, 32768) == ("xl", "adafactor")
     # And a machine with a gigabyte trains something, just not much.
-    assert largest_that_fits(1e9, 32768) == ("small", "adamw")
+    assert largest_that_fits(1e9, 32768) == ("base", "adafactor --fused-step")
 
 
 def test_a_machine_too_small_for_any_size_is_told_so() -> None:

@@ -501,3 +501,109 @@ def test_a_failed_checkpoint_does_not_end_the_run(
     # Two evaluations, each trying model.pt and latest.pt.
     assert summary["checkpoint_writes_failed"] == 4
     assert "could not write" in capsys.readouterr().out
+
+
+# ------------------------------------------- updating during the backward pass
+
+
+def test_a_fused_step_trains(learnable_dataset) -> None:
+    train_set, val_set, directory = learnable_dataset
+    summary = train(
+        CodeCraftLM(CONFIG), train_set, val_set,
+        TrainConfig(
+            steps=40, batch_size=8, block_size=32, eval_every=20, warmup_steps=5,
+            learning_rate=3e-3, optimizer="adafactor", fused_step=True,
+        ),
+        output_dir=directory, log=False,
+    )
+
+    assert summary["history"][-1]["val_loss"] < summary["history"][0]["val_loss"]
+
+
+def test_a_fused_step_leaves_no_gradients_behind(learnable_dataset) -> None:
+    """The whole point: the model is never accompanied by a copy of itself."""
+    train_set, val_set, directory = learnable_dataset
+    model = CodeCraftLM(CONFIG)
+    train(
+        model, train_set, val_set,
+        TrainConfig(steps=3, batch_size=4, block_size=16, eval_every=3, warmup_steps=1,
+                    optimizer="adafactor", fused_step=True),
+        output_dir=directory, log=False,
+    )
+
+    assert all(parameter.grad is None for parameter in model.parameters())
+
+
+def test_the_ordinary_path_still_holds_its_gradients(learnable_dataset) -> None:
+    """So the comparison above means something."""
+    train_set, val_set, directory = learnable_dataset
+    model = CodeCraftLM(CONFIG)
+    train(
+        model, train_set, val_set,
+        TrainConfig(steps=3, batch_size=4, block_size=16, eval_every=3, warmup_steps=1,
+                    optimizer="adafactor"),
+        output_dir=directory, log=False,
+    )
+
+    assert any(parameter.grad is not None for parameter in model.parameters())
+
+
+def weights_after(dataset, *, fused: bool, clip: float) -> list[torch.Tensor]:
+    """Train the same model the same way twice, once per ordering."""
+    train_set, val_set, directory = dataset
+    torch.manual_seed(0)
+    model = CodeCraftLM(CONFIG)
+    train(
+        model, train_set, val_set,
+        TrainConfig(
+            steps=3, batch_size=8, block_size=32, eval_every=3, warmup_steps=0,
+            learning_rate=1e-3, optimizer="adafactor", fused_step=fused, grad_clip=clip,
+        ),
+        output_dir=directory, log=False,
+    )
+    return [parameter.detach().clone() for parameter in model.parameters()]
+
+
+def test_a_fused_step_is_the_same_arithmetic_in_a_different_order(learnable_dataset) -> None:
+    """Identical weights, not merely similar ones.
+
+    Updating a parameter during the backward pass is safe because nothing reads
+    it afterwards: the gradient flowing past a layer is produced from its old
+    weights before the hook fires. With global clipping out of the way — the one
+    thing the fused path genuinely cannot do — that claim is testable exactly,
+    and this is the test.
+    """
+    fused = weights_after(learnable_dataset, fused=True, clip=1e9)
+    ordinary = weights_after(learnable_dataset, fused=False, clip=1e9)
+
+    for one, other in zip(fused, ordinary):
+        assert torch.equal(one, other)
+
+
+def test_what_differs_is_the_clipping_it_cannot_do(learnable_dataset) -> None:
+    """A global norm needs every gradient at once, which is the thing avoided."""
+    fused = weights_after(learnable_dataset, fused=True, clip=1.0)
+    ordinary = weights_after(learnable_dataset, fused=False, clip=1.0)
+
+    assert any(not torch.equal(one, other) for one, other in zip(fused, ordinary))
+
+
+def test_a_fused_step_refuses_what_it_cannot_do(learnable_dataset) -> None:
+    train_set, val_set, directory = learnable_dataset
+    common = dict(steps=2, batch_size=4, block_size=16, eval_every=2, warmup_steps=1)
+
+    # Accumulation needs a gradient to accumulate into, and there is none.
+    with pytest.raises(ValueError, match="accumulate"):
+        train(
+            CodeCraftLM(CONFIG), train_set, val_set,
+            TrainConfig(optimizer="adafactor", fused_step=True, grad_accumulation=2, **common),
+            output_dir=directory, log=False,
+        )
+
+    # And AdamW's two extra copies are most of what does not fit.
+    with pytest.raises(ValueError, match="adafactor"):
+        train(
+            CodeCraftLM(CONFIG), train_set, val_set,
+            TrainConfig(fused_step=True, **common),
+            output_dir=directory, log=False,
+        )

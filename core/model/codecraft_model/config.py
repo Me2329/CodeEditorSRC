@@ -107,7 +107,7 @@ class ModelConfig:
         }
 
     def memory_estimate_bytes(
-        self, bytes_per_parameter: int = 4, optimizer: str = "adamw"
+        self, bytes_per_parameter: int = 4, optimizer: str = "adamw", fused: bool = False
     ) -> dict[str, int]:
         """Rough memory needed to train and to run this configuration.
 
@@ -125,6 +125,17 @@ class ModelConfig:
         else:
             raise ValueError(f"unknown optimizer {optimizer!r}; use adamw or adafactor")
 
+        # A fused step consumes each gradient the moment it is final, so the
+        # gradients that exist at once are one parameter's worth rather than
+        # the model's. The largest single parameter is the embedding or a
+        # feed-forward matrix, whichever is bigger.
+        gradients = (
+            max(self.vocab_size * self.d_model, self.d_model * self.d_ff)
+            * bytes_per_parameter
+            if fused
+            else weights
+        )
+
         return {
             "weights": weights,
             "inference": weights,
@@ -134,8 +145,9 @@ class ModelConfig:
             # eight times apart, and the same table is read for both.
             "inference_bf16": weights // 2,
             "optimizer_state": state,
-            # Weights, their gradients, and whatever the optimiser keeps.
-            "training": weights * 2 + state,
+            "gradients": gradients,
+            # Weights, the gradients held at once, and whatever the optimiser keeps.
+            "training": weights + gradients + state,
         }
 
     def factored_state_count(self) -> int:

@@ -80,6 +80,13 @@ class TrainConfig:
     # all. See `optimizer.py`.
     optimizer: str = "adamw"
 
+    # Update each parameter as soon as its gradient is final, inside the
+    # backward pass, and free the gradient there and then. The model is then
+    # never accompanied by a second full copy of itself: peak memory becomes the
+    # weights plus the largest single gradient. Costs global gradient clipping
+    # and gradient accumulation, both of which need every gradient at once.
+    fused_step: bool = False
+
 
 def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Optimizer:
     """The chosen optimiser, with weight decay applied only where it belongs.
@@ -283,6 +290,23 @@ def train(
 
     optimizer = build_optimizer(model, config)
 
+    if config.fused_step:
+        if config.grad_accumulation != 1:
+            raise ValueError(
+                "fused_step updates each parameter during the backward pass, so there is "
+                "no gradient left to accumulate into; use a larger batch instead"
+            )
+        if config.optimizer != "adafactor":
+            raise ValueError(
+                "fused_step is for fitting a model that does not otherwise fit, and AdamW's "
+                "two extra copies are most of what does not fit; use --optimizer adafactor"
+            )
+        if scaler.is_enabled():
+            raise ValueError(
+                "fused_step cannot use a gradient scaler: unscaling needs every gradient at "
+                "once, which is the thing being avoided. Use bf16 or fp32"
+            )
+
     saves_failed = 0
     start_step = 0
     if resume_from is not None and resume_from.exists():
@@ -313,6 +337,28 @@ def train(
             print(f"resuming from step {start_step}, val loss {best_val_seen:.3f}")
     else:
         best_val_seen = float("inf")
+
+    # Each parameter's own step, run the moment its gradient is complete. The
+    # hook fires once per parameter per backward pass, after every contribution
+    # to that gradient has been summed, so nothing is updated while it is still
+    # being read: a layer's weights are used to produce the gradient flowing
+    # past them, and that has already happened by the time this runs.
+    hooks: list = []
+    if config.fused_step:
+        groups = {
+            id(parameter): group
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+
+        def consume(parameter: torch.Tensor) -> None:
+            optimizer.step_parameter(parameter, groups[id(parameter)])
+            # The whole point. Holding it would be holding the second copy.
+            parameter.grad = None
+
+        for parameter in model.parameters():
+            if parameter.requires_grad and id(parameter) in groups:
+                hooks.append(parameter.register_post_accumulate_grad_hook(consume))
 
     # The optimiser must be built from the real parameters, so compile after.
     # It wraps the module, and `uncompiled` unwraps it again for checkpointing.
@@ -366,12 +412,19 @@ def train(
             scaler.scale(loss / config.grad_accumulation).backward()
             total_loss += loss.item() / config.grad_accumulation
 
-        # Gradients have to come out of the scaler's units before they can be
-        # clipped, or the norm being compared to the threshold is the scaled one.
-        scaler.unscale_(optimizer)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
+        if config.fused_step:
+            # Already applied, parameter by parameter, during the backward pass.
+            # There is no global norm to report because there was never a moment
+            # when every gradient existed at once; Adafactor's own per-parameter
+            # update clipping is what stands in for clipping them together.
+            grad_norm = float("nan")
+        else:
+            # Gradients have to come out of the scaler's units before they can be
+            # clipped, or the norm being compared to the threshold is the scaled one.
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
 
         if log and (step % config.log_every == 0 or step == config.steps - 1):
             # CUDA queues work asynchronously, so timing without this measures
@@ -459,6 +512,9 @@ def train(
         "tokens_per_second": tokens_per_step * config.steps / max(elapsed, 1e-6),
         "history": history,
     }
+    for hook in hooks:
+        hook.remove()
+
     (output_dir / "training.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )

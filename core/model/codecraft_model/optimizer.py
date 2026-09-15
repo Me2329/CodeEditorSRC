@@ -92,74 +92,84 @@ class Adafactor(torch.optim.Optimizer):
 
         for group in self.param_groups:
             for parameter in group["params"]:
-                if parameter.grad is None:
-                    continue
-                gradient = parameter.grad
-                if gradient.is_sparse:
-                    raise RuntimeError("Adafactor does not support sparse gradients")
-                # The moments are float32 whatever the parameter is, because a
-                # running average in bfloat16 stops moving once the update is
-                # small relative to it.
-                gradient = gradient.float()
-
-                state = self.state[parameter]
-                factored = self._factored(gradient.shape)
-                if not state:
-                    state["step"] = 0
-                    if factored:
-                        state["row"] = torch.zeros(
-                            gradient.shape[:-1], device=gradient.device, dtype=torch.float32
-                        )
-                        state["column"] = torch.zeros(
-                            gradient.shape[:-2] + gradient.shape[-1:],
-                            device=gradient.device,
-                            dtype=torch.float32,
-                        )
-                    else:
-                        state["square"] = torch.zeros_like(gradient, dtype=torch.float32)
-                    if group["beta1"] is not None:
-                        state["moment"] = torch.zeros_like(gradient, dtype=torch.float32)
-
-                state["step"] += 1
-                beta2 = group["beta2"]
-                # Bias correction, as in Adam: the averages start at zero and
-                # would otherwise make the first steps far too large.
-                correction = 1.0 - beta2 ** state["step"]
-
-                squared = gradient.square().add_(group["eps"][0])
-                if factored:
-                    state["row"].mul_(beta2).add_(squared.mean(dim=-1), alpha=1 - beta2)
-                    state["column"].mul_(beta2).add_(squared.mean(dim=-2), alpha=1 - beta2)
-                    update = self._approximate(
-                        state["row"] / correction, state["column"] / correction
-                    )
-                    update.mul_(gradient)
-                else:
-                    state["square"].mul_(beta2).add_(squared, alpha=1 - beta2)
-                    update = gradient * (state["square"] / correction).rsqrt()
-
-                # Update clipping, in place of the momentum that is not kept:
-                # a step whose root-mean-square is above the threshold is scaled
-                # back to it, which is what keeps a rare huge gradient from
-                # moving the weights somewhere they cannot come back from.
-                rms = update.norm(2) / math.sqrt(update.numel())
-                update.div_(max(1.0, float(rms) / group["clip_threshold"]))
-
-                if group["beta1"] is not None:
-                    state["moment"].mul_(group["beta1"]).add_(
-                        update, alpha=1 - group["beta1"]
-                    )
-                    update = state["moment"].clone()
-
-                if group["weight_decay"] != 0:
-                    # Decoupled, as in AdamW: applied to the weights rather than
-                    # folded into the gradient, so it does not interact with the
-                    # adaptive scaling.
-                    parameter.add_(parameter, alpha=-group["weight_decay"] * group["lr"])
-
-                parameter.add_(update.to(parameter.dtype), alpha=-group["lr"])
+                if parameter.grad is not None:
+                    self.step_parameter(parameter, group)
 
         return loss
+
+    @torch.no_grad()
+    def step_parameter(self, parameter: torch.Tensor, group: dict) -> None:
+        """Update one parameter from its own gradient.
+
+        Separate from `step` because a gradient can be consumed the moment it is
+        final rather than after every other one has been computed, which is what
+        lets a model train without ever holding a second full copy of itself.
+        Nothing here reads any other parameter, which is what makes that safe.
+        """
+        gradient = parameter.grad
+        if gradient is None:
+            return
+        if gradient.is_sparse:
+            raise RuntimeError("Adafactor does not support sparse gradients")
+        # The moments are float32 whatever the parameter is, because a running
+        # average in bfloat16 stops moving once the update is small relative
+        # to it.
+        gradient = gradient.float()
+
+        state = self.state[parameter]
+        factored = self._factored(gradient.shape)
+        if not state:
+            state["step"] = 0
+            if factored:
+                state["row"] = torch.zeros(
+                    gradient.shape[:-1], device=gradient.device, dtype=torch.float32
+                )
+                state["column"] = torch.zeros(
+                    gradient.shape[:-2] + gradient.shape[-1:],
+                    device=gradient.device,
+                    dtype=torch.float32,
+                )
+            else:
+                state["square"] = torch.zeros_like(gradient, dtype=torch.float32)
+            if group["beta1"] is not None:
+                state["moment"] = torch.zeros_like(gradient, dtype=torch.float32)
+
+        state["step"] += 1
+        beta2 = group["beta2"]
+        # Bias correction, as in Adam: the averages start at zero and would
+        # otherwise make the first steps far too large.
+        correction = 1.0 - beta2 ** state["step"]
+
+        squared = gradient.square().add_(group["eps"][0])
+        if factored:
+            state["row"].mul_(beta2).add_(squared.mean(dim=-1), alpha=1 - beta2)
+            state["column"].mul_(beta2).add_(squared.mean(dim=-2), alpha=1 - beta2)
+            update = self._approximate(
+                state["row"] / correction, state["column"] / correction
+            )
+            update.mul_(gradient)
+        else:
+            state["square"].mul_(beta2).add_(squared, alpha=1 - beta2)
+            update = gradient * (state["square"] / correction).rsqrt()
+
+        # Update clipping, in place of the momentum that is not kept: a step
+        # whose root-mean-square is above the threshold is scaled back to it,
+        # which is what keeps a rare huge gradient from moving the weights
+        # somewhere they cannot come back from.
+        rms = update.norm(2) / math.sqrt(update.numel())
+        update.div_(max(1.0, float(rms) / group["clip_threshold"]))
+
+        if group["beta1"] is not None:
+            state["moment"].mul_(group["beta1"]).add_(update, alpha=1 - group["beta1"])
+            update = state["moment"].clone()
+
+        if group["weight_decay"] != 0:
+            # Decoupled, as in AdamW: applied to the weights rather than folded
+            # into the gradient, so it does not interact with the adaptive
+            # scaling.
+            parameter.add_(parameter, alpha=-group["weight_decay"] * group["lr"])
+
+        parameter.add_(update.to(parameter.dtype), alpha=-group["lr"])
 
     def state_bytes(self) -> int:
         """How much the optimiser is actually holding, for a report that knows."""

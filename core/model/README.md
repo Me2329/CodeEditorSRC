@@ -804,6 +804,52 @@ to that, and buys the memory that makes it possible at all. A smaller corpus is
 the honest lever: the same model over five billion tokens is a week, and worse
 in a way that is measurable rather than mysterious.
 
+## Never holding a second copy of the model
+
+Adafactor removes the optimiser's two copies. What is left is the weights and
+their gradients, and at 2.29 billion parameters that is 9.1GB each: 18.3GB,
+which is still more than a 16GB card has.
+
+But the gradients do not all need to exist at once. A gradient is finished the
+moment autograd has summed every contribution to it, and nothing afterwards
+reads it except the optimiser. So `--fused-step` registers a hook on every
+parameter that runs that parameter's own update the instant its gradient is
+complete, and then drops the gradient. Peak memory becomes the weights plus the
+largest single gradient — for this size, the embedding at 0.34GB.
+
+| size | weights + all gradients | weights + one gradient |
+| --- | --- | --- |
+| xl, 1.01B | 8.1 GB | 4.3 GB |
+| xxl, 2.29B | 18.3 GB | 9.5 GB |
+| max, 4.32B | 34.5 GB | 17.7 GB |
+
+Measured, not just computed. A real training step of `xxl` — 2.29 billion
+parameters, the full vocabulary, gradient checkpointing, batch one — peaked at
+**10.8GB** of resident memory, against the 9.5GB of weights and one gradient the
+table predicts. The same run without `--fused-step` needs 18.3GB before
+activations and does not start on a 16GB card at all.
+
+Updating a parameter while the backward pass is still running sounds unsafe and
+is not. The gradient flowing past a layer is computed from that layer's old
+weights before the hook fires, and every later layer has already been dealt
+with. That claim is tested exactly rather than approximately: with global
+gradient clipping out of the way, a fused run and an ordinary run from the same
+seed produce **bit-identical weights**.
+
+Global clipping is the one thing it genuinely cannot do, because a norm over
+every gradient needs every gradient. Adafactor's own per-parameter update
+clipping is what stands in for it, and the test that shows the two paths agree
+exactly without it is the same test that shows they differ with it. Gradient
+accumulation goes too, for the same reason: there is no gradient left to
+accumulate into. A larger batch is the replacement, and on a card that has just
+been given back 9GB there is room for one.
+
+```bash
+python -m codecraft_model sizes --optimizer adafactor --fused-step
+python -m codecraft_model train --run runs/big --size xxl \
+    --optimizer adafactor --fused-step --checkpointing --batch 2
+```
+
 ## What the largest sizes actually cost
 
 Two sizes sit above `xl`. `xxl` is 2.29 billion parameters, 2560 wide over 32

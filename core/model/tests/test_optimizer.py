@@ -158,3 +158,15 @@ def test_the_counted_state_matches_what_the_optimiser_allocates():
 def test_an_unknown_optimiser_is_refused_rather_than_guessed():
     with pytest.raises(ValueError, match="adafactor"):
         get_size("micro").memory_estimate_bytes(optimizer="lion")
+
+
+def test_a_fused_step_counts_one_gradient_rather_than_all_of_them():
+    """Which is what puts 2.29B parameters on a 16GB card."""
+    config = get_size("xxl")
+    ordinary = config.memory_estimate_bytes(optimizer="adafactor")
+    fused = config.memory_estimate_bytes(optimizer="adafactor", fused=True)
+
+    assert ordinary["gradients"] == ordinary["weights"]
+    # The largest single parameter is the embedding, not the whole model.
+    assert fused["gradients"] == config.vocab_size * config.d_model * 4
+    assert fused["training"] < 10e9 < ordinary["training"]
