@@ -1057,6 +1057,25 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 678 | Both asserted to land in the band they were added for | two to three billion, and three to five |
 | 679 | A `no` in the fits column is not a flag problem | a size needing several times a card's memory needs more than one card |
 
+## An optimiser whose state does not scale with the model
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 680 | Adafactor, written here | a second moment stored as one number per row and one per column |
+| 681 | Rebuilt as an outer product at the moment it is needed | the full matrix is never stored |
+| 682 | 7,680 numbers instead of 11.5 million, per matrix in the billion-parameter size | |
+| 683 | A billion parameters trains in 8.1GB instead of 16.2GB | which is one 16GB card instead of none |
+| 684 | Vectors keep an ordinary second moment | a vector has no second dimension to factor along |
+| 685 | Update clipping in place of the momentum it does not keep | momentum cannot be factored, and keeping it would undo the saving |
+| 686 | Momentum can be turned back on, and then costs a full copy | stated in a test |
+| 687 | Moments are float32 whatever the parameter is | a running average in bfloat16 stops moving |
+| 688 | Weight decay stays decoupled | as in AdamW, applied to the weights rather than the gradient |
+| 689 | The memory estimate knows which optimiser it is estimating | and is checked against what the optimiser really allocates |
+| 690 | `sizes --optimizer adafactor` shows the same table under it | |
+| 691 | The memory warning names the lighter optimiser and what it would need | rather than only saying no |
+| 692 | A checkpoint records which optimiser wrote it | |
+| 693 | Resuming with the other one starts its state fresh, and says so | loading one into the other fails somewhere unhelpful |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -408,3 +408,52 @@ def test_a_run_inside_its_budget_is_not_marked_early(learnable_dataset) -> None:
         log=False,
     )
     assert not summary["stopped_early"]
+
+
+def test_a_run_can_use_the_factored_optimiser(learnable_dataset) -> None:
+    """End to end: the loss comes down and the checkpoint records which one."""
+    train_set, val_set, directory = learnable_dataset
+    summary = train(
+        CodeCraftLM(CONFIG),
+        train_set,
+        val_set,
+        TrainConfig(
+            steps=40, batch_size=8, block_size=32, eval_every=20, warmup_steps=5,
+            learning_rate=3e-3, optimizer="adafactor",
+        ),
+        output_dir=directory,
+        log=False,
+    )
+
+    assert summary["history"][-1]["val_loss"] < summary["history"][0]["val_loss"]
+    payload = torch.load(directory / "model.pt", map_location="cpu", weights_only=False)
+    assert payload["train_config"]["optimizer"] == "adafactor"
+
+
+def test_resuming_with_a_different_optimiser_starts_its_state_fresh(
+    learnable_dataset, capsys
+) -> None:
+    """Two optimisers keep different state, and loading one into the other raises."""
+    train_set, val_set, directory = learnable_dataset
+    options = dict(steps=10, batch_size=8, block_size=32, eval_every=10, warmup_steps=2)
+    train(
+        CodeCraftLM(CONFIG), train_set, val_set,
+        TrainConfig(optimizer="adafactor", **options),
+        output_dir=directory, log=False,
+    )
+
+    capsys.readouterr()
+    # Further than the first run reached, or there is nothing left to do.
+    summary = train(
+        CodeCraftLM(CONFIG), train_set, val_set,
+        TrainConfig(**{**options, "steps": 20}),
+        output_dir=directory, resume_from=directory / "latest.pt", log=True,
+    )
+
+    assert "started fresh" in capsys.readouterr().out
+    assert summary["steps_run"] > 0
+
+
+def test_an_unknown_optimiser_is_refused() -> None:
+    with pytest.raises(ValueError, match="adafactor"):
+        build_optimizer(CodeCraftLM(CONFIG), TrainConfig(optimizer="lion"))

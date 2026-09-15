@@ -106,13 +106,25 @@ class ModelConfig:
             "output_head": head,
         }
 
-    def memory_estimate_bytes(self, bytes_per_parameter: int = 4) -> dict[str, int]:
+    def memory_estimate_bytes(
+        self, bytes_per_parameter: int = 4, optimizer: str = "adamw"
+    ) -> dict[str, int]:
         """Rough memory needed to train and to run this configuration.
 
-        Training holds the weights, their gradients and two Adam moments, so it
-        needs about four times what inference does, before activations.
+        Training holds the weights, their gradients and the optimiser's state.
+        With AdamW that state is two more full copies, so training needs about
+        four times what inference does before activations. With Adafactor the
+        second moment is one number per row and one per column, which is
+        thousands of numbers rather than millions, so training needs about two.
         """
         weights = self.parameter_count() * bytes_per_parameter
+        if optimizer == "adafactor":
+            state = self.factored_state_count() * 4
+        elif optimizer == "adamw":
+            state = weights * 2
+        else:
+            raise ValueError(f"unknown optimizer {optimizer!r}; use adamw or adafactor")
+
         return {
             "weights": weights,
             "inference": weights,
@@ -121,8 +133,34 @@ class ModelConfig:
             # this" and "can I run this" are different questions with answers
             # eight times apart, and the same table is read for both.
             "inference_bf16": weights // 2,
-            "training": weights * 4,
+            "optimizer_state": state,
+            # Weights, their gradients, and whatever the optimiser keeps.
+            "training": weights * 2 + state,
         }
+
+    def factored_state_count(self) -> int:
+        """Numbers Adafactor keeps: a row and a column average per matrix.
+
+        Every parameter in this architecture is either a matrix, which is
+        factored, or a norm gain, which is a vector and keeps an unfactored
+        second moment because it has no second dimension to factor along. The
+        vectors are `2 * d_model` per layer and are the reason this is not
+        simply zero.
+        """
+        d = self.d_model
+        kv_dim = self.n_kv_heads * self.head_dim
+
+        # (rows + columns) for each matrix in a layer.
+        attention = (d + d) + (d + kv_dim) * 2 + (d + d)
+        feed_forward = (d + self.d_ff) * 2 + (self.d_ff + d)
+        # Norm gains are vectors: one full-size second moment each.
+        norms = 2 * d
+
+        per_layer = attention + feed_forward + norms
+        total = (self.vocab_size + d) + self.n_layers * per_layer + d
+        if not self.tie_embeddings:
+            total += self.vocab_size + d
+        return total
 
     def with_vocab(self, vocab_size: int) -> "ModelConfig":
         """A copy sized for a tokenizer that was actually trained."""

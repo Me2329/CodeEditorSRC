@@ -46,7 +46,7 @@ def command_sizes(args: argparse.Namespace) -> int:
     """Print every named size with its true parameter count."""
     device = resolve_device(getattr(args, "device", None))
     budget = memory_total_bytes(device)
-    print(f"device: {describe_device(device)}\n")
+    print(f"device: {describe_device(device)}, optimiser: {args.optimizer}\n")
 
     header = (
         f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
@@ -57,7 +57,7 @@ def command_sizes(args: argparse.Namespace) -> int:
     print("-" * len(header))
 
     for name, config in SIZES.items():
-        estimate = config.memory_estimate_bytes()
+        estimate = config.memory_estimate_bytes(optimizer=args.optimizer)
         needed = estimate["training"]
         # Activations, the batch and allocator fragmentation all sit on top of
         # the four fixed copies, and roughly a third again covers them.
@@ -70,9 +70,11 @@ def command_sizes(args: argparse.Namespace) -> int:
         )
 
     print(
-        "\nTraining memory is weights, gradients and two Adam moments at 4 bytes\n"
-        "each, before activations. Mixed precision narrows the matmuls, not those\n"
-        "four copies, so it buys speed rather than room.\n"
+        "\nTraining memory is the weights, their gradients and the optimiser's\n"
+        "state, at 4 bytes each, before activations. Mixed precision narrows the\n"
+        "matmuls, not those copies, so it buys speed rather than room — but\n"
+        "--optimizer adafactor does: pass it here to see the same table with a\n"
+        "second moment that is two vectors per matrix instead of a full copy.\n"
         "\n"
         "Running a model that is already trained needs one copy at 2 bytes, which\n"
         "is eight times less: the two columns answer different questions and a\n"
@@ -258,9 +260,10 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     """
     from .device import host_memory_bytes, memory_total_bytes
 
-    needed = config.memory_estimate_bytes()["training"]
-    # Activations, the batch and allocator fragmentation sit on top of the four
-    # fixed copies, and roughly a third again covers them.
+    chosen = getattr(args, "optimizer", "adamw")
+    needed = config.memory_estimate_bytes(optimizer=chosen)["training"]
+    # Activations, the batch and allocator fragmentation sit on top of the fixed
+    # copies, and roughly a third again covers them.
     needed = int(needed * 1.35)
     available = memory_total_bytes(device) if device.type == "cuda" else host_memory_bytes()
     if available is None or needed <= available:
@@ -268,6 +271,12 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
 
     where = "this card" if device.type == "cuda" else "this machine"
     advice = []
+    if chosen == "adamw":
+        lighter = config.memory_estimate_bytes(optimizer="adafactor")["training"] * 1.35
+        advice.append(
+            f"--optimizer adafactor needs about {lighter / 1e9:.1f}GB instead, by not keeping "
+            "two full copies of the parameters"
+        )
     if not args.checkpointing:
         advice.append("--checkpointing trades a third of the step time for activation memory")
     if args.batch > 1:
@@ -280,8 +289,8 @@ def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     print(
         f"  warning: this configuration needs about {needed / 1e9:.1f}GB and "
         f"{where} has {available / 1e9:.1f}GB.\n"
-        "  Weights, gradients and two Adam moments are four copies of the "
-        "parameters at 4 bytes each,\n  and none of them is optional."
+        f"  That is the weights, their gradients and what {chosen} keeps, at 4 "
+        "bytes each, before activations."
         + ("\n  " + "\n  ".join(advice) if advice else "")
     )
 
@@ -368,6 +377,7 @@ def command_train(args: argparse.Namespace) -> int:
         precision=args.precision,
         compile_model=args.compile,
         max_hours=args.max_hours,
+        optimizer=args.optimizer,
     )
 
     device = resolve_device(args.device)
@@ -1034,6 +1044,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     sizes = subparsers.add_parser("sizes", help="list the named model sizes")
+    sizes.add_argument(
+        "--optimizer",
+        default="adamw",
+        choices=["adamw", "adafactor"],
+        help="which optimiser the training column should assume",
+    )
     add_device(sizes)
     sizes.set_defaults(func=command_sizes)
 
@@ -1153,6 +1169,15 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="dropout rate; worth setting on a corpus small enough to memorise",
+    )
+    trainer.add_argument(
+        "--optimizer",
+        default="adamw",
+        choices=["adamw", "adafactor"],
+        help=(
+            "adafactor keeps the second moment as one number per row and column "
+            "instead of a full copy, which halves the memory a run needs"
+        ),
     )
     trainer.add_argument("--threads", type=int, default=4, help="CPU threads; ignored on a GPU")
     trainer.add_argument("--seed", type=int, default=1337)

@@ -69,7 +69,7 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 679 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 693 with what each one does,
 and states plainly what is *not* built.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
@@ -165,10 +165,13 @@ replaced.
 
 The parameter counts are derived from the architecture and asserted in the tests
 against what PyTorch allocates, so `xl` really is 1.01 billion parameters and
-`xxl` really is 4.32 billion. Both instantiate anywhere with the memory;
-training either usefully is a cluster job, and `core/model/README.md` does the
-arithmetic for the larger one — 69GB of training state, and a corpus
-proportionate to the size that is 173GB as a token stream.
+`max` really is 4.32 billion. What decides whether one of them trains on a
+given card is not the card's speed but the optimiser's state: AdamW keeps two
+running averages the size of the model, so a billion parameters is 16.2GB
+before a single activation. `--optimizer adafactor` stores that second moment
+as one number per row and one per column instead, which brings the same
+billion-parameter run down to 8.1GB and onto one 16GB card.
+`core/model/README.md` has the table and the trade.
 
 Training and generation take the GPU automatically when there is one, in
 bfloat16 with TF32, pinned asynchronous transfers and optional `torch.compile`.
@@ -270,7 +273,7 @@ make test   # every suite
 
 Every suite, run together: 34 sandbox conformance checks with 17 skipped for
 toolchains this machine does not have, 16 supervisor tests, 40 analyzer checks,
-108 gateway tests, 71 assistant tests, 543 model tests and 561 frontend tests.
+108 gateway tests, 71 assistant tests, 559 model tests and 561 frontend tests.
 
 | Suite | Covers |
 | --- | --- |

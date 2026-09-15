@@ -24,6 +24,9 @@ GATEWAY_PORT ?= 8000
 # The model run directory: tokenizer, token stream, checkpoint and training log.
 MODEL_RUN    ?= core/model/runs/demo
 MODEL_SIZE   ?= micro
+# adamw, or adafactor to halve what a run needs by not keeping two full copies
+# of the parameters. See core/model/README.md.
+MODEL_OPTIMIZER ?= adamw
 # Directories normally skipped that a large corpus deliberately wants.
 MODEL_ALLOW  ?= site-packages node_modules
 MODEL_VOCAB  ?= 4096
@@ -180,9 +183,10 @@ model-prepare-big: ## Build a billion-token corpus by cloning, reading and disca
 		--repos-file corpora/big-code.txt --max-tokens $(MODEL_TOKENS)
 
 .PHONY: model-train
-model-train: ## Train a checkpoint (MODEL_SIZE, MODEL_STEPS)
+model-train: ## Train a checkpoint (MODEL_SIZE, MODEL_STEPS, MODEL_OPTIMIZER)
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model train \
 		--run ../../$(MODEL_RUN) --size $(MODEL_SIZE) --steps $(MODEL_STEPS) \
+		--optimizer $(MODEL_OPTIMIZER) \
 		--lr 8e-4 --warmup 200 --device $(MODEL_DEVICE)
 
 .PHONY: model-sample

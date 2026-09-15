@@ -74,13 +74,20 @@ class TrainConfig:
     # machine someone also uses needs an end it can be relied on to reach.
     max_hours: float | None = None
 
+    # "adamw" or "adafactor". AdamW is better and costs two full copies of the
+    # parameters; Adafactor stores a second moment as one number per row and
+    # one per column, which is what decides whether a size fits on a card at
+    # all. See `optimizer.py`.
+    optimizer: str = "adamw"
+
 
 def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Optimizer:
-    """AdamW with weight decay applied only where it belongs.
+    """The chosen optimiser, with weight decay applied only where it belongs.
 
     Decay is for the matrices that mix channels. Applying it to norm gains and
     biases shrinks parameters whose scale is the thing being learned, which
-    costs quality for no regularisation benefit.
+    costs quality for no regularisation benefit. That split is the same
+    whichever optimiser runs.
     """
     decay, no_decay = [], []
     seen: set[int] = set()
@@ -91,11 +98,20 @@ def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Opti
         seen.add(id(parameter))
         (decay if parameter.dim() >= 2 else no_decay).append(parameter)
 
+    groups = [
+        {"params": decay, "weight_decay": config.weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+    if config.optimizer == "adafactor":
+        from .optimizer import Adafactor
+
+        return Adafactor(groups, lr=config.learning_rate, beta2=config.beta2)
+    if config.optimizer != "adamw":
+        raise ValueError(f"unknown optimizer {config.optimizer!r}; use adamw or adafactor")
+
     return torch.optim.AdamW(
-        [
-            {"params": decay, "weight_decay": config.weight_decay},
-            {"params": no_decay, "weight_decay": 0.0},
-        ],
+        groups,
         lr=config.learning_rate,
         betas=(config.beta1, config.beta2),
         eps=1e-8,
@@ -262,10 +278,20 @@ def train(
         }
         model.load_state_dict(state)
         model.to(device)
-        if "optimizer" in payload:
+        trained_with = str(payload.get("train_config", {}).get("optimizer", "adamw"))
+        if "optimizer" in payload and trained_with == config.optimizer:
             # Without the moments the first steps after a resume are effectively
             # unwarmed, and the loss visibly jumps.
             optimizer.load_state_dict(payload["optimizer"])
+        elif "optimizer" in payload and log:
+            # Two optimisers keep different state under the same key, and
+            # loading one into the other raises somewhere unhelpful. Starting
+            # this one empty costs a few hundred warm-up steps and is the only
+            # thing that can work.
+            print(
+                f"  note: this checkpoint was trained with {trained_with}, and this run uses "
+                f"{config.optimizer}; its state is being started fresh"
+            )
         start_step = int(payload.get("step", 0))
         best_val_seen = float(payload.get("val_loss", float("inf")))
         if log:

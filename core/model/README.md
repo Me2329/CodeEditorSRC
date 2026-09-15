@@ -741,6 +741,52 @@ Everything around it — the caches, the superseding, the stop sequences, the
 best-of selection — is measured and works. The model is the part that needs a
 bigger corpus and a longer run, which the pipeline is built to give it.
 
+## A billion parameters on one consumer card
+
+AdamW keeps two running averages the size of the model. With the weights and
+their gradients that is four copies, sixteen bytes per parameter in float32,
+and it is what decides whether a size trains on a given card rather than
+anything about the card's speed. A billion parameters is 16.2GB of state before
+a single activation, which is a whole 16GB GPU and then some.
+
+So there is a second optimiser, written here like everything else in this
+directory. Adafactor keeps the second moment **factored**: for a matrix of shape
+(rows, columns) it stores one running average per row and one per column, and
+rebuilds the full second moment as their outer product when the step needs it.
+For the 2048 × 5632 matrices in `xl` that is 7,680 numbers instead of 11.5
+million.
+
+```bash
+make model-sizes                                   # what AdamW needs
+python -m codecraft_model sizes --optimizer adafactor
+python -m codecraft_model train --run runs/big --size xl \
+    --optimizer adafactor --checkpointing --batch 1 --accumulate 16
+```
+
+| size | parameters | AdamW | Adafactor |
+| --- | --- | --- | --- |
+| large | 673M | 10.8 GB | 5.4 GB |
+| xl | 1.01B | 16.2 GB | 8.1 GB |
+| xxl | 2.29B | 36.6 GB | 18.3 GB |
+| max | 4.32B | 69.1 GB | 34.5 GB |
+
+The optimiser's own state at a billion parameters is 3.5MB, which is a rounding
+error: what is left is the weights and their gradients, and nothing else. That
+is the difference between a size that fits on one 16GB card with room for
+activations and a size that does not fit at all.
+
+It gives up two things, and both are deliberate. The first moment is off, which
+is what makes the saving complete — momentum cannot be factored, so keeping it
+would put a third full copy back — and in its place comes update clipping,
+which scales a step down whenever its root-mean-square exceeds a threshold. That
+is what catches the rare enormous gradient momentum would have smoothed. The
+second is a little end quality. The trade is a size that trains against a size
+that does not.
+
+A checkpoint records which optimiser wrote it. Resuming with the other one says
+so and starts the state empty, because two optimisers keep different things
+under the same key and loading one into the other fails somewhere unhelpful.
+
 ## What the largest sizes actually cost
 
 Two sizes sit above `xl`. `xxl` is 2.29 billion parameters, 2560 wide over 32
