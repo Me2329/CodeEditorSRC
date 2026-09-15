@@ -1036,6 +1036,10 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 662 | The count asserted to land between three and five billion | which is what the size was added for |
 | 663 | And asserted to need more memory than a desktop has | the table says so and someone will not read the table |
 | 664 | What it costs, worked out rather than waved at | 69GB of training state, 52GB per checkpoint, 173GB of tokens |
+| 665 | A run that will not fit says so before allocating anything | the allocator does not fail; the kernel kills the process |
+| 666 | Measured against the card on a GPU and against physical RAM on a CPU | different questions with different answers |
+| 667 | It says what would help, not only that it will not fit | checkpointing, accumulation, and bf16 where it applies |
+| 668 | A warning rather than a refusal | the estimate cannot see swap, unified memory, or an offloaded optimiser |
 
 ## Not implemented
 

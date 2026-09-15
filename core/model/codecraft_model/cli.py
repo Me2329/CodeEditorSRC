@@ -240,6 +240,44 @@ def _tokenizer_sample(
     return "\n".join(pieces)
 
 
+def warn_about_memory(config, device, args: argparse.Namespace) -> None:
+    """Say so when the run will not fit, and what to do about it.
+
+    A warning rather than a refusal. The estimate covers weights, gradients and
+    two Adam moments; it cannot see swap, a unified memory architecture, or an
+    optimiser someone has offloaded, so refusing on it would block runs that
+    would have worked.
+    """
+    from .device import host_memory_bytes, memory_total_bytes
+
+    needed = config.memory_estimate_bytes()["training"]
+    # Activations, the batch and allocator fragmentation sit on top of the four
+    # fixed copies, and roughly a third again covers them.
+    needed = int(needed * 1.35)
+    available = memory_total_bytes(device) if device.type == "cuda" else host_memory_bytes()
+    if available is None or needed <= available:
+        return
+
+    where = "this card" if device.type == "cuda" else "this machine"
+    advice = []
+    if not args.checkpointing:
+        advice.append("--checkpointing trades a third of the step time for activation memory")
+    if args.batch > 1:
+        advice.append(
+            f"--batch 1 --accumulate {args.batch * args.accumulate} keeps the same tokens per step"
+        )
+    if device.type == "cuda" and args.precision in ("auto", "fp32"):
+        advice.append("--precision bf16 halves the activations, though not the four fixed copies")
+
+    print(
+        f"  warning: this configuration needs about {needed / 1e9:.1f}GB and "
+        f"{where} has {available / 1e9:.1f}GB.\n"
+        "  Weights, gradients and two Adam moments are four copies of the "
+        "parameters at 4 bytes each,\n  and none of them is optional."
+        + ("\n  " + "\n  ".join(advice) if advice else "")
+    )
+
+
 def command_train(args: argparse.Namespace) -> int:
     run = Path(args.run)
     tokenizer_path = run / "tokenizer.json"
@@ -280,6 +318,12 @@ def command_train(args: argparse.Namespace) -> int:
         overrides["dropout"] = args.dropout
     if overrides:
         config = config.__class__(**{**config.to_dict(), **overrides})
+
+    # Before allocating anything. A run that needs four times the memory the
+    # machine has does not fail with an exception: the allocator keeps
+    # succeeding until the kernel kills the process, and the user is left with
+    # "Killed" and no idea which number was the problem.
+    warn_about_memory(config, resolve_device(args.device), args)
 
     model = CodeCraftLM(config)
     if args.checkpointing:

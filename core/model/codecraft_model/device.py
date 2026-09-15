@@ -16,6 +16,8 @@ numerics that matter are unchanged.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 # Compute capability of each generation, for the message that tells a user why
@@ -164,6 +166,20 @@ def memory_total_bytes(device: torch.device) -> int | None:
     if device.type == "cuda" and torch.cuda.is_available():
         return torch.cuda.get_device_properties(device.index or 0).total_memory
     return None
+
+
+def host_memory_bytes() -> int | None:
+    """Physical RAM, where the operating system will say.
+
+    Not the same question as `memory_total_bytes`, which asks a GPU. A CPU run
+    is bounded by this, and a run that asks for four times it does not fail
+    gracefully: the allocator succeeds until the kernel kills the process, with
+    no message anyone can act on.
+    """
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (AttributeError, ValueError, OSError):
+        return None
 
 
 def peak_memory_bytes(device: torch.device) -> int | None:

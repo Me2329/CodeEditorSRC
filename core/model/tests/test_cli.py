@@ -392,3 +392,50 @@ def test_a_measurement_can_be_kept_off_the_cores_in_use(tmp_path, sources, monke
     )
 
     assert asked == [1]
+
+
+def test_a_run_that_will_not_fit_says_so_before_allocating(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """The allocator does not fail: the kernel kills the process instead."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    # A machine with a gigabyte, against the smallest size there is.
+    monkeypatch.setattr("codecraft_model.device.host_memory_bytes", lambda: 1_000_000_000)
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "base", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "warning:" in output
+    assert "GB" in output
+    # And says what would help, rather than only that it will not fit.
+    assert "--checkpointing" in output
+
+
+def test_a_run_that_fits_says_nothing_about_memory(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    assert "warning:" not in capsys.readouterr().out

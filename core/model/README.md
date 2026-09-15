@@ -770,6 +770,12 @@ token stream and the checkpoints are the whole budget, and `prepare` deletes
 each repository after reading it precisely so the source text never has to sit
 there too.
 
+`train` checks this before it allocates anything. A run that needs more than
+the machine has does not fail with an exception — the allocator keeps
+succeeding until the kernel kills the process, and all anyone sees is `Killed` —
+so the size, the requirement and the machine's own memory are printed first,
+along with the flags that would help.
+
 The third thing is the one worth saying plainly. Scaling the throughput this
 repository measured on four CPU cores, 86 billion tokens through a 4.3B model is
 a job measured in centuries. This size is for a machine with several GPUs and a
