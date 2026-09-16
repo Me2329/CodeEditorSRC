@@ -458,3 +458,19 @@ def test_a_machine_too_small_for_any_size_is_told_so() -> None:
     from codecraft_model.cli import largest_that_fits
 
     assert largest_that_fits(1e6, 32768) is None
+
+
+def test_preparing_again_with_resume_keeps_the_tokenizer(tmp_path, sources, capsys) -> None:
+    """Training a second tokenizer would give different ids for the same text."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    first = (run / "tokenizer.json").read_bytes()
+
+    capsys.readouterr()
+    assert (
+        main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "500", "--resume"])
+        == 0
+    )
+
+    assert (run / "tokenizer.json").read_bytes() == first
+    assert "resuming with the" in capsys.readouterr().out

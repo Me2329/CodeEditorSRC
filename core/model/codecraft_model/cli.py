@@ -138,6 +138,15 @@ def command_prepare(args: argparse.Namespace) -> int:
     if allow:
         print(f"  including normally-skipped directories: {', '.join(sorted(allow))}")
 
+    # A resumed build must use the tokenizer the tokens were written with, so
+    # the one on disk is loaded rather than trained again: training it a second
+    # time on a different sample would produce different ids for the same text.
+    existing = run / "tokenizer.json"
+    if args.resume and existing.exists():
+        tokenizer = Tokenizer.load(existing)
+        print(f"resuming with the {tokenizer.vocab_size}-token vocabulary already trained")
+        return _encode_corpus(args, run, tokenizer, roots, repositories, allow)
+
     print(f"sampling up to {args.sample_mb}MB to train the tokenizer")
     started = time.time()
     sample = _tokenizer_sample(args, roots, repositories, allow)
@@ -155,6 +164,16 @@ def command_prepare(args: argparse.Namespace) -> int:
     # The sample can be large, and encoding the full corpus needs the memory.
     del sample
 
+    return _encode_corpus(args, run, tokenizer, roots, repositories, allow)
+
+
+def _encode_corpus(args, run: Path, tokenizer, roots, repositories, allow) -> int:
+    """Encode every source into the run's token stream.
+
+    Split out so a resumed build can skip straight here with the tokenizer that
+    was already trained, rather than training a second one whose ids would not
+    match the tokens already written.
+    """
     print("encoding the corpus")
     started = time.time()
     workspace = Path(args.workspace) if args.workspace else run / "checkouts"
@@ -166,6 +185,7 @@ def command_prepare(args: argparse.Namespace) -> int:
         max_tokens=args.max_tokens,
         fim_probability=args.fim,
         progress=True,
+        resume=args.resume,
     )
     shutil.rmtree(workspace, ignore_errors=True)
     print(
@@ -1156,6 +1176,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     prepare.add_argument("--vocab", type=int, default=4096, help="tokenizer vocabulary size")
     prepare.add_argument("--val-fraction", type=float, default=0.05)
+    prepare.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "continue an interrupted build: keep the tokenizer and the tokens already "
+            "written, skip the sources already read, and append the rest"
+        ),
+    )
     prepare.add_argument(
         "--sample-mb",
         type=int,

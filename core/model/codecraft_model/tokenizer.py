@@ -129,6 +129,23 @@ class Tokenizer:
     def fim_middle(self) -> int:
         return self.special_id("<|fim_middle|>")
 
+    def fingerprint(self) -> str:
+        """A short, stable identifier for this exact vocabulary.
+
+        Two tokenizers with the same merges produce the same ids, and that is
+        the only property anything cares about here: it is what says whether a
+        half-built corpus can be continued or has to be thrown away.
+        """
+        import hashlib
+
+        digest = hashlib.sha256()
+        digest.update(str(len(self.merges)).encode())
+        for left, right in self.merges:
+            digest.update(f"{left},{right};".encode())
+        for name, token in sorted(self.specials.items()):
+            digest.update(f"{name}={token};".encode())
+        return digest.hexdigest()[:16]
+
     # ---------------------------------------------------------- token healing
 
     def heal(self, prefix: str) -> tuple[str, str]:

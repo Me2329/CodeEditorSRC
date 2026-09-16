@@ -1103,6 +1103,21 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 714 | `--fused-step` on both training and the size table | |
 | 715 | The memory warning offers it as the last thing that would fit | |
 
+## A corpus build that survives being interrupted
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 716 | `prepare --resume` continues an interrupted build | a corpus for a 2.29B model is forty-six billion tokens and a day of cloning |
+| 717 | Every source consumed is recorded beside the tokens | with the token count that followed it |
+| 718 | A partial record from a crash is truncated | a write cut off mid-document is not a whole number of tokens |
+| 719 | Sources already read are skipped, and the rest appended | |
+| 720 | The tokenizer is fingerprinted, and a mismatch is refused | ids from another vocabulary mean something else beside these |
+| 721 | A resumed build keeps the tokenizer already trained | a second sample would give different merges for the same text |
+| 722 | The manifest is written after every file | a fraction of a millisecond against a build measured in hours |
+| 723 | A finished build leaves nothing to resume | |
+| 724 | Without `--resume` a build starts over, as before | |
+| 725 | Proven by comparing an interrupted-then-resumed build byte for byte with an uninterrupted one | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

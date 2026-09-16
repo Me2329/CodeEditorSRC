@@ -804,6 +804,37 @@ to that, and buys the memory that makes it possible at all. A smaller corpus is
 the honest lever: the same model over five billion tokens is a week, and worse
 in a way that is measurable rather than mysterious.
 
+## A corpus build that survives being interrupted
+
+A corpus proportionate to a billion-parameter model is twenty billion tokens,
+and proportionate to 2.29 billion is forty-six. Encoding that takes a day or
+more, most of it spent cloning repositories over a network. Until now a build
+that died at hour twenty left nothing behind: `tokens.bin` was opened for
+writing, which truncates.
+
+```bash
+python -m codecraft_model prepare --run runs/big --repos-file repos.txt --vocab 32768
+# the connection drops at hour twenty
+python -m codecraft_model prepare --run runs/big --repos-file repos.txt --resume
+```
+
+Every source consumed is recorded next to the tokens, along with the token
+count that followed it. A resumed build reads that manifest, truncates whatever
+partial record the crash left behind — a write interrupted mid-document is not a
+whole number of tokens, let alone a whole file — skips the sources it already
+has, and appends.
+
+Two things have to agree or the result would be silently wrong, and both are
+checked. The tokenizer must be the same one, because ids from another
+vocabulary mean something else beside these; its fingerprint is stored and a
+mismatch is refused rather than appended to. And `--resume` keeps the tokenizer
+already trained instead of training a second one, since a second sample would
+produce different merges and therefore different ids for the same text.
+
+The manifest is written after every file. That costs a fraction of a
+millisecond against a build measured in hours, and the alternative is losing
+however much was consumed since the last write.
+
 ## Never holding a second copy of the model
 
 Adafactor removes the optimiser's two copies. What is left is the weights and

@@ -313,3 +313,124 @@ def test_fim_is_off_by_default(tree, tmp_path_factory) -> None:
         iter_sources([tree]), tokenizer, tmp_path_factory.mktemp('plain')
     )
     assert metadata["fim_documents"] == 0
+
+
+# --------------------------------------------------- resuming a corpus build
+
+
+def sources_named(count: int) -> list[tuple[str, str]]:
+    """Deterministic sources, so two builds can be compared byte for byte."""
+    return [(f"file_{index}.py", f"def parse_{index}(text):\n    return {index}\n" * 3)
+            for index in range(count)]
+
+
+def build(directory, sources, tokenizer, **options):
+    return stream_dataset(sources, tokenizer, directory, fim_probability=0.0, **options)
+
+
+def test_an_interrupted_build_continues_where_it_stopped(tmp_path) -> None:
+    """A corpus for a billion-parameter model takes a day; losing it is fatal."""
+    tokenizer = Tokenizer.train("def parse(text):\n    return text\n" * 50, 300)
+    sources = sources_named(10)
+
+    whole = tmp_path / "whole"
+    reference = build(whole, sources, tokenizer)
+
+    # A build that dies after four files, then resumes.
+    partial = tmp_path / "partial"
+    class Stopped(Exception):
+        pass
+
+    def dies_after_four():
+        for index, source in enumerate(sources):
+            if index == 4:
+                raise Stopped()
+            yield source
+
+    with pytest.raises(Stopped):
+        build(partial, dies_after_four(), tokenizer, resume=True)
+
+    assert (partial / "progress.json").exists()
+    resumed = build(partial, sources, tokenizer, resume=True)
+
+    assert resumed["total_tokens"] == reference["total_tokens"]
+    assert resumed["files"] == reference["files"]
+    assert (partial / "train.bin").read_bytes() == (whole / "train.bin").read_bytes()
+    assert (partial / "val.bin").read_bytes() == (whole / "val.bin").read_bytes()
+
+
+def test_a_finished_build_leaves_nothing_to_resume(tmp_path) -> None:
+    tokenizer = Tokenizer.train("def parse(text):\n    return text\n" * 50, 300)
+    build(tmp_path, sources_named(4), tokenizer, resume=True)
+
+    assert not (tmp_path / "progress.json").exists()
+
+
+def test_resuming_with_a_different_tokenizer_is_refused(tmp_path) -> None:
+    """Ids from another vocabulary would be meaningless next to these."""
+    first = Tokenizer.train("def parse(text):\n    return text\n" * 50, 300)
+    second = Tokenizer.train("class Engine:\n    pass\n" * 50, 300)
+
+    class Stopped(Exception):
+        pass
+
+    def dies_after_two():
+        for index, source in enumerate(sources_named(6)):
+            if index == 2:
+                raise Stopped()
+            yield source
+
+    with pytest.raises(Stopped):
+        build(tmp_path, dies_after_two(), first, resume=True)
+
+    with pytest.raises(ValueError, match="different tokenizer"):
+        build(tmp_path, sources_named(6), second, resume=True)
+
+
+def test_a_partial_record_is_truncated_rather_than_kept(tmp_path) -> None:
+    """A crash mid-write leaves bytes that are not a whole document."""
+    tokenizer = Tokenizer.train("def parse(text):\n    return text\n" * 50, 300)
+
+    class Stopped(Exception):
+        pass
+
+    def dies_after_three():
+        for index, source in enumerate(sources_named(8)):
+            if index == 3:
+                raise Stopped()
+            yield source
+
+    with pytest.raises(Stopped):
+        build(tmp_path, dies_after_three(), tokenizer, resume=True)
+
+    # Simulate the tail of a write that never finished.
+    with (tmp_path / "tokens.bin").open("ab") as handle:
+        handle.write(b"\x01\x02\x03")
+
+    whole = tmp_path / "whole"
+    reference = build(whole, sources_named(8), tokenizer)
+    resumed = build(tmp_path, sources_named(8), tokenizer, resume=True)
+
+    assert resumed["total_tokens"] == reference["total_tokens"]
+    assert (tmp_path / "train.bin").read_bytes() == (whole / "train.bin").read_bytes()
+
+
+def test_without_resume_a_build_starts_over(tmp_path) -> None:
+    tokenizer = Tokenizer.train("def parse(text):\n    return text\n" * 50, 300)
+
+    class Stopped(Exception):
+        pass
+
+    def dies_after_two():
+        for index, source in enumerate(sources_named(6)):
+            if index == 2:
+                raise Stopped()
+            yield source
+
+    with pytest.raises(Stopped):
+        build(tmp_path, dies_after_two(), tokenizer, resume=True)
+
+    fresh = build(tmp_path, sources_named(6), tokenizer)
+    reference = build(tmp_path / "whole", sources_named(6), tokenizer)
+
+    assert fresh["total_tokens"] == reference["total_tokens"]

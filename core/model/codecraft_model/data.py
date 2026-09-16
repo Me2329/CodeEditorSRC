@@ -266,6 +266,7 @@ def stream_dataset(
     fim_probability: float = 0.0,
     seed: int = 1337,
     progress: bool = False,
+    resume: bool = False,
 ) -> dict:
     """Encode a stream of (path, text) straight to disk, one file at a time.
 
@@ -277,20 +278,42 @@ def stream_dataset(
     the total is. The split then renames that file rather than copying it, so
     peak disk is the token stream plus the validation tail, not twice the
     stream: at a billion tokens that is the difference between 2.1GB and 4GB.
+
+    `resume` continues a build that was interrupted. A corpus proportionate to a
+    billion-parameter model is twenty billion tokens and takes a day or more to
+    encode; losing all of it to a dropped connection at hour twenty is the kind
+    of thing that makes people give up. Every source consumed is recorded with
+    the token count that followed it, so a resumed build truncates whatever
+    partial record a crash left behind, skips what it already has, and appends.
     """
     directory.mkdir(parents=True, exist_ok=True)
     dtype = np.dtype(np.uint16 if tokenizer.vocab_size <= 65_536 else np.uint32)
 
     combined = directory / "tokens.bin"
-    total_tokens = 0
-    total_characters = 0
-    files = 0
-    rearranged = 0
+    done = _Progress(directory / "progress.json", tokenizer)
+    if resume:
+        done.load(combined, dtype)
+    else:
+        done.reset()
+
+    total_tokens = done.tokens
+    total_characters = done.characters
+    files = done.files
+    rearranged = done.rearranged
     generator = np.random.default_rng(seed)
     started = time.time()
 
-    with combined.open("wb") as handle:
+    if progress and files:
+        print(
+            f"  resuming after {files:,} files and {total_tokens / 1e6:.1f}M tokens",
+            flush=True,
+        )
+
+    with combined.open("r+b" if files else "wb") as handle:
+        handle.seek(0, 2)
         for path, text in sources:
+            if path in done:
+                continue
             marked = f"{FILE_MARKER}{Path(path).name}\n{text}\n"
             ids = tokenizer.encode(marked)
 
@@ -308,6 +331,10 @@ def stream_dataset(
             files += 1
             total_tokens += len(encoded)
             total_characters += len(marked)
+            # Flushed before the count is recorded, so the manifest never claims
+            # tokens the filesystem has not been told about.
+            handle.flush()
+            done.record(path, total_tokens, total_characters, files, rearranged)
 
             if progress and files % 500 == 0:
                 rate = total_characters / max(time.time() - started, 1e-6) / 1e6
@@ -324,6 +351,7 @@ def stream_dataset(
 
     if total_tokens == 0:
         combined.unlink(missing_ok=True)
+        done.reset()
         raise ValueError("no source files produced any tokens")
 
     split = int(total_tokens * (1.0 - validation_fraction))
@@ -353,7 +381,87 @@ def stream_dataset(
         "fim_documents": rearranged,
     }
     (directory / "meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    # The build is finished, and `tokens.bin` no longer exists to resume into.
+    done.reset()
     return metadata
+
+
+class _Progress:
+    """What a corpus build has already consumed, kept beside the tokens.
+
+    Two things must agree for a resume to be sound. The tokenizer must be the
+    same one, because ids from a different vocabulary would be meaningless next
+    to these; a fingerprint of it is stored and checked. And the file must end
+    where the manifest says, because a crash mid-write leaves a partial record
+    that is not a whole number of tokens, let alone a whole document.
+    """
+
+    def __init__(self, path: Path, tokenizer: Tokenizer) -> None:
+        self.path = path
+        self.fingerprint = tokenizer.fingerprint()
+        self.consumed: set[str] = set()
+        self.tokens = 0
+        self.characters = 0
+        self.files = 0
+        self.rearranged = 0
+
+    def __contains__(self, source: str) -> bool:
+        return source in self.consumed
+
+    def load(self, combined: Path, dtype: np.dtype) -> None:
+        if not self.path.exists() or not combined.exists():
+            return
+        try:
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        if saved.get("tokenizer") != self.fingerprint:
+            raise ValueError(
+                "this run was started with a different tokenizer, so the tokens already "
+                "written mean something else. Start it again without --resume, or put "
+                "back the tokenizer it began with"
+            )
+
+        self.consumed = set(saved.get("consumed", []))
+        self.tokens = int(saved.get("tokens", 0))
+        self.characters = int(saved.get("characters", 0))
+        self.files = int(saved.get("files", 0))
+        self.rearranged = int(saved.get("rearranged", 0))
+
+        # Whatever a crash left past the last recorded token is not a document.
+        with combined.open("r+b") as handle:
+            handle.truncate(self.tokens * dtype.itemsize)
+
+    def record(
+        self, source: str, tokens: int, characters: int, files: int, rearranged: int
+    ) -> None:
+        self.consumed.add(source)
+        self.tokens = tokens
+        self.characters = characters
+        self.files = files
+        self.rearranged = rearranged
+        # Written for every file, because the cost is a fraction of a
+        # millisecond against a build measured in hours, and the alternative is
+        # re-reading everything consumed since the last write.
+        self.path.write_text(
+            json.dumps(
+                {
+                    "tokenizer": self.fingerprint,
+                    "tokens": self.tokens,
+                    "characters": self.characters,
+                    "files": self.files,
+                    "rearranged": self.rearranged,
+                    "consumed": sorted(self.consumed),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def reset(self) -> None:
+        self.path.unlink(missing_ok=True)
+        self.consumed = set()
+        self.tokens = self.characters = self.files = self.rearranged = 0
 
 
 def _copy_range(
