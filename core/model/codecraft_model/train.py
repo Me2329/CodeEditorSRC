@@ -492,10 +492,14 @@ def train(
     synchronize(device)
     elapsed = time.time() - started
     peak = peak_memory_bytes(device)
+    # What this invocation actually did, which is not `config.steps` when a run
+    # resumes partway or stops on its time budget. Reporting the planned figure
+    # makes a resumed run look several times faster than it is.
+    steps_run = last_step + 1 - start_step
     summary = {
         "parameters": uncompiled(model).parameter_count(),
         "started_at_step": start_step,
-        "steps_run": last_step + 1 - start_step,
+        "steps_run": steps_run,
         "stopped_early": stopped_early,
         # Zero unless a disk refused a checkpoint. Recorded rather than only
         # printed, because a run nobody watched is exactly the one where this
@@ -505,11 +509,14 @@ def train(
         "precision": "fp32" if amp_dtype is None else str(amp_dtype).removeprefix("torch."),
         "peak_memory_gb": round(peak / 1e9, 2) if peak else None,
         "steps": config.steps,
-        "tokens_seen": tokens_per_step * config.steps,
+        "tokens_seen": tokens_per_step * steps_run,
+        "tokens_per_step": tokens_per_step,
         "best_val_loss": best_val,
         "best_val_perplexity": math.exp(min(best_val, 20)),
         "elapsed_seconds": elapsed,
-        "tokens_per_second": tokens_per_step * config.steps / max(elapsed, 1e-6),
+        "tokens_per_second": tokens_per_step * steps_run / max(elapsed, 1e-6),
+        "optimizer": config.optimizer,
+        "fused_step": config.fused_step,
         "history": history,
     }
     for hook in hooks:

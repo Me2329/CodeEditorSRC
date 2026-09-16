@@ -1118,6 +1118,21 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 724 | Without `--resume` a build starts over, as before | |
 | 725 | Proven by comparing an interrupted-then-resumed build byte for byte with an uninterrupted one | |
 
+## Reading a run that takes weeks
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 726 | `report` command | how far in, still falling, when it finishes, and whether it is memorising |
+| 727 | What remains is estimated from the rate this invocation achieved | not from a figure written when it started |
+| 728 | Nothing is left to guess when there is no rate to guess from | it says unknown |
+| 729 | The trend is taken over a window | two consecutive validation losses are noise |
+| 730 | The train/val gap is reported as a number and as a verdict | the number means nothing to someone who has not seen a few runs |
+| 731 | The loss curve as one line of blocks | a long run is watched over ssh on a machine with nothing installed |
+| 732 | The curve keeps its shape however long the run | an even spread, not the tail |
+| 733 | A flat curve does not divide by zero | |
+| 734 | Failed checkpoint writes are surfaced here too | |
+| 735 | Throughput counts the steps that ran, not the ones that were planned | a run resumed for its last ten of thirty looked three times faster than it was |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

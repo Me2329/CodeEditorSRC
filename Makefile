@@ -219,6 +219,10 @@ model-evaluate: ## Measure held-out perplexity and throughput
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model evaluate \
 		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE)
 
+.PHONY: model-report
+model-report: ## How far a training run is, and when it will finish
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model report --run ../../$(MODEL_RUN)
+
 .PHONY: model-probe
 model-probe: ## Ask the checkpoint a fixed set of caret questions (COMPARE=runs/other)
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model probe \

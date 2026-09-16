@@ -804,6 +804,46 @@ to that, and buys the memory that makes it possible at all. A smaller corpus is
 the honest lever: the same model over five billion tokens is a week, and worse
 in a way that is measurable rather than mysterious.
 
+## Reading a run that takes weeks
+
+A run of the sizes above is days or weeks of a machine doing nothing else, and
+the only record of it is a JSON file and a log nobody keeps open. The questions
+are always the same four, so there is a command that answers them.
+
+```
+$ python -m codecraft_model report --run runs/fim
+6.5M parameters on CPU, 4 threads, fp32, adamw
+
+  step            4,200 of 4,200 (100.0%)
+  tokens          17,203,200 this run at 4,248/s
+  elapsed         67m
+  remaining       unknown
+
+  held-out loss   2.5774  (perplexity 13.2), falling
+  train/val gap   +0.136  (healthy)
+
+  2.76 ▇█▆█▆█▆▂▅▅▂▁▄ 2.68
+```
+
+Nothing there is computed that the trainer did not already write down; what is
+added is the arithmetic between those numbers, which is what people get wrong on
+hour ninety of a run. The estimate of what remains comes from the rate this
+invocation actually achieved. The trend is taken over a window rather than the
+last two evaluations, because two consecutive validation losses are noise. The
+gap between training and held-out loss is the memorisation warning this README
+has been making by hand since the second run, now made by the tool: above a nat
+it says the model is learning the corpus rather than the language.
+
+The curve is blocks rather than a plot because a long run is watched over ssh on
+a machine with nothing installed.
+
+Fixing the throughput was part of writing this. The summary reported
+`tokens_per_step * config.steps` — the planned total, not what ran — so a run
+resumed for its last ten steps of thirty claimed to have seen all thirty steps'
+tokens in the time it took to do ten, and looked three times faster than it was.
+A test asserting that figure had a comment directly above it saying the
+opposite.
+
 ## A corpus build that survives being interrupted
 
 A corpus proportionate to a billion-parameter model is twenty billion tokens,

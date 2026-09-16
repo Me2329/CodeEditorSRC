@@ -344,8 +344,10 @@ def test_a_resumed_run_continues_from_where_it_stopped(learnable_dataset) -> Non
     )
 
     assert resumed["started_at_step"] == 20
-    # Only the remaining ten steps ran, not the whole schedule again.
-    assert resumed["tokens_seen"] == 30 * 4 * 16
+    # Only the remaining ten steps ran, not the whole schedule again — which is
+    # what this line said in words while asserting the opposite in code.
+    assert resumed["steps_run"] == 10
+    assert resumed["tokens_seen"] == 10 * 4 * 16
 
 
 def test_resuming_restores_the_optimiser_moments(learnable_dataset) -> None:
@@ -607,3 +609,25 @@ def test_a_fused_step_refuses_what_it_cannot_do(learnable_dataset) -> None:
             TrainConfig(fused_step=True, **common),
             output_dir=directory, log=False,
         )
+
+
+def test_the_summary_counts_the_steps_that_ran(learnable_dataset) -> None:
+    """A resumed run reported the planned total, making it look far faster."""
+    train_set, val_set, directory = learnable_dataset
+    options = dict(batch_size=4, block_size=16, eval_every=5, warmup_steps=1)
+
+    train(
+        CodeCraftLM(CONFIG), train_set, val_set, TrainConfig(steps=5, **options),
+        output_dir=directory, log=False,
+    )
+    resumed = train(
+        CodeCraftLM(CONFIG), train_set, val_set, TrainConfig(steps=8, **options),
+        output_dir=directory, resume_from=directory / "latest.pt", log=False,
+    )
+
+    assert resumed["steps_run"] == 3
+    assert resumed["tokens_seen"] == resumed["tokens_per_step"] * 3
+    # And the throughput follows from what ran, not from what was planned.
+    assert resumed["tokens_per_second"] == pytest.approx(
+        resumed["tokens_seen"] / resumed["elapsed_seconds"], rel=1e-6
+    )

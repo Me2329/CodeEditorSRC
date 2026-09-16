@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import codecs
 import json
+import math
 import shutil
 import sys
 import time
@@ -457,6 +458,75 @@ def command_train(args: argparse.Namespace) -> int:
     print(f"  best validation loss {summary['best_val_loss']:.3f}")
     if summary["stopped_early"]:
         print("  stopped on the time budget; rerun with --resume to continue")
+    return 0
+
+
+def command_report(args: argparse.Namespace) -> int:
+    """Read a training run: how far in, still falling, and when it will finish."""
+    from .report import (
+        describe_duration,
+        memorisation,
+        progress_of,
+        sparkline,
+        trend,
+    )
+
+    run = Path(args.run)
+    summary_path = run / "training.json"
+    if not summary_path.exists():
+        print(f"no training.json in {run}; nothing has been trained there", file=sys.stderr)
+        return 1
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    history = summary.get("history") or []
+    progress = progress_of(summary)
+
+    optimizer = summary.get("optimizer", "adamw")
+    if summary.get("fused_step"):
+        optimizer += ", one gradient at a time"
+
+    print(
+        f"{humanise(summary.get('parameters', 0))} parameters on "
+        f"{summary.get('device', 'an unrecorded device')}, "
+        f"{summary.get('precision', '?')}, {optimizer}\n"
+    )
+    print(
+        f"  step            {progress.step:,} of {progress.steps:,} "
+        f"({progress.fraction:.1%})\n"
+        f"  tokens          {progress.tokens_seen:,} this run at "
+        f"{progress.tokens_per_second:,.0f}/s\n"
+        f"  elapsed         {describe_duration(progress.elapsed_seconds)}\n"
+        f"  remaining       {describe_duration(progress.remaining_seconds)}"
+    )
+
+    if history:
+        best = float(summary.get("best_val_loss", float("nan")))
+        print(
+            f"\n  held-out loss   {best:.4f}  "
+            f"(perplexity {math.exp(min(best, 20)):.1f}), {trend(history)}"
+        )
+        gap = memorisation(history)
+        if gap is not None:
+            # Said in words as well as a number, because the number only means
+            # something to someone who has seen a few runs.
+            verdict = (
+                "learning the corpus rather than the language"
+                if gap > 1.0
+                else "healthy" if gap < 0.4 else "worth watching"
+            )
+            print(f"  train/val gap   {gap:+.3f}  ({verdict})")
+
+        curve = sparkline([float(entry["val_loss"]) for entry in history])
+        if curve:
+            first = float(history[0]["val_loss"])
+            last = float(history[-1]["val_loss"])
+            print(f"\n  {first:.2f} {curve} {last:.2f}")
+
+    if summary.get("stopped_early"):
+        print("\n  stopped on its time budget; rerun with --resume to continue")
+    failed = int(summary.get("checkpoint_writes_failed", 0))
+    if failed:
+        print(f"  {failed} checkpoint writes failed; check the disk before relying on this run")
     return 0
 
 
@@ -1292,6 +1362,12 @@ def main(argv: list[str] | None = None) -> int:
         help="continue from latest.pt, restoring the optimiser state too",
     )
     trainer.set_defaults(func=command_train)
+
+    reporter = subparsers.add_parser(
+        "report", help="how far a training run is, and when it will finish"
+    )
+    reporter.add_argument("--run", required=True)
+    reporter.set_defaults(func=command_report)
 
     sampler = subparsers.add_parser("sample", help="generate from a checkpoint")
     sampler.add_argument("--run", required=True)

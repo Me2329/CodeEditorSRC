@@ -474,3 +474,31 @@ def test_preparing_again_with_resume_keeps_the_tokenizer(tmp_path, sources, caps
 
     assert (run / "tokenizer.json").read_bytes() == first
     assert "resuming with the" in capsys.readouterr().out
+
+
+def test_report_reads_a_run_that_has_been_trained(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "10",
+                "--batch", "2", "--block", "64", "--warmup", "2", "--eval-every", "5",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    capsys.readouterr()
+    assert main(["report", "--run", str(run)]) == 0
+
+    output = capsys.readouterr().out
+    assert "step" in output and "10 of 10" in output
+    assert "held-out loss" in output
+    assert "train/val gap" in output
+
+
+def test_report_on_a_directory_with_no_run_says_so(tmp_path, capsys) -> None:
+    assert main(["report", "--run", str(tmp_path)]) == 1
+    assert "nothing has been trained" in capsys.readouterr().err
