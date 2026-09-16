@@ -74,6 +74,7 @@ class Engine:
         *,
         quantize: bool = False,
         adapter: Path | None = None,
+        half: bool = False,
     ) -> None:
         checkpoint = run / "model.pt"
         tokenizer_path = run / "tokenizer.json"
@@ -93,6 +94,12 @@ class Engine:
         self.amp_dtype = autocast_dtype(self.device)
 
         self.run = run
+        # How this engine was asked for, so a reload can ask for the same thing.
+        # Without it a server started with quantized or half-precision weights
+        # quietly comes back at full size when training replaces the
+        # checkpoint, which on a card sized for the small version is an
+        # out-of-memory error hours later.
+        self.options = {"quantize": quantize, "adapter": adapter, "half": half}
         self.tokenizer = Tokenizer.load(tokenizer_path)
         self.model, self.payload = load_checkpoint(checkpoint, self.device)
 
@@ -110,6 +117,24 @@ class Engine:
             merge_lora(self.model)
             self.model.to(self.device)
             self.adapter = {"path": str(adapter), "rank": lora_config.rank}
+
+        # Weights in bfloat16 rather than float32. Autocast narrows the matmuls
+        # and leaves the weights alone, which is the right trade while training
+        # — the optimiser needs the precision — and the wrong one while serving,
+        # where the weights are the entire budget. Halving them is what puts a
+        # 2.29B model on a card in 4.6GB instead of 9.1GB.
+        self.half = False
+        if half:
+            if quantize:
+                raise ValueError(
+                    "--half and --quantize are two ways to make the weights smaller; "
+                    "pick one"
+                )
+            self.model.to(torch.bfloat16)
+            self.half = True
+            # Autocast has nothing left to narrow, and asking for it on top
+            # would only add casts.
+            self.amp_dtype = None
 
         self.quantization = None
         if quantize:
@@ -162,6 +187,13 @@ class Engine:
         """
         return self._superseded
 
+    def weight_bytes(self) -> int:
+        """What the weights occupy, which for serving is most of the budget."""
+        return sum(
+            parameter.numel() * parameter.element_size()
+            for parameter in self.model.parameters()
+        )
+
     def describe(self) -> dict:
         config = self.model.config
         return {
@@ -183,8 +215,11 @@ class Engine:
             "infill": self.infill_error is None,
             "infill_error": self.infill_error,
             "quantized": self.quantization is not None,
+            "half": self.half,
             "weight_bytes": (
-                self.quantization.quantized_bytes if self.quantization else None
+                self.quantization.quantized_bytes
+                if self.quantization
+                else self.weight_bytes()
             ),
             "superseded_requests": self.supersede_count(),
             "cache": {
@@ -1109,7 +1144,9 @@ class ModelServer(ThreadingHTTPServer):
             return False
 
         try:
-            replacement = Engine(self.engine.run, str(self.engine.device))
+            replacement = Engine(
+                self.engine.run, str(self.engine.device), **self.engine.options
+            )
         except Exception as error:  # noqa: BLE001 - any failure means keep the old one
             print(f"reload failed, keeping the running model: {error}")
             return False
@@ -1149,6 +1186,7 @@ def build_server(
     *,
     quantize: bool = False,
     adapter: Path | None = None,
+    half: bool = False,
     reload_seconds: float = 0.0,
 ) -> ModelServer:
     """Load the checkpoint and bind the socket, without serving yet.
@@ -1156,7 +1194,9 @@ def build_server(
     Split out from `serve` so tests can bind port 0 and drive the server on a
     thread of their own.
     """
-    server = ModelServer((host, port), Engine(run, device, quantize=quantize, adapter=adapter))
+    server = ModelServer(
+        (host, port), Engine(run, device, quantize=quantize, adapter=adapter, half=half)
+    )
     if reload_seconds > 0:
         server.watch_checkpoint(reload_seconds)
     return server
@@ -1170,11 +1210,12 @@ def serve(
     device: str | None = None,
     quantize: bool = False,
     adapter: Path | None = None,
+    half: bool = False,
     reload_seconds: float = 0.0,
 ) -> int:
     try:
         server = build_server(
-            run, host, port, device, quantize=quantize, adapter=adapter,
+            run, host, port, device, quantize=quantize, adapter=adapter, half=half,
             reload_seconds=reload_seconds,
         )
     except FileNotFoundError as error:
@@ -1190,6 +1231,8 @@ def serve(
         + (
             f", int8 weights ({server.engine.quantization.compression:.1f}x smaller)"
             if server.engine.quantization
+            else f", bfloat16 weights ({described['weight_bytes'] / 1e9:.1f}GB)"
+            if server.engine.half
             else ""
         )
         + (

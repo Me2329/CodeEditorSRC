@@ -1133,6 +1133,17 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 734 | Failed checkpoint writes are surfaced here too | |
 | 735 | Throughput counts the steps that ran, not the ones that were planned | a run resumed for its last ten of thirty looked three times faster than it was |
 
+## Serving weights at half the size
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 736 | `serve --half` holds the weights in bfloat16 | one copy of them is serving's entire budget |
+| 737 | 2.29B goes from 9.1GB to 4.6GB, 4.32B from 17.3GB to 8.6GB | which is a 16GB card instead of none |
+| 738 | Autocast is switched off once the weights are already narrow | asking for it on top would only add casts |
+| 739 | An alternative to `--quantize`, and asking for both is refused | |
+| 740 | The engine remembers how it was asked for | |
+| 741 | A reload asks for the same thing | a server running narrow weights used to come back at full size hours later |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

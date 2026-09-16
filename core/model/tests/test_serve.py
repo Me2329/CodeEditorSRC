@@ -14,6 +14,7 @@ import torch
 from codecraft_model.config import ModelConfig
 from codecraft_model.data import write_dataset
 from codecraft_model.model import CodeCraftLM
+from codecraft_model.reload import Watcher
 from codecraft_model.serve import Engine, _flatten_content, build_server, render_messages
 from codecraft_model.tokenizer import Tokenizer
 from codecraft_model.train import TrainConfig, save_checkpoint
@@ -1121,3 +1122,51 @@ def test_best_of_reports_why_the_winner_was_cut(run_directory) -> None:
 
     assert text == "value"
     assert outer["trimmed"] == "dedent"
+
+
+# ------------------------------------------------- weights at half the size
+
+
+def test_half_precision_halves_the_weights(run_directory) -> None:
+    """Serving holds one copy, so the weights are the whole budget."""
+    full = Engine(run_directory)
+    half = Engine(run_directory, half=True)
+
+    assert half.weight_bytes() * 2 == full.weight_bytes()
+    assert half.describe()["half"] is True
+    assert full.describe()["half"] is False
+
+
+def test_a_half_precision_engine_still_answers(run_directory) -> None:
+    text, _ = Engine(run_directory, half=True).infill(
+        "def parse(", "):\n    pass\n", max_tokens=4, temperature=0.0
+    )
+
+    assert isinstance(text, str)
+
+
+def test_autocast_is_turned_off_once_the_weights_are_already_narrow(run_directory) -> None:
+    """Asking for it on top would only add casts."""
+    assert Engine(run_directory, half=True).amp_dtype is None
+
+
+def test_half_and_quantize_are_two_ways_to_do_one_thing(run_directory) -> None:
+    with pytest.raises(ValueError, match="pick one"):
+        Engine(run_directory, quantize=True, half=True)
+
+
+def test_a_reload_keeps_the_size_the_weights_were_asked_for(run_directory) -> None:
+    """Otherwise a server sized for half precision comes back at full size."""
+    server = build_server(run_directory, "127.0.0.1", 0, half=True)
+    try:
+        watcher = Watcher(run_directory / "model.pt")
+        # Touch the checkpoint so the watcher sees a change. It reloads on the
+        # second sighting, not the first: a file seen once may still be being
+        # written.
+        (run_directory / "model.pt").touch()
+        assert server.reload_if_changed(watcher) is False
+        assert server.reload_if_changed(watcher) is True
+        assert server.engine.half is True
+        assert server.engine.describe()["half"] is True
+    finally:
+        server.server_close()

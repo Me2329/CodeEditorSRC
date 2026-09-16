@@ -804,6 +804,30 @@ to that, and buys the memory that makes it possible at all. A smaller corpus is
 the honest lever: the same model over five billion tokens is a week, and worse
 in a way that is measurable rather than mysterious.
 
+## Serving weights at half the size
+
+Autocast narrows the matmuls and leaves the weights alone. That is the right
+trade while training, where the optimiser needs the precision, and the wrong one
+while serving, where one copy of the weights is the entire budget.
+
+```bash
+python -m codecraft_model serve --run runs/big --half
+```
+
+`--half` holds them in bfloat16: 9.1GB becomes 4.6GB for the 2.29B size, and
+17.3GB becomes 8.6GB for 4.32B, which is the difference between serving that
+size on a 16GB card and not. Autocast is switched off once the weights are
+already narrow, since asking for it on top would only add casts. It is an
+alternative to `--quantize`, not a companion to it, and asking for both is
+refused rather than silently resolved.
+
+Fixing this turned up something worse next to it. A server that reloads a
+checkpoint training has replaced rebuilt its engine from the run directory
+alone, discarding whatever the server was started with — so a server running
+quantized or half-precision weights came back at full size hours later, on a
+card chosen for the small version. The engine now remembers how it was asked
+for, and a reload asks for the same thing.
+
 ## Reading a run that takes weeks
 
 A run of the sizes above is days or weeks of a machine doing nothing else, and

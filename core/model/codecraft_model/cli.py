@@ -1151,6 +1151,7 @@ def command_serve(args: argparse.Namespace) -> int:
         port=args.port,
         device=args.device,
         quantize=args.quantize,
+        half=args.half,
         adapter=Path(args.adapter) if args.adapter else None,
         reload_seconds=args.reload,
     )
@@ -1591,6 +1592,14 @@ def main(argv: list[str] | None = None) -> int:
         "--quantize",
         action="store_true",
         help="int8 weights: roughly 2.3x smaller overall, for a model that would not otherwise fit",
+    )
+    server.add_argument(
+        "--half",
+        action="store_true",
+        help=(
+            "hold the weights in bfloat16: half the memory, and what makes a 2B model "
+            "fit on a card with room for the cache"
+        ),
     )
     server.add_argument(
         "--adapter",
