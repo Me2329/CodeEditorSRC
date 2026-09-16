@@ -1157,23 +1157,37 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 748 | The wheel's architecture is checked against the card | a mismatch fails on every kernel launch, hours later |
 | 749 | A machine too small for the smallest size is told so | rather than given a number to misread |
 
+## Not materialising what grouped query attention exists to avoid
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 750 | Shared key/value heads go to the kernel rather than being copied up | the copy was the tensor GQA exists not to store |
+| 751 | 33.6MB a layer, 1.07GB a forward pass at `xxl`'s training shape | 2.15GB at the full context |
+| 752 | Bit-identical, tested through the whole model with `torch.equal` | not a tolerance |
+| 753 | All three mask cases compared | a full sequence, one token on a cache, a run of tokens on one |
+| 754 | 1.36x-1.39x on the isolated attention call, timed on a processor | end to end it is within noise there, and no card was measured |
+| 755 | `plan` reports which attention kernel the card actually selects | landing on the unfused one is slow enough to look like a big model |
+| 756 | And whether folding the shared heads in costs that kernel | in which case it says to copy them up instead |
+| 757 | A backend query that raises is not a yes | asking about cuDNN on a stale driver initialises CUDA and fails there |
+| 758 | Off a card the question is not asked | one implementation, so there is no choice to report |
+
 ## The constraint memory arithmetic hides
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 750 | `plan` times real training steps at the real size | fitting is the easier half; time is what ends runs |
-| 751 | Throughput, sustained FLOP/s and peak memory, on this card | not a spec sheet's number |
-| 752 | The first steps are untimed | the first allocates every buffer and picks the kernels |
-| 753 | Every step synchronises before the clock is read | otherwise it times how fast steps were submitted |
-| 754 | What a corpus proportionate to the size costs in days | |
-| 755 | `--hours` prices a corpus against the time someone has | |
-| 756 | And names the largest size that trains properly in it | `N = sqrt(Ft / 120)` |
-| 757 | A verdict on tokens per parameter, in words | proportionate, thin, undertrained, or barely trained at all |
-| 758 | Training a size properly costs `120N^2` | four times the compute buys twice the model |
-| 759 | An out-of-memory measurement says which flag to change | rather than a CUDA traceback |
-| 760 | The fused-step setup is shared with the training loop | so what is measured is what will run |
-| 761 | A combination of flags that cannot mean anything prints its fix | not a traceback through code the reader did not write |
-| 762 | `doctor` ends by pointing at the command it cannot answer | |
+| 759 | `plan` times real training steps at the real size | fitting is the easier half; time is what ends runs |
+| 760 | Throughput, sustained FLOP/s and peak memory, on this card | not a spec sheet's number |
+| 761 | The first steps are untimed | the first allocates every buffer and picks the kernels |
+| 762 | Every step synchronises before the clock is read | otherwise it times how fast steps were submitted |
+| 763 | What a corpus proportionate to the size costs in days | |
+| 764 | `--hours` prices a corpus against the time someone has | |
+| 765 | And names the largest size that trains properly in it | `N = sqrt(Ft / 120)` |
+| 766 | A verdict on tokens per parameter, in words | proportionate, thin, undertrained, or barely trained at all |
+| 767 | Training a size properly costs `120N^2` | four times the compute buys twice the model |
+| 768 | An out-of-memory measurement says which flag to change | rather than a CUDA traceback |
+| 769 | The fused-step setup is shared with the training loop | so what is measured is what will run |
+| 770 | A combination of flags that cannot mean anything prints its fix | not a traceback through code the reader did not write |
+| 771 | `doctor` ends by pointing at the command it cannot answer | |
 
 ## Not implemented
 

@@ -127,11 +127,6 @@ class Attention(nn.Module):
             v = torch.cat([past_v, v], dim=2)
         new_cache = (k, v)
 
-        # Repeat each key/value head across the query heads that share it.
-        if self.n_groups > 1:
-            k = k.repeat_interleave(self.n_groups, dim=1)
-            v = v.repeat_interleave(self.n_groups, dim=1)
-
         # Three cases, and the third is the one that is easy to get wrong.
         #
         # One query with a cache behind it attends to everything, so no mask.
@@ -154,6 +149,11 @@ class Attention(nn.Module):
                 # a boolean mask.
                 attn_mask = columns <= rows
 
+        # Each key/value head is shared by several query heads. Handing that to
+        # the kernel is not the same as materialising it: `repeat_interleave`
+        # allocates a full-size copy of K and V in every layer of every step,
+        # which is exactly the tensor grouped query attention exists to avoid
+        # storing. The result is bit-identical either way; the copy is not.
         attended = F.scaled_dot_product_attention(
             q,
             k,
@@ -161,6 +161,7 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=is_causal,
+            enable_gqa=self.n_groups > 1,
         )
 
         attended = attended.transpose(1, 2).contiguous().view(batch, seq, -1)

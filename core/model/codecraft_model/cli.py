@@ -553,6 +553,7 @@ def command_plan(args: argparse.Namespace) -> int:
         synchronize,
     )
     from .doctor import TOKENS_PER_PARAMETER, describe_bytes
+    from .kernels import attention_support, describe_attention
     from .model import CodeCraftLM
     from .report import describe_duration
     from .schedule import (
@@ -640,6 +641,7 @@ def command_plan(args: argparse.Namespace) -> int:
         # fast steps were submitted, not how fast they ran.
         synchronize(device)
 
+    dtype = amp_dtype if amp_dtype is not None else torch.float32
     reset_peak_memory(device)
     try:
         throughput = measure(
@@ -655,12 +657,17 @@ def command_plan(args: argparse.Namespace) -> int:
         for handle in hooks:
             handle.remove()
 
+    support = attention_support(config, device, batch=args.batch, seq=block, dtype=dtype)
     rate = throughput.tokens_per_second
     print("\nthroughput")
     print(f"  {rate:,.0f} tokens/s")
     print(f"  {describe_rate(throughput.flops_per_second(parameters))} sustained")
     if throughput.peak_bytes:
         print(f"  peak memory {describe_bytes(throughput.peak_bytes)}")
+    if support is not None:
+        # Which kernel ran is not visible in the number above, and landing on
+        # the unfused one is slow enough to be mistaken for the model being big.
+        print(f"  {describe_attention(*support)}")
 
     full = plan_for(parameters, rate)
     print(f"\na corpus proportionate to {args.size}")

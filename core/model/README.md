@@ -834,6 +834,57 @@ disk cannot hold the corpus the size deserves it says so, and says the choice
 plainly — a smaller model, or a corpus smaller than the model deserves — because
 that is a decision rather than an error.
 
+## Not materialising the thing grouped query attention exists to avoid
+
+Grouped query attention gives several query heads one shared key/value head, and
+the reason is memory: `xxl` has twenty query heads and four key/value heads, so
+K and V are a fifth of the size they would otherwise be. That saving was being
+spent again immediately. Every attention call copied each shared head back up to
+full size before handing it to the kernel:
+
+```python
+k = k.repeat_interleave(self.n_groups, dim=1)
+v = v.repeat_interleave(self.n_groups, dim=1)
+```
+
+PyTorch's attention takes the sharing directly, so the copy was pure cost. At
+`xxl`'s training shape it is 33.6MB per layer per forward pass, 1.07GB across
+the 32 layers, and 2.15GB at the full 4096-token context — allocated, written
+and thrown away, every step, for a tensor whose entire purpose was not to exist.
+
+The results are bit-identical, which is tested rather than asserted: the whole
+model, through all three cases the mask distinguishes — a full sequence, one
+token on top of a cache, and a run of tokens on top of one — against the old
+implementation, with `torch.equal` rather than a tolerance.
+
+What that buys is less clear-cut than the memory, and worth stating precisely.
+Timed in isolation on a processor, the attention call is 1.39x faster at
+`base`'s shape, 1.36x at `xxl`'s training shape and 1.04x at a 4096-token
+context. End to end at `base` the difference disappears into the noise, because
+on a processor the feed-forward matmuls and the output head dominate a step and
+attention is a small part of it. On a card the balance is different, and there
+is no card here, so that is not measured and is not claimed.
+
+There is one way this could be a loss rather than a win, and it is invisible
+when it happens. Which attention kernel runs is chosen at the call site from the
+shapes, the dtype and the card; the fused ones never write the attention matrix
+to memory, and the fallback does, which at a long context is the difference
+between a run that finishes and one that does not. If a card's fused kernel
+refused the shared heads and accepted only the copied-up ones, the copy would be
+the faster path there. So rather than assume, `plan` asks the machine and prints
+the answer:
+
+```
+throughput
+  7,382 tokens/s
+  101 TFLOP/s sustained
+  peak memory 10.8GB
+  attention: flash, with the shared heads folded into the kernel
+```
+
+If the fold ever costs the fused path, that line says so and says which way
+round to run it.
+
 ## The constraint memory arithmetic hides
 
 `doctor` answers whether a size fits. Fitting is the easier half. A 2.29B model

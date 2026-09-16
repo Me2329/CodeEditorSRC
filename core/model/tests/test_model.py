@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 import torch
 
@@ -681,3 +683,81 @@ def test_inference_does_not_recompute(model: CodeCraftLM) -> None:
         logits, _, _ = model(tokens, project_all=True)
 
     assert logits.shape[1] == 4
+
+
+def test_grouped_heads_folded_into_the_kernel_match_copying_them_up():
+    """Bit-identical, which is what makes the copy pure cost.
+
+    The model hands the sharing to the attention kernel rather than
+    materialising a full-size K and V in every layer. This is the check that
+    the two are the same computation, run through the whole model rather than
+    one attention call, and at every place the mask differs: a whole sequence,
+    one token on top of a cache, and a run of tokens on top of one.
+    """
+    config = ModelConfig(
+        vocab_size=64, d_model=64, n_layers=2, n_heads=8, n_kv_heads=2,
+        d_ff=128, max_seq_len=32, dropout=0.0,
+    )
+    torch.manual_seed(0)
+    model = CodeCraftLM(config).eval()
+    groups = config.n_heads // config.n_kv_heads
+
+    def copied(module, x, cos, sin, cache=None):
+        """The old path: repeat each shared head before calling the kernel."""
+        batch, seq, _ = x.shape
+        q = module.q_proj(x).view(batch, seq, module.n_heads, module.head_dim).transpose(1, 2)
+        k = module.k_proj(x).view(batch, seq, module.n_kv_heads, module.head_dim).transpose(1, 2)
+        v = module.v_proj(x).view(batch, seq, module.n_kv_heads, module.head_dim).transpose(1, 2)
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+        past = 0 if cache is None else cache[0].shape[2]
+        if cache is not None:
+            k = torch.cat([cache[0], k], dim=2)
+            v = torch.cat([cache[1], v], dim=2)
+        new_cache = (k, v)
+        k = k.repeat_interleave(groups, dim=1)
+        v = v.repeat_interleave(groups, dim=1)
+        mask, causal = None, False
+        if seq > 1:
+            if past == 0:
+                causal = True
+            else:
+                rows = torch.arange(past, past + seq, device=q.device).unsqueeze(1)
+                columns = torch.arange(past + seq, device=q.device).unsqueeze(0)
+                mask = columns <= rows
+        attended = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, is_causal=causal
+        )
+        attended = attended.transpose(1, 2).contiguous().view(batch, seq, -1)
+        return module.o_proj(attended), new_cache
+
+    torch.manual_seed(1)
+    tokens = torch.randint(1, 64, (2, 12))
+    next_token = torch.randint(1, 64, (2, 1))
+    run = torch.randint(1, 64, (2, 3))
+
+    def three_passes():
+        """A whole sequence, one token on a cache, and a run of tokens on one.
+
+        The third is the case the mask is easy to get wrong in, so it is the
+        one most worth having on both sides of this comparison.
+        """
+        with torch.no_grad():
+            whole, _, caches = model(tokens, project_all=True)
+            one, _, after = model(next_token, caches=caches, project_all=True)
+            several, _, _ = model(run, caches=after, project_all=True)
+        return whole, one, several, caches
+
+    folded = three_passes()
+    for block in model.blocks:
+        block.attention.forward = partial(copied, block.attention)
+    again = three_passes()
+
+    for left, right in zip(folded[:3], again[:3]):
+        assert torch.equal(left, right)
+    assert all(
+        torch.equal(left, right)
+        for pair_a, pair_b in zip(folded[3], again[3])
+        for left, right in zip(pair_a, pair_b)
+    )
+    # And the run of three really did run as three, against a cache of thirteen.
+    assert folded[2].shape[1] == 3
