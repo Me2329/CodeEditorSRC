@@ -69,8 +69,17 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 749 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 806 with what each one does,
 and states plainly what is *not* built.
+
+**Rename across the workspace**, F2, and it proposes rather than acts. There is
+no language server here, so the index knows the spelling of a name and not its
+identity — which is fine for jumping to a declaration and not fine for rewriting
+one. So every occurrence is listed with its file and line and what it is part
+of: code, a comment, or a string. Code is ticked, prose is listed and left for
+you, and the panel says why rather than hiding it. Keywords are refused in both
+directions, because `def` matches the identifier pattern as well as any name
+does and renaming it would break every Python file at once.
 
 **HTML preview** renders client-side in a sandboxed iframe and never reaches the
 execution backend.

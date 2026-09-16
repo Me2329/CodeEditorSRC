@@ -1189,6 +1189,56 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 770 | A combination of flags that cannot mean anything prints its fix | not a traceback through code the reader did not write |
 | 771 | `doctor` ends by pointing at the command it cannot answer | |
 
+## Renaming a name everywhere it is used
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 772 | Rename the name under the caret, F2 or the palette | the third of the family go-to-definition and find-references belong to |
+| 773 | It proposes rather than acts | the other two move the caret; this one edits files that are not on screen |
+| 774 | Every occurrence listed, with its file, its line and the line's text | |
+| 775 | And what each one is part of: code, a comment, or a string | |
+| 776 | Code is ticked; prose is listed and left unticked | a name in a comment is usually a mention rather than a use |
+| 777 | Per-file tick boxes, tri-state when a file is partly chosen | |
+| 778 | The panel says on screen that these are occurrences of the spelling | there is no language server, and the interface says so rather than the source |
+| 779 | Whole-word only | renaming `save` must not touch `saved` or `autosave` |
+| 780 | A keyword is refused as a name to rename | `def` matches the identifier pattern and occurs in every Python file |
+| 781 | And as a name to rename to | `save` to `class` would not compile either |
+| 782 | Keywords are per language | `def` is Python's, not JavaScript's |
+| 783 | An unknown language gets the control-flow core | refusing costs a message; allowing costs the file |
+| 784 | Names must be legal in every language the editor edits | `$` is a letter in JavaScript and a syntax error in C |
+| 785 | Edits applied back to front within a file | so a longer replacement does not move the sites not yet written |
+| 786 | A site whose text moved since the panel opened is skipped | a preview that writes somewhere else is a preview that lied |
+| 787 | Every touched file is snapshotted to local history first | undo in the editor only reaches the file on screen |
+| 788 | The on-screen file goes through Monaco, and the caret is put back | one Ctrl+Z takes the whole rename back |
+| 789 | Stops at 1000 occurrences | too many to review is too many to rename |
+| 790 | The count is shown on open, not a scolding for not having typed yet | |
+
+## Telling code from prose
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 791 | A comment and string scanner over 30-odd languages | no parser and no language server: a table and one pass |
+| 792 | When it cannot tell, it says code | a mislabelled comment is declined; mislabelled code is silently left behind |
+| 793 | The longest delimiter wins, across all three kinds | Lua opens a line comment with `--` and a block comment with `--[[` |
+| 794 | Nested block comments where the language nests them | Rust does; C does not |
+| 795 | Escapes inside string literals | |
+| 796 | Multiline literals where the language has them | Python's triple quotes, JavaScript's backticks |
+| 797 | An unterminated single-line literal is treated as code | an apostrophe in prose, or a Rust lifetime, not a string to the end of the file |
+| 798 | An unterminated block comment runs to the end | which is what a compiler says about it too |
+| 799 | A regular expression literal is not recognised, and is reported as code | telling it from a division needs the parse this avoids |
+| 800 | Unknown languages fall back to the C family | a wrong guess costs a label, no guess costs the distinction |
+
+## The render loop, found and fixed
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 801 | "Maximum update depth exceeded" reproduced, traced and fixed | it had survived an earlier hunt because it fires about one run in six |
+| 802 | The editor's `value` prop is controlled, so the library writes it back | and that write fires the change handler |
+| 803 | The handler produced a new array on every echo, so nothing ever settled | new `files`, new `activeFile`, new `content` identity, every turn |
+| 804 | It now returns the previous state unchanged when the text already matches | React bails out, and the echo has nowhere to go |
+| 805 | The split editor's handler too | the same pattern, written inline |
+| 806 | The sequence that triggered it reproduced, and traced to that one line | a repeat run against the fix is still in progress, not yet a clean bill |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

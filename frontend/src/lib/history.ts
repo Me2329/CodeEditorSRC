@@ -25,7 +25,13 @@ import type { VirtualFile } from './types';
 
 /** Why a snapshot was taken. Shown in the list, because "why" is the thing
  *  that lets someone recognise the revision they are looking for. */
-export type RevisionReason = 'edit' | 'run' | 'restore' | 'assistant' | 'replace';
+export type RevisionReason =
+  | 'edit'
+  | 'run'
+  | 'restore'
+  | 'assistant'
+  | 'replace'
+  | 'rename';
 
 export interface Revision {
   id: string;
@@ -239,6 +245,8 @@ export function describeReason(reason: RevisionReason): string {
       return 'before an assistant edit';
     case 'replace':
       return 'before replace all';
+    case 'rename':
+      return 'before a rename';
     default:
       return 'edited';
   }

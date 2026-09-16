@@ -40,6 +40,8 @@ import {
   describeDeclarations,
   isName,
 } from '../lib/definitions';
+import type { RenameEdit } from '../lib/rename';
+import { describeRename, planRename, whyNotRenamable } from '../lib/rename';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
 import { outlineFor } from '../lib/outline';
 import {
@@ -134,6 +136,7 @@ import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
 import { DiffView } from './DiffView';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { RenamePanel } from './RenamePanel';
 import { SearchPanel } from './SearchPanel';
 import { TabStrip } from './TabStrip';
 import { SettingsPanel } from './SettingsPanel';
@@ -178,6 +181,8 @@ export function CodeCraftIDE() {
   const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The name a rename was asked for, or null when no rename is open. */
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
   // Told apart from "this file declares nothing", which looks identical in an
   // empty list and means something completely different. A message rather than
@@ -725,12 +730,33 @@ export function CodeCraftIDE() {
     [loadTemplate],
   );
 
+  /**
+   * Take an edit from the editor, unless it is one we already have.
+   *
+   * The `value` prop is controlled, so the library writes it back into the
+   * model whenever the two disagree, and that write fires this handler. When
+   * this handler always produced a new array — as it did — every turn of that
+   * wheel handed React a new `files`, a new `activeFile` and a new `content`
+   * identity, so the comparison never settled and the two sides drove each
+   * other until React gave up with "Maximum update depth exceeded". It needed
+   * a burst of edits to get going, which is why it showed up while typing and
+   * roughly one time in six rather than every time.
+   *
+   * Returning `previous` unchanged when the text already matches is what ends
+   * it: React bails out of the re-render, the prop keeps its identity, and the
+   * echo has nowhere to go. It is also the right thing on its own terms — an
+   * edit that changes nothing is not an edit.
+   */
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value === undefined || !activeFile) return;
-      setFiles((previous) =>
-        previous.map((file) => (file.id === activeFile.id ? { ...file, content: value } : file)),
-      );
+      setFiles((previous) => {
+        const current = previous.find((file) => file.id === activeFile.id);
+        if (!current || current.content === value) return previous;
+        return previous.map((file) =>
+          file.id === activeFile.id ? { ...file, content: value } : file,
+        );
+      });
     },
     [activeFile],
   );
@@ -988,6 +1014,80 @@ export function CodeCraftIDE() {
     setBottomTab('search');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * Rename the name under the caret, everywhere, after showing where.
+   *
+   * The third of the family that go-to-definition and find-references belong
+   * to, and the only one that writes. The other two move the caret and a wrong
+   * answer costs a keystroke; this one edits files that are not on screen, so
+   * it proposes rather than acts and the panel is where the decision is made.
+   */
+  const handleRenameSymbol = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const name = model.getWordAtPosition(position)?.word ?? '';
+    if (!isName(name)) {
+      notify('Put the caret on a name first.');
+      return;
+    }
+    const reason = whyNotRenamable(name, model.getLanguageId());
+    if (reason) {
+      notify(reason);
+      return;
+    }
+    if (planRename(filesRef.current, name, name).sites.length === 0) {
+      notify(`No occurrence of ${name} in this workspace.`);
+      return;
+    }
+    setRenaming(name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Write a rename, the same way a replace-across-files is written.
+   *
+   * Every touched file is snapshotted first, because undo in the editor only
+   * reaches the file on screen and a rename is mostly about the ones that are
+   * not. The on-screen file goes through Monaco so one Ctrl+Z takes the whole
+   * rename back rather than leaving that file stranded a step behind.
+   */
+  const handleApplyRename = useCallback(
+    (edits: RenameEdit[], replacement: string) => {
+      const plan = { name: renaming ?? '', replacement, files: [], sites: [] };
+      for (const edit of edits) {
+        const before = filesRef.current.find((file) => file.id === edit.fileId);
+        if (before) snapshot(before.id, before.name, before.content, 'rename');
+      }
+      setFiles((previous) =>
+        previous.map((file) => {
+          const edit = edits.find((entry) => entry.fileId === file.id);
+          return edit ? { ...file, content: edit.content } : file;
+        }),
+      );
+
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      const onScreen = edits.find((edit) => edit.fileName === activeFileNameRef.current);
+      if (editor && model && onScreen) {
+        const position = editor.getPosition();
+        editor.executeEdits('codecraft-rename', [
+          { range: model.getFullModelRange(), text: onScreen.content },
+        ]);
+        // Replacing the whole model sends the caret to the top, which loses the
+        // place the rename was started from.
+        if (position) editor.setPosition(position);
+      }
+
+      notify(describeRename(plan, edits));
+      setRenaming(null);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [renaming],
+  );
 
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
@@ -1776,6 +1876,13 @@ export function CodeCraftIDE() {
         run: handleFindReferences,
       },
       {
+        id: 'edit.rename',
+        title: 'Rename this name everywhere',
+        category: 'Edit',
+        shortcut: 'F2',
+        run: handleRenameSymbol,
+      },
+      {
         id: 'view.settings',
         title: 'Open settings',
         category: 'View',
@@ -2185,6 +2292,19 @@ export function CodeCraftIDE() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-obsidian font-sans text-slate-200 antialiased selection:bg-indigo-500/30">
+      {renaming !== null && (
+        <RenamePanel
+          // A fresh panel per rename, so the selection it computes on mount is
+          // the one for the name being renamed.
+          key={renaming}
+          files={files}
+          name={renaming}
+          language={activeFile?.language ?? language}
+          onApply={handleApplyRename}
+          onClose={() => setRenaming(null)}
+        />
+      )}
+
       <CommandPalette
         mode={paletteMode}
         commands={commands}
@@ -2360,11 +2480,16 @@ export function CodeCraftIDE() {
                       value={splitFile.content}
                       onChange={(value) => {
                         if (value === undefined) return;
-                        setFiles((previous) =>
-                          previous.map((file) =>
+                        // Idempotent for the same reason the main editor's
+                        // handler is: a controlled `value` that is rewritten on
+                        // every echo never settles.
+                        setFiles((previous) => {
+                          const current = previous.find((file) => file.id === splitFile.id);
+                          if (!current || current.content === value) return previous;
+                          return previous.map((file) =>
                             file.id === splitFile.id ? { ...file, content: value } : file,
-                          ),
-                        );
+                          );
+                        });
                       }}
                       options={editorOptions}
                     />

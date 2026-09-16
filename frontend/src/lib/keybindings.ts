@@ -115,6 +115,7 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'view.symbols', keys: 'mod+shift+o' },
   { command: 'navigate.definition', keys: 'F12', when: 'editor' },
   { command: 'navigate.references', keys: 'shift+F12', when: 'editor' },
+  { command: 'edit.rename', keys: 'F2', when: 'editor' },
   { command: 'view.search', keys: 'mod+shift+f' },
   { command: 'view.settings', keys: 'mod+,' },
   { command: 'view.wrap', keys: 'alt+z' },
