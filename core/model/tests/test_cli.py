@@ -512,3 +512,75 @@ def test_doctor_says_what_this_machine_can_do(capsys) -> None:
     assert "trains:" in output and "runs:" in output
     # And what the disk would have to hold for the size it recommends.
     assert "corpus proportionate to it" in output
+
+
+def test_plan_measures_a_real_step_and_prices_the_run(capsys) -> None:
+    """The command exists because memory arithmetic hides the real constraint."""
+    assert (
+        main(
+            [
+                "plan",
+                "--size",
+                "micro",
+                "--vocab",
+                "512",
+                "--batch",
+                "2",
+                "--block",
+                "64",
+                "--steps",
+                "2",
+                "--warmup",
+                "1",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "tokens/s" in output
+    assert "FLOP/s sustained" in output
+    assert "a corpus proportionate to micro" in output
+    assert "20 per parameter" in output
+
+
+def test_plan_prices_a_corpus_against_the_time_someone_has(capsys) -> None:
+    assert (
+        main(
+            [
+                "plan",
+                "--size",
+                "micro",
+                "--vocab",
+                "512",
+                "--batch",
+                "2",
+                "--block",
+                "64",
+                "--steps",
+                "2",
+                "--warmup",
+                "0",
+                "--hours",
+                "1",
+                "--optimizer",
+                "adafactor",
+                "--fused-step",
+                "--checkpointing",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "--optimizer adafactor --fused-step --checkpointing" in output
+    assert "buys at this size" in output
+    assert "per parameter" in output
+
+
+def test_plan_refuses_a_fused_step_without_the_optimiser_it_needs(capsys) -> None:
+    """A bad combination of flags prints its fix rather than a traceback."""
+    assert main(["plan", "--size", "micro", "--fused-step", "--device", "cpu"]) == 1
+    assert "use --optimizer adafactor" in capsys.readouterr().err

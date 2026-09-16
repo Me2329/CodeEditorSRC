@@ -237,8 +237,10 @@ SIZES: dict[str, ModelConfig] = {
         d_ff=5632, max_seq_len=4096,
     ),
     # 2.3 billion. Runs on one 16GB card in bfloat16 with room to spare, and
-    # in int8 on 8GB. Training it is a different question with a different
-    # answer: 37GB of optimiser state before activations, which is not one card.
+    # in int8 on 8GB. Training it there is possible but not free: AdamW wants
+    # 37GB of state, and only Adafactor with a fused step brings that to the
+    # 9.5GB that fits. Memory is then no longer the constraint; time is, and
+    # `plan` measures it rather than guessing.
     "xxl": ModelConfig(
         vocab_size=32768, d_model=2560, n_layers=32, n_heads=20, n_kv_heads=4,
         d_ff=6912, max_seq_len=4096,

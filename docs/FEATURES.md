@@ -1157,6 +1157,24 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 748 | The wheel's architecture is checked against the card | a mismatch fails on every kernel launch, hours later |
 | 749 | A machine too small for the smallest size is told so | rather than given a number to misread |
 
+## The constraint memory arithmetic hides
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 750 | `plan` times real training steps at the real size | fitting is the easier half; time is what ends runs |
+| 751 | Throughput, sustained FLOP/s and peak memory, on this card | not a spec sheet's number |
+| 752 | The first steps are untimed | the first allocates every buffer and picks the kernels |
+| 753 | Every step synchronises before the clock is read | otherwise it times how fast steps were submitted |
+| 754 | What a corpus proportionate to the size costs in days | |
+| 755 | `--hours` prices a corpus against the time someone has | |
+| 756 | And names the largest size that trains properly in it | `N = sqrt(Ft / 120)` |
+| 757 | A verdict on tokens per parameter, in words | proportionate, thin, undertrained, or barely trained at all |
+| 758 | Training a size properly costs `120N^2` | four times the compute buys twice the model |
+| 759 | An out-of-memory measurement says which flag to change | rather than a CUDA traceback |
+| 760 | The fused-step setup is shared with the training loop | so what is measured is what will run |
+| 761 | A combination of flags that cannot mean anything prints its fix | not a traceback through code the reader did not write |
+| 762 | `doctor` ends by pointing at the command it cannot answer | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

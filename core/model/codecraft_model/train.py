@@ -125,6 +125,58 @@ def build_optimizer(model: CodeCraftLM, config: TrainConfig) -> torch.optim.Opti
     )
 
 
+def check_fused_step(config: TrainConfig, *, scaler_enabled: bool) -> None:
+    """Refuse a fused step that cannot mean what it says.
+
+    Each of these is a combination that would appear to work and would quietly
+    train something other than what was asked for, so each is an error rather
+    than a warning.
+    """
+    if config.grad_accumulation != 1:
+        raise ValueError(
+            "fused_step updates each parameter during the backward pass, so there is "
+            "no gradient left to accumulate into; use a larger batch instead"
+        )
+    if config.optimizer != "adafactor":
+        raise ValueError(
+            "fused_step is for fitting a model that does not otherwise fit, and AdamW's "
+            "two extra copies are most of what does not fit; use --optimizer adafactor"
+        )
+    if scaler_enabled:
+        raise ValueError(
+            "fused_step cannot use a gradient scaler: unscaling needs every gradient at "
+            "once, which is the thing being avoided. Use bf16 or fp32"
+        )
+
+
+def install_fused_step(model: CodeCraftLM, optimizer) -> list:
+    """Give each parameter its own step, run the moment its gradient is final.
+
+    The hook fires once per parameter per backward pass, after every
+    contribution to that gradient has been summed, so nothing is updated while
+    it is still being read: a layer's weights are used to produce the gradient
+    flowing past them, and that has already happened by the time this runs.
+
+    Returns the handles, which the caller removes when it is done with them.
+    """
+    groups = {
+        id(parameter): group
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    def consume(parameter: torch.Tensor) -> None:
+        optimizer.step_parameter(parameter, groups[id(parameter)])
+        # The whole point. Holding it would be holding the second copy.
+        parameter.grad = None
+
+    return [
+        parameter.register_post_accumulate_grad_hook(consume)
+        for parameter in model.parameters()
+        if parameter.requires_grad and id(parameter) in groups
+    ]
+
+
 def learning_rate_at(step: int, config: TrainConfig) -> float:
     """Linear warmup, then cosine decay to the floor.
 
@@ -291,21 +343,7 @@ def train(
     optimizer = build_optimizer(model, config)
 
     if config.fused_step:
-        if config.grad_accumulation != 1:
-            raise ValueError(
-                "fused_step updates each parameter during the backward pass, so there is "
-                "no gradient left to accumulate into; use a larger batch instead"
-            )
-        if config.optimizer != "adafactor":
-            raise ValueError(
-                "fused_step is for fitting a model that does not otherwise fit, and AdamW's "
-                "two extra copies are most of what does not fit; use --optimizer adafactor"
-            )
-        if scaler.is_enabled():
-            raise ValueError(
-                "fused_step cannot use a gradient scaler: unscaling needs every gradient at "
-                "once, which is the thing being avoided. Use bf16 or fp32"
-            )
+        check_fused_step(config, scaler_enabled=scaler.is_enabled())
 
     saves_failed = 0
     start_step = 0
@@ -338,27 +376,9 @@ def train(
     else:
         best_val_seen = float("inf")
 
-    # Each parameter's own step, run the moment its gradient is complete. The
-    # hook fires once per parameter per backward pass, after every contribution
-    # to that gradient has been summed, so nothing is updated while it is still
-    # being read: a layer's weights are used to produce the gradient flowing
-    # past them, and that has already happened by the time this runs.
     hooks: list = []
     if config.fused_step:
-        groups = {
-            id(parameter): group
-            for group in optimizer.param_groups
-            for parameter in group["params"]
-        }
-
-        def consume(parameter: torch.Tensor) -> None:
-            optimizer.step_parameter(parameter, groups[id(parameter)])
-            # The whole point. Holding it would be holding the second copy.
-            parameter.grad = None
-
-        for parameter in model.parameters():
-            if parameter.requires_grad and id(parameter) in groups:
-                hooks.append(parameter.register_post_accumulate_grad_hook(consume))
+        hooks = install_fused_step(model, optimizer)
 
     # The optimiser must be built from the real parameters, so compile after.
     # It wraps the module, and `uncompiled` unwraps it again for checkpointing.

@@ -834,6 +834,68 @@ disk cannot hold the corpus the size deserves it says so, and says the choice
 plainly — a smaller model, or a corpus smaller than the model deserves — because
 that is a decision rather than an error.
 
+## The constraint memory arithmetic hides
+
+`doctor` answers whether a size fits. Fitting is the easier half. A 2.29B model
+fits on a 16GB card once the optimiser stops keeping two full copies of it, and
+a person reading that answer starts the run — and finds out somewhere in the
+second month that memory was never what decided whether it finished.
+
+So there is a second command, and it measures rather than asserts: it builds the
+model at the real size, runs a handful of real training steps, times them, and
+multiplies out.
+
+```
+$ python -m codecraft_model plan --size xxl --optimizer adafactor --fused-step --hours 168
+measuring xxl (2.29B) on NVIDIA GeForce RTX 5080, sm_120, 16.0GB VRAM, bfloat16
+  6 steps of 4 x 1024 tokens, --optimizer adafactor --fused-step
+
+throughput
+  7,382 tokens/s
+  101 TFLOP/s sustained
+  peak memory 10.8GB
+
+a corpus proportionate to xxl
+  45.7B tokens, at 20 per parameter
+  71.7 days of continuous training
+
+what 7.0 days buys at this size
+  4.5B tokens, 2.0 per parameter
+  far too little: the model would barely be trained at all
+  large (673.3M) is the largest size this machine trains properly in that time
+```
+
+There is no 5080 in the machine this was written on, so unlike every other
+number in this README that one is **not a measurement**. The throughput above is
+that card's bfloat16 peak taken at 45% utilisation, which is an ordinary figure
+for a consumer card on a model of this shape; the rest of the block is what the
+command computes from it, and the peak memory is measured, from the run that
+sized `xxl` in the first place. Run it on your own card and believe that instead.
+The conclusion survives a wide margin of error on the rate: at every utilisation
+from 40% to 50% the answer is still two months, and still `large`.
+
+The last line is the one worth having before a run rather than after one, and it
+comes out of one substitution. A forward and backward pass cost about six
+operations per parameter per token, so a run costs `6ND`. A corpus proportionate
+to a model is about twenty tokens per parameter, so `D = 20N` and the cost of
+training a model *properly* is `120N²` — the square of the size. Four times the
+compute buys twice the model. There is no amount of patience with one card that
+buys a frontier one, and the arithmetic says so in a line rather than in a month.
+
+The other direction is the useful one. Given the time someone actually has,
+invert it: `N = √(Ft / 120)`. That is what `--hours` reports, and it is why the
+example above suggests `large` rather than `xxl`. A 2.29B model trained on a
+tenth of what it deserves is beaten by a 0.67B model that got all of it — same
+card, same week, better model.
+
+Two details in the measurement that would otherwise make it a number people
+believe rather than a number that is true. The first few steps are untimed: the
+first one allocates every buffer the run will use and picks its kernels, and
+timing it would slander the card and make a longer measurement look faster than
+a short one. And each step synchronises before the clock is read, because CUDA
+queues work asynchronously and timing without that measures how fast steps were
+*submitted*.
+
 ## Serving weights at half the size
 
 Autocast narrows the matmuls and leaves the weights alone. That is the right

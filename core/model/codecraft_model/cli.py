@@ -519,6 +519,187 @@ def command_doctor(args: argparse.Namespace) -> int:
                 "\n  that does not fit. Train a smaller size, or a corpus smaller than "
                 "the size deserves, and know which of the two you chose."
             )
+
+        # Memory and disk are the answers people come here for. Time is the one
+        # that ends runs, and it cannot be computed from a spec sheet: it has to
+        # be measured on the card, which is a different command.
+        print(
+            f"\ntime, which none of the above measures\n"
+            f"  a corpus of {costs.corpus_tokens / 1e9:,.0f}B tokens takes as long as this "
+            f"machine takes\n  to get through it, and that is the number that decides "
+            f"whether the run\n  finishes. Measure it before starting:\n\n"
+            f"    python -m codecraft_model plan --size {trains.name}"
+            # The recommendation reads as prose for AdamW, which needs no flag,
+            # and as flags for everything else, which do.
+            f"{'' if trains.detail == 'adamw' else ' ' + trains.detail} --hours 168"
+        )
+    return 0
+
+
+def command_plan(args: argparse.Namespace) -> int:
+    """Time a few real steps at a real size, and say what the run will cost.
+
+    `doctor` says whether a size fits. This says how long it takes, which is
+    the constraint that actually binds: a 2.29B model fits on a 16GB card, and
+    a corpus proportionate to it is forty-six billion tokens, and one card does
+    not get through forty-six billion tokens in a week.
+    """
+    from .device import (
+        autocast_dtype,
+        describe_device,
+        enable_fast_matmul,
+        peak_memory_bytes,
+        reset_peak_memory,
+        synchronize,
+    )
+    from .doctor import TOKENS_PER_PARAMETER, describe_bytes
+    from .model import CodeCraftLM
+    from .report import describe_duration
+    from .schedule import (
+        Plan,
+        corpus_within,
+        describe_rate,
+        describe_tokens,
+        largest_size_within,
+        measure,
+        plan_for,
+    )
+    from .train import TrainConfig, build_optimizer, check_fused_step, install_fused_step
+
+    device = resolve_device(args.device)
+    enable_fast_matmul(device)
+    config = get_size(args.size).with_vocab(args.vocab)
+    block = min(args.block, config.max_seq_len)
+
+    training = TrainConfig(
+        batch_size=args.batch,
+        block_size=block,
+        optimizer=args.optimizer,
+        fused_step=args.fused_step,
+    )
+    if training.fused_step:
+        check_fused_step(training, scaler_enabled=False)
+
+    parameters = config.parameter_count()
+    print(f"measuring {args.size} ({humanise(parameters)}) on {describe_device(device)}")
+    detail = f"--optimizer {args.optimizer}"
+    if args.fused_step:
+        detail += " --fused-step"
+    if args.checkpointing:
+        detail += " --checkpointing"
+    print(f"  {args.steps} steps of {args.batch} x {block} tokens, {detail}")
+
+    def too_big() -> int:
+        """The failure people actually hit, said in terms of what to change.
+
+        A traceback out of the allocator names a number of bytes and a pool,
+        and neither is a thing the person running this can act on.
+        """
+        remedies = ["a smaller --batch"]
+        if not args.checkpointing:
+            remedies.append("--checkpointing")
+        print(
+            f"\n  {args.size} does not fit here at batch {args.batch}.\n"
+            f"  Run `doctor` for what does, or try {' or '.join(remedies)}."
+        )
+        return 1
+
+    torch.manual_seed(training.seed)
+    try:
+        model = CodeCraftLM(config).to(device)
+    except torch.OutOfMemoryError:
+        return too_big()
+    if args.checkpointing:
+        model.enable_gradient_checkpointing()
+    model.train()
+    optimizer = build_optimizer(model, training)
+    hooks = install_fused_step(model, optimizer) if training.fused_step else []
+    amp_dtype = autocast_dtype(device, training.precision)
+
+    # Random tokens. The model learns nothing from them, which is the point:
+    # this measures the cost of a step, and a step costs the same whatever the
+    # tokens say.
+    inputs = torch.randint(
+        1, config.vocab_size, (args.batch, block), device=device, dtype=torch.long
+    )
+    targets = torch.randint(
+        1, config.vocab_size, (args.batch, block), device=device, dtype=torch.long
+    )
+
+    def step() -> None:
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+        ):
+            _, loss, _ = model(inputs, targets=targets)
+        loss.backward()
+        if not training.fused_step:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), training.grad_clip)
+            optimizer.step()
+        # CUDA queues asynchronously: without this the measurement times how
+        # fast steps were submitted, not how fast they ran.
+        synchronize(device)
+
+    reset_peak_memory(device)
+    try:
+        throughput = measure(
+            step,
+            tokens_per_step=args.batch * block,
+            steps=args.steps,
+            warmup=args.warmup,
+            peak=lambda: peak_memory_bytes(device),
+        )
+    except torch.OutOfMemoryError:
+        return too_big()
+    finally:
+        for handle in hooks:
+            handle.remove()
+
+    rate = throughput.tokens_per_second
+    print("\nthroughput")
+    print(f"  {rate:,.0f} tokens/s")
+    print(f"  {describe_rate(throughput.flops_per_second(parameters))} sustained")
+    if throughput.peak_bytes:
+        print(f"  peak memory {describe_bytes(throughput.peak_bytes)}")
+
+    full = plan_for(parameters, rate)
+    print(f"\na corpus proportionate to {args.size}")
+    print(
+        f"  {describe_tokens(full.tokens)} tokens, at "
+        f"{TOKENS_PER_PARAMETER} per parameter"
+    )
+    print(f"  {describe_duration(full.seconds)} of continuous training")
+
+    if args.hours:
+        budget = args.hours * 3600
+        affordable = corpus_within(budget, rate)
+        within = Plan(parameters, affordable, rate)
+        print(f"\nwhat {describe_duration(budget)} buys at this size")
+        print(
+            f"  {describe_tokens(affordable)} tokens, "
+            f"{within.tokens_per_parameter:.1f} per parameter"
+        )
+        print(f"  {within.verdict}")
+
+        fits = largest_size_within(budget, throughput.flops_per_second(parameters), args.vocab)
+        if fits is None:
+            print("  no named size trains properly in that time on this machine")
+        elif fits != args.size:
+            trained = get_size(fits).with_vocab(args.vocab)
+            print(
+                f"  {fits} ({humanise(trained.parameter_count())}) is the largest size "
+                f"this machine trains properly in that time"
+            )
+
+    # Twenty tokens per parameter costs 6N x 20N, so the time to train a model
+    # properly goes with the square of its size. That is the number worth
+    # having before a run rather than after one.
+    print(
+        "\nThe cost of training a size properly grows with the square of it: twice "
+        "the\nmodel is four times the wait, because it also wants twice the corpus. "
+        "A model\ntrained on a fifth of what it deserves is beaten by one a fifth "
+        "the size that\ngot all of it."
+    )
     return 0
 
 
@@ -1446,6 +1627,34 @@ def main(argv: list[str] | None = None) -> int:
     reporter.add_argument("--run", required=True)
     reporter.set_defaults(func=command_report)
 
+    planner = subparsers.add_parser(
+        "plan", help="time real steps at a real size, and say what the run will cost"
+    )
+    planner.add_argument("--size", default="base", choices=sorted(SIZES))
+    planner.add_argument("--vocab", type=int, default=32768)
+    planner.add_argument("--batch", type=int, default=4)
+    planner.add_argument("--block", type=int, default=1024)
+    planner.add_argument(
+        "--steps", type=int, default=6, help="timed steps; more is steadier, not faster"
+    )
+    planner.add_argument(
+        "--warmup",
+        type=int,
+        default=2,
+        help="untimed steps first: the first one allocates everything the run uses",
+    )
+    planner.add_argument("--optimizer", default="adamw", choices=("adamw", "adafactor"))
+    planner.add_argument("--fused-step", action="store_true")
+    planner.add_argument("--checkpointing", action="store_true")
+    planner.add_argument(
+        "--hours",
+        type=float,
+        default=None,
+        help="the time actually available, to price a corpus against it",
+    )
+    add_device(planner)
+    planner.set_defaults(func=command_plan)
+
     sampler = subparsers.add_parser("sample", help="generate from a checkpoint")
     sampler.add_argument("--run", required=True)
     sampler.add_argument(
@@ -1704,9 +1913,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except RuntimeError as error:
-        # A device that cannot be used is a configuration problem with a known
-        # fix, not a crash. The message already names the fix.
+    except (RuntimeError, ValueError) as error:
+        # A device that cannot be used, or a combination of flags that cannot
+        # mean anything, is a configuration problem with a known fix rather
+        # than a crash. Every message raised on these paths names the fix, so
+        # printing it beats a traceback through code the reader did not write.
         print(f"error: {error}", file=sys.stderr)
         return 1
 

@@ -14,7 +14,9 @@ from codecraft_model.model import CodeCraftLM
 from codecraft_model.train import (
     TrainConfig,
     build_optimizer,
+    check_fused_step,
     evaluate,
+    install_fused_step,
     learning_rate_at,
     load_checkpoint,
     save_checkpoint,
@@ -631,3 +633,70 @@ def test_the_summary_counts_the_steps_that_ran(learnable_dataset) -> None:
     assert resumed["tokens_per_second"] == pytest.approx(
         resumed["tokens_seen"] / resumed["elapsed_seconds"], rel=1e-6
     )
+
+
+def test_check_fused_step_refuses_accumulation() -> None:
+    """Each gradient is spent the moment it exists, so there is none to add to."""
+    config = TrainConfig(optimizer="adafactor", fused_step=True, grad_accumulation=4)
+    with pytest.raises(ValueError, match="use a larger batch"):
+        check_fused_step(config, scaler_enabled=False)
+
+
+def test_check_fused_step_refuses_adamw() -> None:
+    config = TrainConfig(optimizer="adamw", fused_step=True)
+    with pytest.raises(ValueError, match="use --optimizer adafactor"):
+        check_fused_step(config, scaler_enabled=False)
+
+
+def test_check_fused_step_refuses_a_gradient_scaler() -> None:
+    config = TrainConfig(optimizer="adafactor", fused_step=True)
+    with pytest.raises(ValueError, match="bf16 or fp32"):
+        check_fused_step(config, scaler_enabled=True)
+
+
+def test_check_fused_step_allows_the_one_combination_that_works() -> None:
+    config = TrainConfig(optimizer="adafactor", fused_step=True, grad_accumulation=1)
+    check_fused_step(config, scaler_enabled=False)
+
+
+def test_install_fused_step_frees_every_gradient_as_it_is_produced() -> None:
+    """The whole point: the model is never accompanied by a copy of itself."""
+    config = ModelConfig(
+        vocab_size=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+        d_ff=64, max_seq_len=16,
+    )
+    model = CodeCraftLM(config)
+    training = TrainConfig(optimizer="adafactor", fused_step=True)
+    optimizer = build_optimizer(model, training)
+    hooks = install_fused_step(model, optimizer)
+    assert hooks, "every trainable parameter should have been given a hook"
+
+    before = [parameter.detach().clone() for parameter in model.parameters()]
+    tokens = torch.randint(1, 64, (2, 8))
+    _, loss, _ = model(tokens, targets=tokens)
+    loss.backward()
+
+    assert all(parameter.grad is None for parameter in model.parameters())
+    assert any(
+        not torch.equal(old, new)
+        for old, new in zip(before, model.parameters())
+    ), "the backward pass should have stepped the parameters on its way through"
+
+    for handle in hooks:
+        handle.remove()
+
+
+def test_removing_the_hooks_puts_the_ordinary_behaviour_back() -> None:
+    config = ModelConfig(
+        vocab_size=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+        d_ff=64, max_seq_len=16,
+    )
+    model = CodeCraftLM(config)
+    optimizer = build_optimizer(model, TrainConfig(optimizer="adafactor", fused_step=True))
+    for handle in install_fused_step(model, optimizer):
+        handle.remove()
+
+    tokens = torch.randint(1, 64, (2, 8))
+    _, loss, _ = model(tokens, targets=tokens)
+    loss.backward()
+    assert any(parameter.grad is not None for parameter in model.parameters())
