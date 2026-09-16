@@ -219,6 +219,10 @@ model-evaluate: ## Measure held-out perplexity and throughput
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model evaluate \
 		--run ../../$(MODEL_RUN) --device $(MODEL_DEVICE)
 
+.PHONY: model-doctor
+model-doctor: ## What this machine can train and what it can run
+	@cd $(MODEL) && ../../$(PY) -m codecraft_model doctor --run ../../$(MODEL_RUN)
+
 .PHONY: model-report
 model-report: ## How far a training run is, and when it will finish
 	@cd $(MODEL) && ../../$(PY) -m codecraft_model report --run ../../$(MODEL_RUN)

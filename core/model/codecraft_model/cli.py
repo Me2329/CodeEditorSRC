@@ -461,6 +461,67 @@ def command_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_doctor(args: argparse.Namespace) -> int:
+    """Answer, on this machine, what it can train and what it can run."""
+    from .device import architecture_warning, available_memory_bytes, host_memory_bytes
+    from .doctor import (
+        describe_bytes,
+        describe_recommendation,
+        disk_budget,
+        free_disk_bytes,
+        largest_servable,
+        largest_trainable,
+    )
+
+    device = resolve_device(args.device)
+    print(f"torch {torch.__version__}")
+    print(f"device: {describe_device(device)}")
+
+    warning = architecture_warning(device)
+    if warning:
+        print(f"\n  warning: {warning}\n")
+
+    card = available_memory_bytes(device)
+    host = host_memory_bytes()
+    print("\nmemory")
+    if device.type == "cuda":
+        print(f"  card {describe_bytes(card)}, system {describe_bytes(host)}")
+    else:
+        print(f"  system {describe_bytes(host)}, and no card to use")
+
+    budget = card or host
+    if budget is None:
+        print("  this machine will not say how much memory it has")
+        return 0
+
+    trains = largest_trainable(budget, args.vocab)
+    serves = largest_servable(budget, args.vocab)
+    print(f"  trains: {describe_recommendation(trains, 'trains')}")
+    print(f"  runs:   {describe_recommendation(serves, 'runs')}")
+
+    if trains is not None:
+        costs = disk_budget(get_size(trains.name).with_vocab(args.vocab))
+        where = Path(args.run) if args.run else Path.cwd()
+        free = free_disk_bytes(where)
+        print(f"\ndisk, where {where} is")
+        print(f"  free {describe_bytes(free)}")
+        print(
+            f"  two checkpoints of {trains.name}: "
+            f"{describe_bytes(costs.both_checkpoints_bytes)}"
+        )
+        print(
+            f"  a corpus proportionate to it: {costs.corpus_tokens / 1e9:.0f}B tokens, "
+            f"{describe_bytes(costs.corpus_bytes)}"
+        )
+        print(f"  together {describe_bytes(costs.total_bytes)}")
+        if free is not None and costs.total_bytes > free:
+            print(
+                "\n  that does not fit. Train a smaller size, or a corpus smaller than "
+                "the size deserves, and know which of the two you chose."
+            )
+    return 0
+
+
 def command_report(args: argparse.Namespace) -> int:
     """Read a training run: how far in, still falling, and when it will finish."""
     from .report import (
@@ -1363,6 +1424,21 @@ def main(argv: list[str] | None = None) -> int:
         help="continue from latest.pt, restoring the optimiser state too",
     )
     trainer.set_defaults(func=command_train)
+
+    checker = subparsers.add_parser(
+        "doctor", help="what this machine can train and what it can run"
+    )
+    checker.add_argument(
+        "--run", default=None, help="where the run will be written; defaults to here"
+    )
+    checker.add_argument(
+        "--vocab",
+        type=int,
+        default=32768,
+        help="the vocabulary the sizes are measured with",
+    )
+    add_device(checker)
+    checker.set_defaults(func=command_doctor)
 
     reporter = subparsers.add_parser(
         "report", help="how far a training run is, and when it will finish"

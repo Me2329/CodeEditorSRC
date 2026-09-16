@@ -1144,6 +1144,19 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 740 | The engine remembers how it was asked for | |
 | 741 | A reload asks for the same thing | a server running narrow weights used to come back at full size hours later |
 
+## The first command to run after installing
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 742 | `doctor` answers what this machine can train and what it can run | the numbers are the machine's, not the repository's |
+| 743 | The largest size that trains here, with how to make it fit | |
+| 744 | And the largest that runs here, which is several sizes further | serving holds one copy of the weights rather than four |
+| 745 | The plainest configuration that works is the one recommended | no reason to give up momentum when the ordinary optimiser fits |
+| 746 | Disk for two checkpoints and a corpus proportionate to the size | |
+| 747 | A disk that cannot hold both says so, and names the choice | a smaller model, or a corpus smaller than the model deserves |
+| 748 | The wheel's architecture is checked against the card | a mismatch fails on every kernel launch, hours later |
+| 749 | A machine too small for the smallest size is told so | rather than given a number to misread |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

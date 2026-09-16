@@ -502,3 +502,13 @@ def test_report_reads_a_run_that_has_been_trained(tmp_path, sources, capsys) -> 
 def test_report_on_a_directory_with_no_run_says_so(tmp_path, capsys) -> None:
     assert main(["report", "--run", str(tmp_path)]) == 1
     assert "nothing has been trained" in capsys.readouterr().err
+
+
+def test_doctor_says_what_this_machine_can_do(capsys) -> None:
+    assert main(["doctor"]) == 0
+
+    output = capsys.readouterr().out
+    assert "torch" in output
+    assert "trains:" in output and "runs:" in output
+    # And what the disk would have to hold for the size it recommends.
+    assert "corpus proportionate to it" in output

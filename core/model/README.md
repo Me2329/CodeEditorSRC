@@ -804,6 +804,36 @@ to that, and buys the memory that makes it possible at all. A smaller corpus is
 the honest lever: the same model over five billion tokens is a week, and worse
 in a way that is measurable rather than mysterious.
 
+## The first command to run after installing
+
+Everything above is arithmetic over three numbers: what the card has, what the
+machine has, and what is free on the disk the run will write to. Those are
+properties of your machine rather than of this repository, so there is a command
+that does the arithmetic there.
+
+```
+$ python -m codecraft_model doctor
+torch 2.9.0+cu128
+device: NVIDIA GeForce RTX 5080, sm_120, 16.0GB VRAM, bfloat16
+
+memory
+  card 16.0GB, system 32.0GB
+  trains: xxl (2.29B) with --optimizer adafactor --fused-step
+  runs:   max (4.32B) with --half
+
+disk, where runs/ is
+  free 330.0GB
+  two checkpoints of xxl: 18.3GB
+  a corpus proportionate to it: 46B tokens, 91.4GB
+  together 109.7GB
+```
+
+The plainest configuration that works is the one reported: there is no reason to
+recommend an optimiser that gives up momentum when the ordinary one fits. If the
+disk cannot hold the corpus the size deserves it says so, and says the choice
+plainly — a smaller model, or a corpus smaller than the model deserves — because
+that is a decision rather than an error.
+
 ## Serving weights at half the size
 
 Autocast narrows the matmuls and leaves the weights alone. That is the right
