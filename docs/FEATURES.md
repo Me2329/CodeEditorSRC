@@ -1232,12 +1232,17 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 801 | "Maximum update depth exceeded" reproduced, traced and fixed | it had survived an earlier hunt because it fires about one run in six |
-| 802 | The editor's `value` prop is controlled, so the library writes it back | and that write fires the change handler |
-| 803 | The handler produced a new array on every echo, so nothing ever settled | new `files`, new `activeFile`, new `content` identity, every turn |
-| 804 | It now returns the previous state unchanged when the text already matches | React bails out, and the echo has nowhere to go |
-| 805 | The split editor's handler too | the same pattern, written inline |
-| 806 | The sequence that triggered it reproduced, and traced to that one line | a repeat run against the fix is still in progress, not yet a clean bill |
+| 801 | "Maximum update depth exceeded" reproduced and traced | it survived an earlier hunt because it fires about one run in six |
+| 802 | The cause: the editor's `value` prop was controlled | the library writes that prop into the model whenever the two disagree |
+| 803 | During a burst of typing they disagree constantly | React is a render behind the keystrokes, so the library pushes the older text in |
+| 804 | Monaco reports that as a change, React stores it, and the two trade the same edit | until React gives up |
+| 805 | Equality guards on either side do not touch it | the writes are real writes of different text, so no comparison can see the loop |
+| 806 | Nor does a backstop effect that syncs "only when they disagree" | a keystroke landing between the event and the effect makes the model the newer one |
+| 807 | Monaco now owns the buffer: `defaultValue` and a key per file | state follows the editor and never drives it |
+| 808 | Every outside writer pushes its edit in at its own call site | restore, replace-all, rename and the agent already did |
+| 809 | Both change handlers are idempotent regardless | an edit that changes nothing is not an edit |
+| 810 | The cursor handler too | it fires on every write to the model, including ones the user did not make |
+| 811 | Checked: typing, rename, one-step undo, reload, switching between two files | shown text compared against stored state, not against the screen alone |
 
 ## Not implemented
 

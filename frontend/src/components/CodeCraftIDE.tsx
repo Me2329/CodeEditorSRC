@@ -730,28 +730,15 @@ export function CodeCraftIDE() {
     [loadTemplate],
   );
 
-  /**
-   * Take an edit from the editor, unless it is one we already have.
-   *
-   * The `value` prop is controlled, so the library writes it back into the
-   * model whenever the two disagree, and that write fires this handler. When
-   * this handler always produced a new array — as it did — every turn of that
-   * wheel handed React a new `files`, a new `activeFile` and a new `content`
-   * identity, so the comparison never settled and the two sides drove each
-   * other until React gave up with "Maximum update depth exceeded". It needed
-   * a burst of edits to get going, which is why it showed up while typing and
-   * roughly one time in six rather than every time.
-   *
-   * Returning `previous` unchanged when the text already matches is what ends
-   * it: React bails out of the re-render, the prop keeps its identity, and the
-   * echo has nowhere to go. It is also the right thing on its own terms — an
-   * edit that changes nothing is not an edit.
-   */
+  /** Take an edit from the editor. */
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value === undefined || !activeFile) return;
       setFiles((previous) => {
         const current = previous.find((file) => file.id === activeFile.id);
+        // An edit that changes nothing is not an edit, and returning the same
+        // state lets React skip the re-render rather than allocate a new array
+        // holding the same strings.
         if (!current || current.content === value) return previous;
         return previous.map((file) =>
           file.id === activeFile.id ? { ...file, content: value } : file,
@@ -760,6 +747,31 @@ export function CodeCraftIDE() {
     },
     [activeFile],
   );
+
+  /**
+   * Nothing here syncs the model from state, and that is the fix.
+   *
+   * "Maximum update depth exceeded" — reported some while ago, hunted across
+   * eighty browser runs without reproducing, and finally caught here about one
+   * run in six — came from the editor's `value` prop being controlled. The
+   * library writes that prop into the model whenever the two disagree, and
+   * during a burst of typing they disagree constantly, because React is a
+   * render behind the keystrokes. So the library pushed the older text in,
+   * Monaco reported that as a change, React stored it and re-rendered, and the
+   * two traded the same edit until React gave up.
+   *
+   * Two rounds of equality guards did not touch it, because the writes are
+   * real writes of genuinely different text: no comparison on either side can
+   * see that the exchange is a loop. Nor did a backstop effect that pushed
+   * state into the model "only when they disagree" — that is the same loop
+   * with one more hop, since a keystroke landing between the change event and
+   * the effect makes them disagree with the *model* holding the newer text.
+   *
+   * So Monaco owns the buffer. `defaultValue` and a `key` per file load it;
+   * everything that edits a file from outside pushes that edit in at its own
+   * call site with `executeEdits`, which restore, replace-all, rename and the
+   * agent all already did. State follows the editor and never drives it.
+   */
 
   /**
    * Put an earlier version of a file back.
@@ -1438,7 +1450,17 @@ export function CodeCraftIDE() {
       // The assistant answers about where the caret is and what is selected,
       // so both are tracked as they change.
       editor.onDidChangeCursorPosition((event) => {
-        setCaret({ line: event.position.lineNumber, column: event.position.column });
+        // Idempotent, for the reason the change handler above is. A cursor
+        // event fires whenever the model is written to, including by the
+        // library writing the controlled `value` back; handing React a fresh
+        // object each time re-renders on a caret that has not moved, and a
+        // re-render is what provokes the next write.
+        setCaret((current) =>
+          current.line === event.position.lineNumber &&
+          current.column === event.position.column
+            ? current
+            : { line: event.position.lineNumber, column: event.position.column },
+        );
 
         // Applying a back or forward moves the caret too; recording that would
         // bury the place we just came from under the place we just went to.
@@ -2439,7 +2461,9 @@ export function CodeCraftIDE() {
                   height="100%"
                   language={activeFile.language}
                   theme={editorTheme}
-                  value={activeFile.content}
+                  // Not `value`: a controlled buffer fights the typist. See
+                  // the sync effect beside `handleEditorChange`.
+                  defaultValue={activeFile.content}
                   onChange={handleEditorChange}
                   onMount={handleEditorMount}
                   loading={
@@ -2477,7 +2501,9 @@ export function CodeCraftIDE() {
                       height="100%"
                       language={splitFile.language}
                       theme={editorTheme}
-                      value={splitFile.content}
+                      // Monaco owns this buffer too, for the reason the
+                      // main editor's does.
+                      defaultValue={splitFile.content}
                       onChange={(value) => {
                         if (value === undefined) return;
                         // Idempotent for the same reason the main editor's
