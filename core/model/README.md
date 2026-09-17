@@ -885,6 +885,56 @@ throughput
 If the fold ever costs the fused path, that line says so and says which way
 round to run it.
 
+## The largest tensor in a step, and the least interesting one
+
+The output head is the biggest matrix in the model, and it makes the biggest
+tensor in a training step. At `xxl`'s shape — batch 4, context 1024, a vocabulary
+of 32768 — the logits are 134 million numbers, half a gigabyte in float32, and
+cross entropy needs roughly that again for its own backward pass. None of it is
+interesting. Every one of those numbers is consumed immediately to produce a
+single scalar and then thrown away.
+
+So they are made in pieces. The sequence is split, each piece is projected and
+scored on its own, and the pieces are summed. On its own that saves nothing,
+because autograd keeps every piece for the backward pass — the saving comes from
+*recomputing* each piece during backward rather than keeping it, which is the
+same trade gradient checkpointing makes everywhere else and costs one extra pass
+through a single matrix multiply.
+
+```bash
+python -m codecraft_model train --run runs/big --size xxl \
+    --optimizer adafactor --fused-step --loss-chunk 512
+```
+
+Measured here, on a 32768-token vocabulary at batch 4 and context 1024:
+
+| | peak memory | time per step |
+| --- | --- | --- |
+| whole sequence | 3433MB | 2057ms |
+| `--loss-chunk 1024` | 2458MB | 2301ms |
+| `--loss-chunk 512` | 2234MB | 2367ms |
+| `--loss-chunk 256` | 2142MB | 2232ms |
+
+About a third of the peak memory for about a tenth of the step time. That is a
+trade, not a free win, and it is worth making exactly when memory is the thing
+that is binding — which on one card at this size it is, since what the memory
+buys is a batch that would not otherwise fit.
+
+The agreement is the part that had to be right, because a run trained with this
+has to be comparable with one trained without it or the difference shows up as a
+hyperparameter nobody changed. In float64 the value and the gradient are both
+*exactly* equal to `F.cross_entropy`. In float32 the gradient is still
+bit-identical and the value differs by about 5e-7 on a loss of order 6, which is
+the reassociation from summing in a different order and nothing more. It is not
+bit-exact in float32 and does not claim to be. Twelve optimiser steps run both
+ways from the same seed stay within 5e-7 of each other the whole way, so the
+difference does not compound; that comparison is a test rather than a note.
+
+One deliberate difference from `F.cross_entropy`: a batch in which every target
+is padding returns zero rather than NaN. The division is by the number of tokens
+that counted, and when that is zero there is nothing to average — and one NaN
+poisons every weight in the model on the next step.
+
 ## The constraint memory arithmetic hides
 
 `doctor` answers whether a size fits. Fitting is the easier half. A 2.29B model

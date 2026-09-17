@@ -80,6 +80,13 @@ class TrainConfig:
     # all. See `optimizer.py`.
     optimizer: str = "adamw"
 
+    # Score the sequence in pieces rather than projecting all of it at once,
+    # recomputing each piece during the backward pass. Trades about a tenth of
+    # the step time for about a third of the peak memory; worth it exactly when
+    # memory is what is binding, which on one card it usually is. None keeps
+    # the whole-sequence projection. See `loss.py`.
+    loss_chunk_size: int | None = None
+
     # Update each parameter as soon as its gradient is final, inside the
     # backward pass, and free the gradient there and then. The model is then
     # never accompanied by a second full copy of itself: peak memory becomes the
@@ -340,6 +347,7 @@ def train(
     torch.manual_seed(config.seed)
     generator = np.random.default_rng(config.seed)
 
+    model.loss_chunk_size = config.loss_chunk_size
     optimizer = build_optimizer(model, config)
 
     if config.fused_step:

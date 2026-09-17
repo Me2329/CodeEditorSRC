@@ -243,6 +243,9 @@ class CodeCraftLM(nn.Module):
         # Off by default: it is a memory-for-time trade, and a run that fits
         # should not pay for it.
         self.gradient_checkpointing = False
+        #: Tokens per piece when scoring, or None to project the whole sequence
+        #: at once. Set by the training loop; generation never uses it.
+        self.loss_chunk_size: int | None = None
 
         self.apply(self._init_weights)
         # Scale the projections that write into the residual stream by depth, so
@@ -347,6 +350,20 @@ class CodeCraftLM(nn.Module):
         x = self.final_norm(x)
 
         loss = None
+        if targets is not None and self.loss_chunk_size and not project_all:
+            # The logits are the largest tensor in a step and the least
+            # interesting: consumed at once to make a scalar, then discarded.
+            # Making them a piece at a time and recomputing each piece during
+            # the backward pass trades one matrix multiply for most of that
+            # memory. See `loss.py`.
+            from .loss import chunked_cross_entropy
+
+            loss = chunked_cross_entropy(
+                self.output_head, x, targets, chunk_size=self.loss_chunk_size
+            )
+            # Nothing asked for the logits, so none were kept.
+            return None, loss, new_caches
+
         if targets is not None or project_all:
             logits = self.output_head(x)
         if targets is not None:

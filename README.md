@@ -69,7 +69,7 @@ Monaco as inline markers.
 
 **The editor conveniences you expect**: command palette, quick open, go to
 symbol, find and replace, format, five themes, zen mode, a status bar, and
-persisted preferences. `docs/FEATURES.md` lists all 1000 with what each one does,
+persisted preferences. `docs/FEATURES.md` lists all 1023 with what each one does,
 and states plainly what is *not* built.
 
 **Rename across the workspace**, F2, and it proposes rather than acts. There is
