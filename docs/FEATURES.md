@@ -1550,6 +1550,8 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1046 | The declared MSRVs were corrected from 1.75 and 1.70 to 1.85 | they were below what the locked tree needed, so cargo never complained up front |
 | 1047 | Which is why the error named a dependency nobody chose | "failed to parse manifest" for a transitive crate reads like a bug in it |
 | 1048 | A comment in the Dockerfile ties the pin to the lockfiles | the coupling is invisible from either file on its own |
+| 1049 | Verified by running the step that failed, inside the pinned image | `cargo build --release --locked` on both crates, against the real lockfiles |
+| 1050 | The crates that caused the failure compile: ureq 3.4.0, ureq-proto 0.6.1 | assistant in 40.7s, supervisor in 6.5s |
 
 ## Not implemented
 
