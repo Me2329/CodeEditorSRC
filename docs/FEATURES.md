@@ -1404,6 +1404,90 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 940 | And is hidden when there is nothing to bring back | |
 | 941 | Restoring a file that is somehow already open changes nothing | |
 
+## Measuring a file's whitespace rather than assuming it
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 942 | A file's real indentation is measured from the file | a browser editor has no `.editorconfig` to read and no git to ask |
+| 943 | The step between levels is what is counted, not the absolute indent | a file indented by two has lines at 4, 6 and 8, which would make 2 look rare |
+| 944 | Two, four and eight space indentation are all found | |
+| 945 | Tabs are found | |
+| 946 | A file using both is flagged as mixed | |
+| 947 | A step too large to be an indent is ignored | |
+| 948 | Blank lines are ignored | |
+| 949 | How much of the file agreed with the answer is reported | a guess that says how sure it is |
+| 950 | A file with no indentation says so, rather than guessing | |
+| 951 | One command sets the editor to match the file it is showing | the setting is a guess for every file at once |
+| 952 | Line endings are detected: LF, CRLF, a lone CR, or none | |
+| 953 | A CRLF is not double-counted as an LF as well | |
+| 954 | A file with more than one kind is flagged | no tool produces that on purpose, and every diff notices |
+| 955 | The dominant kind is reported for a mixed file | |
+| 956 | Convert every line ending to LF or CRLF | |
+| 957 | Conversion is idempotent | |
+| 958 | A file with no line endings is left alone | |
+| 959 | Trailing whitespace is reported by line | |
+| 960 | Tabs and spaces in the same indent are reported | |
+| 961 | An invisible space that is not a space is reported | what a paste from a web page leaves behind |
+| 962 | Several problems on one line are all reported | |
+| 963 | One command says the indentation, the endings and what needs tidying | |
+| 964 | `words()` has one implementation again | the text toolkit and the transforms had drifted into two identical copies |
+
+## Editing every occurrence at once
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 965 | Select every occurrence of the name under the caret, Ctrl+Shift+L | |
+| 966 | Add the next occurrence to the selection, Ctrl+D | |
+| 967 | Code only: comments and strings are counted and left alone | typing into a string you forgot was selected is found much later |
+| 968 | And the count of what was left out is reported | measured in a browser: 3 selected, 2 left out, all three replaced by typing once |
+| 969 | Whole-word, so `save` does not select inside `autosave` | |
+| 970 | The classification uses the same scanner as rename and brackets | one table for the whole family |
+| 971 | A selection, rather than the caret's word, is used when there is one | |
+| 972 | Ctrl+D grows the set rather than replacing it | which is what makes the key work pressed repeatedly |
+| 973 | And says so once every occurrence is already selected | rather than appearing to do nothing |
+| 974 | Stepping wraps round | so the key comes back rather than silently stopping |
+| 975 | Either edge of an occurrence counts as being inside it | |
+| 976 | Completes the family: go to it, list them, rename them, edit them at once | |
+
+## The family these four share
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 977 | Go-to-definition moves the caret | F12 |
+| 978 | Find references lists them across the workspace | Shift+F12 |
+| 979 | Rename rewrites them after showing you where | F2 |
+| 980 | Multi-cursor edits them at once, in this file | Ctrl+Shift+L |
+| 981 | All four match the spelling of a name, not the identity of a thing | there is no language server, and each one says so |
+| 982 | All four share one comment-and-string scanner | added a language once, and all four understand it |
+| 983 | The two that only move the caret are permissive | a wrong answer costs a keystroke |
+| 984 | The two that write are conservative, and show their work first | a wrong answer costs a workspace |
+
+## Things found by driving the editor rather than reading it
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 985 | The go-to box's Enter no longer reaches the editor behind it | it inserted a newline and left the caret past the target |
+| 986 | A keyword can no longer be renamed | `def` matches the identifier pattern and occurs in every Python file |
+| 987 | The rename panel shows the count on open, not a scolding | it said "that is already the name" before anything was typed |
+| 988 | Monaco theme ids with dots are rejected, so they are rewritten | one blanked the whole application |
+| 989 | Every `when: 'editor'` keybinding was dead before a scope was passed | |
+| 990 | A render loop survives every equality guard tried against it | still open, and documented as open |
+
+## Where the editor says what it cannot do
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 991 | The rename panel says on screen that it matches spelling | not in a source comment nobody reads |
+| 992 | The occurrence count says what it left out, and why | |
+| 993 | A file named in the go-to box that is not open is refused | rather than going to line 42 of the wrong file |
+| 994 | An unknown language falls back to C-family comments, and says nothing false | |
+| 995 | An unknown language's keywords fall back to control flow only | refusing costs a message, allowing costs the file |
+| 996 | A language with no line or block comment says so when asked to toggle | |
+| 997 | Indentation detection reports how much of the file agreed | a guess that says how sure it is |
+| 998 | A file with no indentation says so rather than guessing a width | |
+| 999 | A regular expression literal is reported as code, and the limit is written down | telling it from a division needs a parse |
+| 1000 | `docs/FEATURES.md` ends with what is *not* built | so the list above can be trusted |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

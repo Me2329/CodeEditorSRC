@@ -81,6 +81,20 @@ import {
   trimTrailingWhitespace,
   uniqueLines,
 } from '../lib/transforms';
+import {
+  describeEndings,
+  describeIndentation,
+  detectIndentation,
+  detectLineEndings,
+  normaliseLineEndings,
+  whitespaceProblems,
+} from '../lib/whitespace';
+import {
+  codeOnly as codeOccurrences,
+  findAll as findOccurrences,
+  nextAfter as nextOccurrence,
+  summarise as summariseOccurrences,
+} from '../lib/occurrences';
 import type { RenameEdit } from '../lib/rename';
 import { describeRename, planRename, whyNotRenamable } from '../lib/rename';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
@@ -1545,6 +1559,89 @@ export function CodeCraftIDE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Put a cursor on every occurrence of the name under the caret.
+   *
+   * Code only. Typing into a string you had forgotten was selected is a change
+   * you find out about much later, so the ones in comments and strings are
+   * counted, reported and left alone.
+   */
+  const handleSelectOccurrences = useCallback((which: 'all' | 'next') => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const selections = editor.getSelections() ?? [];
+    const first = selections[0];
+    const name =
+      first && !first.isEmpty()
+        ? model.getValueInRange(first)
+        : (model.getWordAtPosition(position)?.word ?? '');
+    if (!isName(name)) {
+      notify('Put the caret on a name first.');
+      return;
+    }
+
+    const all = findOccurrences(model.getValue(), name, model.getLanguageId());
+    const code = codeOccurrences(all);
+    if (code.length === 0) {
+      notify('No occurrence of that name in this file.');
+      return;
+    }
+
+    // `setSelections` wants the anchor-and-position form, not the
+    // start-and-end one, so each occurrence is described that way.
+    const toRange = (offset: number, length: number) => {
+      const start = model.getPositionAt(offset);
+      const end = model.getPositionAt(offset + length);
+      return {
+        selectionStartLineNumber: start.lineNumber,
+        selectionStartColumn: start.column,
+        positionLineNumber: end.lineNumber,
+        positionColumn: end.column,
+      };
+    };
+
+    if (which === 'all') {
+      editor.setSelections(code.map((one) => toRange(one.offset, one.length)));
+      notify(summariseOccurrences(all));
+      editor.focus();
+      return;
+    }
+
+    // "Next" grows the set rather than replacing it, which is what makes the
+    // key work pressed repeatedly.
+    const last = selections[selections.length - 1];
+    const from = last
+      ? model.getOffsetAt({ lineNumber: last.endLineNumber, column: last.endColumn })
+      : model.getOffsetAt(position);
+    const next = nextOccurrence(code, from);
+    if (!next) return;
+    const already = selections.some((range) => {
+      const start = model.getOffsetAt({
+        lineNumber: range.startLineNumber,
+        column: range.startColumn,
+      });
+      return start === next.offset;
+    });
+    if (already) {
+      notify(`Every occurrence of ${name} is selected.`);
+      return;
+    }
+    editor.setSelections([
+      ...selections.map((range) => ({
+        selectionStartLineNumber: range.selectionStartLineNumber,
+        selectionStartColumn: range.selectionStartColumn,
+        positionLineNumber: range.positionLineNumber,
+        positionColumn: range.positionColumn,
+      })),
+      toRange(next.offset, next.length),
+    ]);
+    editor.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -2340,6 +2437,69 @@ export function CodeCraftIDE() {
         category: 'Navigate',
         shortcut: 'Shift+F12',
         run: handleFindReferences,
+      },
+      {
+        id: 'edit.whitespace.match',
+        title: 'Match this file\'s own indentation',
+        category: 'Edit',
+        run: () => {
+          const model = editorRef.current?.getModel();
+          if (!model) return;
+          const found = detectIndentation(model.getValue(), preferences.tabSize);
+          if (found.kind === 'unknown') {
+            notify('This file has no indentation to read.');
+            return;
+          }
+          // The setting is the editor's guess for every file at once; the file
+          // is the only thing that knows what it actually uses.
+          updatePreference('tabSize', found.width);
+          notify(`${describeIndentation(found)} — the setting now matches`);
+        },
+      },
+      {
+        id: 'edit.whitespace.report',
+        title: 'What is this file\'s whitespace?',
+        category: 'Edit',
+        run: () => {
+          const model = editorRef.current?.getModel();
+          if (!model) return;
+          const text = model.getValue();
+          const problems = whitespaceProblems(text);
+          notify(
+            `${describeIndentation(detectIndentation(text, preferences.tabSize))}, ` +
+              `${describeEndings(detectLineEndings(text))}` +
+              (problems.length > 0
+                ? `, ${problems.length} thing${problems.length === 1 ? '' : 's'} to tidy`
+                : ', nothing to tidy'),
+          );
+        },
+      },
+      {
+        id: 'edit.endings.lf',
+        title: 'Use LF line endings',
+        category: 'Edit',
+        run: () => applyToFile((text) => normaliseLineEndings(text, 'LF'), 'Line endings are now LF'),
+      },
+      {
+        id: 'edit.endings.crlf',
+        title: 'Use CRLF line endings',
+        category: 'Edit',
+        run: () =>
+          applyToFile((text) => normaliseLineEndings(text, 'CRLF'), 'Line endings are now CRLF'),
+      },
+      {
+        id: 'edit.occurrences.all',
+        title: 'Select every occurrence of this name',
+        category: 'Edit',
+        shortcut: 'Ctrl+Shift+L',
+        run: () => handleSelectOccurrences('all'),
+      },
+      {
+        id: 'edit.occurrences.next',
+        title: 'Add the next occurrence to the selection',
+        category: 'Edit',
+        shortcut: 'Ctrl+D',
+        run: () => handleSelectOccurrences('next'),
       },
       {
         id: 'navigate.goto',

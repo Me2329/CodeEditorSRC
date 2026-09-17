@@ -123,6 +123,8 @@ export const DEFAULT_BINDINGS: readonly Binding[] = [
   { command: 'edit.lines.duplicate', keys: 'alt+shift+ArrowDown', when: 'editor' },
   { command: 'edit.lines.delete', keys: 'mod+shift+k', when: 'editor' },
   { command: 'edit.lines.join', keys: 'mod+j', when: 'editor' },
+  { command: 'edit.occurrences.all', keys: 'mod+shift+l', when: 'editor' },
+  { command: 'edit.occurrences.next', keys: 'mod+d', when: 'editor' },
   { command: 'navigate.goto', keys: 'mod+g' },
   { command: 'navigate.matchBracket', keys: 'mod+shift+backslash', when: 'editor' },
   { command: 'edit.expandSelection', keys: 'alt+shift+ArrowRight', when: 'editor' },

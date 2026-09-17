@@ -7,6 +7,9 @@
  */
 
 import type { Extension, TextActionContribution } from '../types';
+import { words } from '../../transforms';
+
+export { words };
 
 // ------------------------------------------------------------------- casing
 
@@ -28,14 +31,6 @@ export function toTitleCase(text: string): string {
   return text.replace(/\w\S*/g, (word) => capitalise(word));
 }
 
-/** Split an identifier however it is written: camel, snake, kebab or spaced. */
-export function words(identifier: string): string[] {
-  return identifier
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .split(/[\s_\-.]+/)
-    .filter(Boolean);
-}
 
 export const toCamelCase = (text: string) =>
   words(text)
