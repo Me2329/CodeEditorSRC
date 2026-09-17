@@ -40,6 +40,33 @@ import {
   describeDeclarations,
   isName,
 } from '../lib/definitions';
+import {
+  type Bookmark,
+  describe as describeBookmarks,
+  prune as pruneBookmarks,
+  reconcile as reconcileBookmarks,
+  step as stepBookmark,
+  toggle as toggleBookmark,
+} from '../lib/bookmarks';
+import { describeToggle, toggleBlockComment, toggleLineComment } from '../lib/comments';
+import {
+  type CaseStyle,
+  type NameStyle,
+  changeCase,
+  changeNameStyle,
+  convertIndentation,
+  ensureFinalNewline,
+  joinLineRun,
+  moveLines,
+  overLines,
+  removeBlankLines,
+  reverseLines,
+  shiftIndentation,
+  sortLines,
+  statisticsOf,
+  trimTrailingWhitespace,
+  uniqueLines,
+} from '../lib/transforms';
 import type { RenameEdit } from '../lib/rename';
 import { describeRename, planRename, whyNotRenamable } from '../lib/rename';
 import { contextAround, shouldRequest, tidy, worthShowing } from '../lib/inline';
@@ -183,6 +210,8 @@ export function CodeCraftIDE() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The name a rename was asked for, or null when no rename is open. */
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** Places worth coming back to, across every open file. */
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
   // Told apart from "this file declares nothing", which looks identical in an
   // empty list and means something completely different. A message rather than
@@ -192,6 +221,7 @@ export function CodeCraftIDE() {
   // Read by the definition lookup, which is registered once and must not go
   // stale as the index is refreshed.
   const symbolsRef = useRef<WorkspaceSymbol[]>([]);
+  const bookmarksRef = useRef<Bookmark[]>([]);
   // A search the editor asked for rather than the user typed. A new object
   // each time, so asking twice for the same name is two requests.
   const [searchRequest, setSearchRequest] = useState<
@@ -508,6 +538,7 @@ export function CodeCraftIDE() {
   activeFileIdRef.current = activeFile?.id ?? '';
   filesRef.current = files;
   symbolsRef.current = symbols;
+  bookmarksRef.current = bookmarks;
 
   /**
    * Persist the workspace so a refresh does not discard work in progress.
@@ -1100,6 +1131,286 @@ export function CodeCraftIDE() {
     },
     [renaming],
   );
+
+  /**
+   * Run a transformation over the lines the selection touches.
+   *
+   * Through `executeEdits` rather than by replacing the model, so one Ctrl+Z
+   * takes it back, and over whole lines rather than the exact selection,
+   * because sorting half of one line and all of the next is not a thing anyone
+   * means. With no selection it acts on the line the caret is on.
+   */
+  const applyToLines = useCallback(
+    (change: (lines: string[], language: string) => string[], describe?: (count: number) => string) => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      const range = editor?.getSelection();
+      if (!editor || !model || !range) return;
+
+      const from = Math.min(range.startLineNumber, range.endLineNumber);
+      // A selection that ends at column one of the next line has not really
+      // reached that line; taking it would comment a line nobody highlighted.
+      const rawTo = Math.max(range.startLineNumber, range.endLineNumber);
+      const to = rawTo > from && range.endColumn === 1 ? rawTo - 1 : rawTo;
+
+      const before = model.getValue();
+      const after = overLines(before, from, to, (lines) =>
+        change(lines, model.getLanguageId()),
+      );
+      if (after === before) return;
+
+      editor.executeEdits('codecraft-transform', [
+        { range: model.getFullModelRange(), text: after },
+      ]);
+      editor.setSelection({
+        startLineNumber: from,
+        startColumn: 1,
+        endLineNumber: Math.min(to, model.getLineCount()),
+        endColumn: model.getLineMaxColumn(Math.min(to, model.getLineCount())),
+      });
+      if (describe) notify(describe(to - from + 1));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /** Rewrite the whole file, for the operations that are not per-line. */
+  const applyToFile = useCallback((change: (text: string) => string, note?: string) => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const before = model.getValue();
+    const after = change(before);
+    if (after === before) {
+      if (note) notify('Nothing to change.');
+      return;
+    }
+    const position = editor.getPosition();
+    editor.executeEdits('codecraft-transform', [
+      { range: model.getFullModelRange(), text: after },
+    ]);
+    if (position) editor.setPosition(position);
+    if (note) notify(note);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Rewrite just what is selected, leaving the rest of the line alone. */
+  const applyToSelection = useCallback((change: (text: string) => string, note?: string) => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const range = editor?.getSelection();
+    if (!editor || !model || !range) return;
+    if (range.isEmpty()) {
+      // Case changes and name-style changes want a word, and the word under
+      // the caret is what the caret is pointing at.
+      const word = model.getWordAtPosition(editor.getPosition()!);
+      if (!word) {
+        notify('Select something first, or put the caret on a word.');
+        return;
+      }
+      const wordRange = {
+        startLineNumber: editor.getPosition()!.lineNumber,
+        startColumn: word.startColumn,
+        endLineNumber: editor.getPosition()!.lineNumber,
+        endColumn: word.endColumn,
+      };
+      editor.executeEdits('codecraft-transform', [
+        { range: wordRange, text: change(word.word) },
+      ]);
+      if (note) notify(note);
+      return;
+    }
+    const text = model.getValueInRange(range);
+    const changed = change(text);
+    if (changed === text) return;
+    editor.executeEdits('codecraft-transform', [{ range, text: changed }]);
+    if (note) notify(note);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Move the selected lines, keeping them selected where they land. */
+  const handleMoveLines = useCallback((direction: 'up' | 'down') => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const range = editor?.getSelection();
+    if (!editor || !model || !range) return;
+
+    const from = Math.min(range.startLineNumber, range.endLineNumber);
+    const rawTo = Math.max(range.startLineNumber, range.endLineNumber);
+    const to = rawTo > from && range.endColumn === 1 ? rawTo - 1 : rawTo;
+
+    const moved = moveLines(model.getValue(), from, to, direction);
+    if (moved.text === model.getValue()) return;
+    editor.executeEdits('codecraft-transform', [
+      { range: model.getFullModelRange(), text: moved.text },
+    ]);
+    editor.setSelection({
+      startLineNumber: moved.from,
+      startColumn: 1,
+      endLineNumber: moved.to,
+      endColumn: model.getLineMaxColumn(Math.min(moved.to, model.getLineCount())),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Comment the selection out, or put it back.
+   *
+   * The delimiters come from the same table that tells code from prose for a
+   * rename, so a language added there works here without a second list.
+   */
+  const handleToggleComment = useCallback((kind: 'line' | 'block') => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const range = editor?.getSelection();
+    if (!editor || !model || !range) return;
+
+    if (kind === 'block') {
+      const target = range.isEmpty()
+        ? {
+            startLineNumber: range.startLineNumber,
+            startColumn: 1,
+            endLineNumber: range.startLineNumber,
+            endColumn: model.getLineMaxColumn(range.startLineNumber),
+          }
+        : range;
+      const plan = toggleBlockComment(model.getValueInRange(target), model.getLanguageId());
+      if (plan.action === 'nothing') {
+        notify('This language has no block comment.');
+        return;
+      }
+      editor.executeEdits('codecraft-comment', [{ range: target, text: plan.text }]);
+      return;
+    }
+
+    let action: 'comment' | 'uncomment' | 'nothing' = 'nothing';
+    applyToLines(
+      (lines, language) => {
+        const plan = toggleLineComment(lines, language);
+        action = plan.action;
+        return plan.lines;
+      },
+      (count) => describeToggle(action, count),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyToLines]);
+
+  /** Set a bookmark on the caret line, or clear the one already there. */
+  const handleToggleBookmark = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    const fileId = activeFileIdRef.current;
+    if (!editor || !model || !position || !fileId) return;
+    setBookmarks((current) => {
+      const next = toggleBookmark(current, fileId, position.lineNumber, model.getValue());
+      notify(describeBookmarks(next));
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Cycle to the next or previous bookmark, across files. */
+  const handleStepBookmark = useCallback(
+    (direction: 'next' | 'previous') => {
+      const editor = editorRef.current;
+      const position = editor?.getPosition();
+      const fileId = activeFileIdRef.current;
+      if (!position || !fileId) return;
+      const target = stepBookmark(bookmarksRef.current, fileId, position.lineNumber, direction);
+      if (!target) {
+        notify('No bookmarks. Set one with Ctrl+Alt+K.');
+        return;
+      }
+      if (target.fileId === fileId) {
+        handleJumpToLine(target.line);
+        return;
+      }
+      setActiveFileId(target.fileId);
+      window.setTimeout(() => handleJumpToLine(target.line), 60);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  );
+
+  /**
+   * Keep bookmarks pointing at the lines they were put on.
+   *
+   * A bookmark that stores a bare line number quietly lies: insert ten lines
+   * above it and it points ten lines short, which is worse than having none,
+   * because it still looks like it worked. Each one carries the text of its
+   * line and is moved to wherever that text went; if the text is gone, so is
+   * the bookmark.
+   *
+   * Debounced, because doing this on every keystroke would walk the file once
+   * per character for a result nobody can see until they navigate.
+   */
+  useEffect(() => {
+    if (bookmarks.length === 0) return;
+    const fileId = activeFile?.id;
+    const content = activeFile?.content;
+    if (!fileId || content === undefined) return;
+    const timer = window.setTimeout(() => {
+      setBookmarks((current) => {
+        const moved = reconcileBookmarks(current, fileId, content);
+        // Returning the same array where nothing moved keeps this from
+        // re-rendering on every pause in typing.
+        const same =
+          moved.length === current.length &&
+          moved.every((mark, index) => {
+            const before = current[index];
+            return before && before.fileId === mark.fileId && before.line === mark.line;
+          });
+        return same ? current : moved;
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [activeFile?.id, activeFile?.content, bookmarks.length]);
+
+  /** A bookmark in a file that no longer exists points at nothing. */
+  useEffect(() => {
+    setBookmarks((current) => {
+      const kept = pruneBookmarks(current, files.map((file) => file.id));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [files]);
+
+  /**
+   * Show the bookmarks in the gutter.
+   *
+   * A bookmark you cannot see is a bookmark you forget you set, and then one
+   * you are surprised by. The decorations are replaced wholesale rather than
+   * diffed, which is what Monaco's collection is for.
+   */
+  const bookmarkDecorations = useRef<string[]>([]);
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const fileId = activeFile?.id ?? '';
+    const mine = bookmarks.filter((mark) => mark.fileId === fileId);
+    bookmarkDecorations.current = editor.deltaDecorations(
+      bookmarkDecorations.current,
+      mine
+        .filter((mark) => mark.line <= model.getLineCount())
+        .map((mark) => ({
+          range: {
+            startLineNumber: mark.line,
+            startColumn: 1,
+            endLineNumber: mark.line,
+            endColumn: 1,
+          },
+          options: {
+            isWholeLine: true,
+            linesDecorationsClassName: 'codecraft-bookmark',
+            overviewRuler: {
+              color: '#6366f1',
+              position: 1,
+            },
+          },
+        })),
+    );
+  }, [bookmarks, activeFile?.id, activeFile?.content]);
 
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
@@ -1896,6 +2207,254 @@ export function CodeCraftIDE() {
         category: 'Navigate',
         shortcut: 'Shift+F12',
         run: handleFindReferences,
+      },
+      {
+        id: 'edit.comment.line',
+        title: 'Toggle line comment',
+        category: 'Edit',
+        shortcut: 'Ctrl+/',
+        run: () => handleToggleComment('line'),
+      },
+      {
+        id: 'edit.comment.block',
+        title: 'Toggle block comment',
+        category: 'Edit',
+        shortcut: 'Shift+Alt+A',
+        run: () => handleToggleComment('block'),
+      },
+      {
+        id: 'edit.lines.moveUp',
+        title: 'Move lines up',
+        category: 'Edit',
+        shortcut: 'Alt+Up',
+        run: () => handleMoveLines('up'),
+      },
+      {
+        id: 'edit.lines.moveDown',
+        title: 'Move lines down',
+        category: 'Edit',
+        shortcut: 'Alt+Down',
+        run: () => handleMoveLines('down'),
+      },
+      {
+        id: 'edit.lines.duplicate',
+        title: 'Duplicate lines',
+        category: 'Edit',
+        shortcut: 'Shift+Alt+Down',
+        run: () => applyToLines((lines) => [...lines, ...lines]),
+      },
+      {
+        id: 'edit.lines.delete',
+        title: 'Delete lines',
+        category: 'Edit',
+        shortcut: 'Ctrl+Shift+K',
+        run: () => applyToLines(() => []),
+      },
+      {
+        id: 'edit.lines.join',
+        title: 'Join lines',
+        category: 'Edit',
+        shortcut: 'Ctrl+J',
+        run: () => applyToLines(joinLineRun),
+      },
+      {
+        id: 'edit.lines.sort',
+        title: 'Sort lines',
+        category: 'Edit',
+        run: () => applyToLines((lines) => sortLines(lines), (n) => `Sorted ${n} lines`),
+      },
+      {
+        id: 'edit.lines.sortDescending',
+        title: 'Sort lines, descending',
+        category: 'Edit',
+        run: () =>
+          applyToLines((lines) => sortLines(lines, { descending: true }), (n) => `Sorted ${n} lines`),
+      },
+      {
+        id: 'edit.lines.reverse',
+        title: 'Reverse lines',
+        category: 'Edit',
+        run: () => applyToLines((lines) => reverseLines(lines)),
+      },
+      {
+        id: 'edit.lines.unique',
+        title: 'Remove duplicate lines',
+        category: 'Edit',
+        run: () =>
+          applyToLines(
+            (lines) => uniqueLines(lines, { caseSensitive: true }),
+            (n) => `Deduplicated ${n} lines`,
+          ),
+      },
+      {
+        id: 'edit.lines.removeBlank',
+        title: 'Remove blank lines',
+        category: 'Edit',
+        run: () => applyToLines((lines) => removeBlankLines(lines)),
+      },
+      {
+        id: 'edit.lines.collapseBlank',
+        title: 'Collapse blank lines',
+        category: 'Edit',
+        run: () => applyToLines((lines) => removeBlankLines(lines, { collapse: true })),
+      },
+      {
+        id: 'edit.lines.trim',
+        title: 'Trim trailing whitespace',
+        category: 'Edit',
+        run: () =>
+          applyToFile(
+            (text) => trimTrailingWhitespace(text.split('\n')).join('\n'),
+            'Trimmed trailing whitespace',
+          ),
+      },
+      {
+        id: 'edit.file.finalNewline',
+        title: 'End the file with one newline',
+        category: 'Edit',
+        run: () => applyToFile(ensureFinalNewline, 'The file now ends with one newline'),
+      },
+      {
+        id: 'edit.indent.in',
+        title: 'Indent lines',
+        category: 'Edit',
+        run: () =>
+          applyToLines((lines) => shiftIndentation(lines, 'in', ' '.repeat(preferences.tabSize))),
+      },
+      {
+        id: 'edit.indent.out',
+        title: 'Outdent lines',
+        category: 'Edit',
+        run: () =>
+          applyToLines((lines) => shiftIndentation(lines, 'out', ' '.repeat(preferences.tabSize))),
+      },
+      {
+        id: 'edit.indent.toSpaces',
+        title: 'Convert indentation to spaces',
+        category: 'Edit',
+        run: () =>
+          applyToFile(
+            (text) => convertIndentation(text.split('\n'), 'spaces', preferences.tabSize).join('\n'),
+            'Indentation is now spaces',
+          ),
+      },
+      {
+        id: 'edit.indent.toTabs',
+        title: 'Convert indentation to tabs',
+        category: 'Edit',
+        run: () =>
+          applyToFile(
+            (text) => convertIndentation(text.split('\n'), 'tabs', preferences.tabSize).join('\n'),
+            'Indentation is now tabs',
+          ),
+      },
+      {
+        id: 'edit.case.upper',
+        title: 'UPPER CASE',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeCase(text, 'upper' as CaseStyle), 'Upper case'),
+      },
+      {
+        id: 'edit.case.lower',
+        title: 'lower case',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeCase(text, 'lower' as CaseStyle), 'Lower case'),
+      },
+      {
+        id: 'edit.case.title',
+        title: 'Title Case',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeCase(text, 'title' as CaseStyle), 'Title case'),
+      },
+      {
+        id: 'edit.case.sentence',
+        title: 'Sentence case',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeCase(text, 'sentence' as CaseStyle), 'Sentence case'),
+      },
+      {
+        id: 'edit.case.toggle',
+        title: 'tOGGLE cASE',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeCase(text, 'toggle' as CaseStyle), 'Toggled case'),
+      },
+      {
+        id: 'edit.name.camel',
+        title: 'Rewrite as camelCase',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeNameStyle(text, 'camel' as NameStyle), 'camelCase'),
+      },
+      {
+        id: 'edit.name.pascal',
+        title: 'Rewrite as PascalCase',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeNameStyle(text, 'pascal' as NameStyle), 'PascalCase'),
+      },
+      {
+        id: 'edit.name.snake',
+        title: 'Rewrite as snake_case',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeNameStyle(text, 'snake' as NameStyle), 'snake_case'),
+      },
+      {
+        id: 'edit.name.kebab',
+        title: 'Rewrite as kebab-case',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeNameStyle(text, 'kebab' as NameStyle), 'kebab-case'),
+      },
+      {
+        id: 'edit.name.constant',
+        title: 'Rewrite as CONSTANT_CASE',
+        category: 'Edit',
+        run: () => applyToSelection((text) => changeNameStyle(text, 'constant' as NameStyle), 'CONSTANT_CASE'),
+      },
+      {
+        id: 'bookmark.toggle',
+        title: 'Toggle bookmark on this line',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Alt+K',
+        run: handleToggleBookmark,
+      },
+      {
+        id: 'bookmark.next',
+        title: 'Next bookmark',
+        category: 'Navigate',
+        shortcut: 'F7',
+        run: () => handleStepBookmark('next'),
+      },
+      {
+        id: 'bookmark.previous',
+        title: 'Previous bookmark',
+        category: 'Navigate',
+        shortcut: 'Shift+F7',
+        run: () => handleStepBookmark('previous'),
+      },
+      {
+        id: 'bookmark.clear',
+        title: 'Clear every bookmark',
+        category: 'Navigate',
+        when: () => bookmarks.length > 0,
+        run: () => {
+          setBookmarks([]);
+          notify('Bookmarks cleared.');
+        },
+      },
+      {
+        id: 'edit.statistics',
+        title: 'Count words in the selection',
+        category: 'Edit',
+        run: () => {
+          const editor = editorRef.current;
+          const model = editor?.getModel();
+          const range = editor?.getSelection();
+          if (!editor || !model) return;
+          const text = range && !range.isEmpty() ? model.getValueInRange(range) : model.getValue();
+          const stats = statisticsOf(text);
+          notify(
+            `${stats.lines} lines, ${stats.words} words, ${stats.characters} characters, ` +
+              `${stats.bytes} bytes`,
+          );
+        },
       },
       {
         id: 'edit.rename',

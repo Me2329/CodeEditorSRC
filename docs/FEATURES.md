@@ -1228,21 +1228,116 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 799 | A regular expression literal is not recognised, and is reported as code | telling it from a division needs the parse this avoids |
 | 800 | Unknown languages fall back to the C family | a wrong guess costs a label, no guess costs the distinction |
 
-## The render loop, found and fixed
+## The render loop: what is established, and what is not
 
 | # | Feature | Notes |
 | --- | --- | --- |
-| 801 | "Maximum update depth exceeded" reproduced and traced | it survived an earlier hunt because it fires about one run in six |
-| 802 | The cause: the editor's `value` prop was controlled | the library writes that prop into the model whenever the two disagree |
-| 803 | During a burst of typing they disagree constantly | React is a render behind the keystrokes, so the library pushes the older text in |
-| 804 | Monaco reports that as a change, React stores it, and the two trade the same edit | until React gives up |
-| 805 | Equality guards on either side do not touch it | the writes are real writes of different text, so no comparison can see the loop |
-| 806 | Nor does a backstop effect that syncs "only when they disagree" | a keystroke landing between the event and the effect makes the model the newer one |
-| 807 | Monaco now owns the buffer: `defaultValue` and a key per file | state follows the editor and never drives it |
-| 808 | Every outside writer pushes its edit in at its own call site | restore, replace-all, rename and the agent already did |
-| 809 | Both change handlers are idempotent regardless | an edit that changes nothing is not an edit |
-| 810 | The cursor handler too | it fires on every write to the model, including ones the user did not make |
-| 811 | Checked: typing, rename, one-step undo, reload, switching between two files | shown text compared against stored state, not against the screen alone |
+| 801 | "Maximum update depth exceeded" reproduced on demand | about one run in five, from a scripted burst of typing followed by a rename |
+| 802 | Every React error stack blames `setFiles` in the editor's change handler | reached through the library's subscription and Monaco's emitter |
+| 803 | That handler was then instrumented, and is **not** looping | 40 calls, 15ms median gap, each one character longer: ordinary typing |
+| 804 | So the setState React names is the last frame, not the driver | the driver is elsewhere and is not yet identified |
+| 805 | Three hypotheses tried and disproved by measurement, not by argument | each one re-ran the reproduction rather than reasoning about the fix |
+| 806 | An idempotent change handler did not change the rate | kept anyway: an edit that changes nothing is not an edit |
+| 807 | An idempotent cursor handler did not change the rate | kept anyway: it fires on writes the user did not make |
+| 808 | Handing the buffer to Monaco did not change the rate | kept on its own merits, and verified behaviourally |
+| 809 | A reactive effect syncing state into the model made it worse | it reproduced on the second run, and was removed |
+| 810 | `defaultValue` and a key per file; every outside writer pushes its own edit | restore, replace-all, rename and the agent already did |
+| 811 | Checked: typing, rename, one-step undo, reload, switching two files | shown text compared against stored state, not against the screen |
+| 812 | The bug is open, and this section says so rather than claiming a fix | 
+
+## Line and text transformations
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 813 | Every transformation is a pure function of text | no editor, no model: off-by-one is reachable from a string and unpleasant from an editor |
+| 814 | A trailing newline survives every operation | the file does not gain or lose one by being sorted |
+| 815 | A range past the end of the file is clamped, not refused | a selection running past the last line means "to the end" |
+| 816 | A selection made upwards works the same as one made downwards | |
+| 817 | A selection ending at column one of the next line does not include it | or a transform touches a line nobody highlighted |
+| 818 | With no selection, the operation acts on the caret's line | |
+| 819 | Sort lines, ascending or descending | |
+| 820 | Sorted by the locale's rules, so accented letters sort next to plain ones | `äpfel` before `apple`, not after `zebra` |
+| 821 | And numerically, so `item10` comes after `item9` | which is what sorting a list in an editor means |
+| 822 | Reverse lines | |
+| 823 | Remove duplicate lines, keeping the first of each and the order | |
+| 824 | Optionally ignoring case, or surrounding whitespace | |
+| 825 | Keep only the lines that appeared more than once | |
+| 826 | Remove blank lines, or collapse runs of them to one | |
+| 827 | Collapsing does not leave a blank line at the top of the file | |
+| 828 | Whitespace-only lines count as blank | |
+| 829 | Move lines up or down, Alt+Up and Alt+Down | |
+| 830 | A run moves together and stays selected where it lands | |
+| 831 | At the top or bottom nothing happens, rather than wrapping | wrapping is never what the key was pressed for |
+| 832 | Duplicate lines, Shift+Alt+Down | |
+| 833 | Delete lines, Ctrl+Shift+K | |
+| 834 | Join lines, Ctrl+J | one space between, indentation dropped |
+| 835 | A blank line in a join contributes nothing, not a doubled space | |
+| 836 | One join implementation shared by the command and the library | |
+| 837 | Trim trailing whitespace, leaving leading whitespace alone | |
+| 838 | End the file with exactly one newline, and no blank lines before it | stops a diff ending in "No newline at end of file" |
+| 839 | Indent and outdent by the configured width | |
+| 840 | Indenting skips blank lines | indenting emptiness leaves whitespace for the next person to delete |
+| 841 | Outdenting falls back to whatever whitespace is there | so it works on a file that does not match the configured indent |
+| 842 | Convert indentation between tabs and spaces | |
+| 843 | A tab is measured in columns, not characters | two spaces then a tab reaches column 4, as it does on screen |
+| 844 | A remainder that does not divide is left as spaces | |
+| 845 | Only the indentation is converted, not tabs inside the line | |
+| 846 | A tab width of zero is refused rather than looping | |
+| 847 | Upper, lower, title, sentence and toggled case | |
+| 848 | Title case keeps an apostrophe inside the word | `It's Fine` |
+| 849 | Sentence case capitalises after a full stop, not inside a number | `pi is 3.14 exactly` |
+| 850 | Rewrite an identifier as camel, Pascal, snake, kebab or CONSTANT | |
+| 851 | Words are split from any convention, including acronyms | `parseHTTPResponse` is three words |
+| 852 | The conventions round-trip | |
+| 853 | With no selection, case commands act on the word under the caret | |
+| 854 | Word, line, character and byte counts for the selection or the file | |
+| 855 | Characters and bytes counted separately | they differ the moment anything is not ASCII |
+| 856 | An emoji counts as one character and four bytes | |
+| 857 | Every transformation goes through the editor, so one Ctrl+Z takes it back | |
+
+## Commenting out, and putting it back
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 858 | Toggle line comment, Ctrl+/ | |
+| 859 | Toggle block comment, Shift+Alt+A | |
+| 860 | The delimiters come from the same table that tells code from prose | a language added for rename is commented correctly without a second list |
+| 861 | The marker lands at the block's own indentation, not column one | commenting at column one loses the shape of the block |
+| 862 | A mixed selection comments rather than uncomments | pressing once should reach the state the user is heading for |
+| 863 | Blank lines are not commented | a file full of `//` on empty lines is noise |
+| 864 | And a blank line does not make a commented block look mixed | |
+| 865 | Uncommenting removes exactly one space after the marker | |
+| 866 | A marker written without that space is still removed | |
+| 867 | Commenting and uncommenting round-trip exactly | |
+| 868 | Block comment unwraps only exactly wrapped text | unwrapping a selection that merely contains one would join code that was never adjacent |
+| 869 | `/*` alone is not mistaken for an open and a close | |
+| 870 | A language with no line comment says so rather than doing nothing silently | |
+| 871 | A language with no block comment says so | |
+| 872 | Python gets `#`, Lua `--`, Clojure `;`, Erlang `%`, HTML `<!-- -->` | |
+| 873 | The status note says which way it went, and over how many lines | |
+
+## Places worth coming back to
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 874 | Bookmarks, Ctrl+Alt+K to set or clear one | |
+| 875 | F7 and Shift+F7 cycle through them | |
+| 876 | Cycling wraps round | a bookmark list is a ring, unlike moving a line |
+| 877 | A bookmark on the caret's own line is skipped when stepping | or the key would appear to do nothing |
+| 878 | Cycling crosses into other files | |
+| 879 | Each bookmark stores the text of its line, not only the number | |
+| 880 | Edits above a bookmark move it, rather than leaving it pointing short | a bare line number quietly lies, and still looks like it worked |
+| 881 | A bookmark whose line is gone is dropped, not left pointing at a stranger | |
+| 882 | Where the line appears several times, the nearest one wins | the same line of code appears many times in a file |
+| 883 | A tie goes to the earlier line, deterministically | which one matters less than that it is always the same one |
+| 884 | A bookmark on a blank line is kept only where it is | there is no text to follow, and the first blank line would be wrong |
+| 885 | Reconciliation is debounced | walking the file once per keystroke for a result nobody sees until they navigate |
+| 886 | And returns the same array when nothing moved | so a pause in typing does not re-render |
+| 887 | Bookmarks for a deleted file are dropped | |
+| 888 | Shown in the gutter as a bar, and on the overview ruler | a bookmark you cannot see is one you are later surprised by |
+| 889 | Both in the same accent colour, so they read as the same thing | |
+| 890 | Clear every bookmark, offered only when there are some | |
+| 891 | The count is reported in the status bar as they are set | |
 
 ## Not implemented
 

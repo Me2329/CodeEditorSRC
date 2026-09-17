@@ -61,3 +61,21 @@
     box-shadow: 0 0 24px -6px rgb(99 102 241 / 45%);
   }
 }
+
+/*
+ * A bookmark in the gutter.
+ *
+ * Drawn as a bar rather than an icon so it reads at the ten-pixel width Monaco
+ * gives the line decorations margin, and in the accent colour the overview
+ * ruler uses for the same mark, so the two are recognisably the same thing.
+ */
+.codecraft-bookmark::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: #6366f1;
+}
