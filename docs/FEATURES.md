@@ -1626,6 +1626,14 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1102 | And that claiming it should work now, unrun, is a guess | |
 | 1103 | And that there is no version control here to undo it | so prefer the smallest change, and do not tidy what you were not asked to |
 
+## The port, when 8000 is taken
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1104 | The published port is overridable without editing the compose file | `CODECRAFT_PORT=8080 docker compose up` |
+| 1105 | It still defaults to 8000, so nothing changes for anyone who is fine | |
+| 1106 | Found by a user hitting "port is already allocated" | 8000 is a popular port, and the docs had told them to run something else on it |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
