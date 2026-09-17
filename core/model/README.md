@@ -915,10 +915,23 @@ Measured here, on a 32768-token vocabulary at batch 4 and context 1024:
 | `--loss-chunk 512` | 2234MB | 2367ms |
 | `--loss-chunk 256` | 2142MB | 2232ms |
 
-About a third of the peak memory for about a tenth of the step time. That is a
-trade, not a free win, and it is worth making exactly when memory is the thing
-that is binding — which on one card at this size it is, since what the memory
-buys is a batch that would not otherwise fit.
+About a third of the peak memory for about a tenth of the step time — **at that
+shape**, and the shape is doing a lot of work in that sentence. It was measured
+in float32, on a model small enough that the output head dominated the step.
+
+On a card the proportion is much smaller, and saying so matters more than the
+headline. Under bf16 autocast the logits are half the size to begin with, and at
+`xxl` the weights and optimiser state are 9.5GB on their own, so the whole
+saving is about 0.5GB of a roughly 13GB footprint — four percent, not a third.
+Worth having, since it is the difference between a batch fitting and not, but
+not the thing that decides whether `xxl` trains on one card. What decides that
+is Adafactor and the fused step, which is a different section.
+
+The rule this follows from: the saving is proportional to
+`batch x context x vocabulary`, and the cost it is measured against is
+proportional to the parameter count. Chunking is worth most on a small model
+with a large vocabulary and a long context, and least on a large model, which is
+the opposite of where you would guess.
 
 The agreement is the part that had to be right, because a run trained with this
 has to be comparable with one trained without it or the difference shows up as a

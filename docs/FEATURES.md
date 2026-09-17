@@ -1495,26 +1495,28 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1001 | The sequence is scored in pieces rather than projected all at once | `--loss-chunk` |
 | 1002 | Each piece is recomputed during the backward pass, not kept | the same trade gradient checkpointing makes elsewhere |
 | 1003 | Measured: 3433MB to 2234MB peak, 2057ms to 2367ms a step | batch 4, context 1024, 32768-token vocabulary |
-| 1004 | About a third of the memory for about a tenth of the step time | a trade, and the README says so rather than calling it free |
-| 1005 | Worth making when memory is binding, because it buys a batch that fits | |
-| 1006 | Exactly equal to `F.cross_entropy` in float64, value and gradient | |
-| 1007 | Bit-identical gradient in float32 too | |
-| 1008 | The float32 value differs by about 5e-7 on a loss of order 6 | reassociation from summing in a different order, and nothing more |
-| 1009 | Not claimed to be bit-exact in float32 | the tests pin what is true, not what would sound better |
-| 1010 | Twelve optimiser steps run both ways stay within 5e-7 the whole way | so the difference does not compound |
-| 1011 | That comparison is a test, not a note | |
-| 1012 | The answer does not depend on the chunk size | checked at 1, 3, 7, 20, 60 and 1000 |
-| 1013 | Padding is excluded once, at the end, by the count that mattered | averaging per piece would weight a piece of two tokens like one of five hundred |
-| 1014 | Padding falling on a chunk boundary is still excluded | |
-| 1015 | A batch that is entirely padding returns zero, not NaN | `F.cross_entropy` returns NaN, and one NaN poisons every weight |
-| 1016 | And still has a gradient path, so the step does not fall over | |
-| 1017 | No logits are returned, because none were kept | not holding them is the point |
-| 1018 | Unless the caller asks for all of them, which overrides chunking | a caller that scores the output itself needs them |
-| 1019 | Works with no gradient at all, for evaluation | |
-| 1020 | Recomputation can be switched off, and changes no answer | |
-| 1021 | A chunk size of zero is refused rather than looping forever | |
-| 1022 | Mismatched targets are refused where they are noticed | |
-| 1023 | `plan` measures the flag too, so the trade can be checked on your own card | |
+| 1004 | About a third of the memory for about a tenth of the step time | at that shape: float32, and a model small enough that the head dominated |
+| 1005 | On a card at `xxl` it is about 0.5GB of 13GB, which is four percent | bf16 halves the logits, and 9.5GB of weights dwarfs them |
+| 1006 | The README says the small number, not only the flattering one | |
+| 1007 | The saving scales with batch x context x vocabulary, the cost with parameters | so it is worth most on a small model with a big vocabulary |
+| 1008 | Exactly equal to `F.cross_entropy` in float64, value and gradient | |
+| 1009 | Bit-identical gradient in float32 too | |
+| 1010 | The float32 value differs by about 5e-7 on a loss of order 6 | reassociation from summing in a different order, and nothing more |
+| 1011 | Not claimed to be bit-exact in float32 | the tests pin what is true, not what would sound better |
+| 1012 | Twelve optimiser steps run both ways stay within 5e-7 the whole way | so the difference does not compound |
+| 1013 | That comparison is a test, not a note | |
+| 1014 | The answer does not depend on the chunk size | checked at 1, 3, 7, 20, 60 and 1000 |
+| 1015 | Padding is excluded once, at the end, by the count that mattered | averaging per piece would weight a piece of two tokens like one of five hundred |
+| 1016 | Padding falling on a chunk boundary is still excluded | |
+| 1017 | A batch that is entirely padding returns zero, not NaN | `F.cross_entropy` returns NaN, and one NaN poisons every weight |
+| 1018 | And still has a gradient path, so the step does not fall over | |
+| 1019 | No logits are returned, because none were kept | not holding them is the point |
+| 1020 | Unless the caller asks for all of them, which overrides chunking | a caller that scores the output itself needs them |
+| 1021 | Works with no gradient at all, for evaluation | |
+| 1022 | Recomputation can be switched off, and changes no answer | |
+| 1023 | A chunk size of zero is refused rather than looping forever | |
+| 1024 | Mismatched targets are refused where they are noticed | |
+| 1025 | `plan` measures the flag too, so the trade can be checked on your own card | |
 
 ## Not implemented
 
