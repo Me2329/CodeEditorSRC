@@ -947,6 +947,36 @@ is padding returns zero rather than NaN. The division is by the number of tokens
 that counted, and when that is zero there is nothing to average — and one NaN
 poisons every weight in the model on the next step.
 
+## Windows, without WSL
+
+Nothing here needs Linux. The package is Python, torch and numpy: no `fcntl`,
+no `resource`, no fork, no Unix sockets, paths through `pathlib`, and the HTTP
+server is the one in the standard library. It runs in PowerShell.
+
+```powershell
+cd core\model
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+python -m codecraft_model doctor
+```
+
+`cu128` is not optional on a 50-series card: it is the first build carrying
+sm_120, and an older wheel installs cleanly and then fails on every kernel
+launch. `doctor` checks for exactly that and says so before a run rather than
+after one.
+
+Two differences worth knowing. `prepare --repos-file` shells out to `git`, so
+Git has to be on PATH — it will be if you cloned this. And PowerShell continues
+a long line with a backtick rather than a backslash, so a command wrapped for
+this README needs rewriting or putting on one line.
+
+WSL is still the better place for a long run, for the same reason it is better
+for any long build: the filesystem is faster and the toolchains are closer to
+hand. But "you need WSL" would have been untrue, and the difference is
+convenience rather than capability.
+
 ## Choosing a size
 
 The default is `xl`, about a billion parameters, and the reason is the arithmetic

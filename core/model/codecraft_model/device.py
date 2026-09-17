@@ -17,6 +17,7 @@ numerics that matter are unchanged.
 from __future__ import annotations
 
 import os
+import sys
 
 import torch
 
@@ -179,6 +180,41 @@ def host_memory_bytes() -> int | None:
     try:
         return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
     except (AttributeError, ValueError, OSError):
+        # `sysconf` is POSIX and simply absent on Windows, where the question
+        # is answered by the kernel through a struct instead. Without this the
+        # answer there is "unknown", and `doctor` — whose whole job is to say
+        # what a machine can do — says nothing about the machine.
+        return _windows_memory_bytes()
+
+
+def _windows_memory_bytes() -> int | None:
+    """Physical RAM on Windows, via GlobalMemoryStatusEx."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = Status()
+        status.dwLength = ctypes.sizeof(Status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return int(status.ullTotalPhys)
+    except Exception:
+        # A machine that will not answer is reported as not answering, which is
+        # what every caller here already handles.
         return None
 
 

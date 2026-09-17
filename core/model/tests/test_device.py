@@ -164,3 +164,43 @@ def test_fast_matmul_and_synchronise_are_safe_on_a_cpu() -> None:
     """Both are called unconditionally by the training loop."""
     enable_fast_matmul(torch.device("cpu"))
     synchronize(torch.device("cpu"))
+
+
+def test_host_memory_falls_back_to_windows_when_sysconf_is_absent(monkeypatch) -> None:
+    """`os.sysconf` is POSIX and simply not there on Windows.
+
+    Without a fallback `doctor` reports "unknown" for system memory on the one
+    platform where a user is most likely to be reading it — and `doctor` exists
+    to say what a machine can do.
+    """
+    from codecraft_model import device as module
+
+    def absent(_name: str) -> int:
+        raise AttributeError("sysconf is not available on this platform")
+
+    monkeypatch.setattr(module.os, "sysconf", absent)
+    monkeypatch.setattr(module, "_windows_memory_bytes", lambda: 34_359_738_368)
+
+    assert module.host_memory_bytes() == 34_359_738_368
+
+
+def test_a_machine_that_will_not_say_reports_nothing(monkeypatch) -> None:
+    from codecraft_model import device as module
+
+    def absent(_name: str) -> int:
+        raise AttributeError("no sysconf")
+
+    monkeypatch.setattr(module.os, "sysconf", absent)
+    monkeypatch.setattr(module, "_windows_memory_bytes", lambda: None)
+
+    assert module.host_memory_bytes() is None
+
+
+def test_the_windows_helper_declines_to_run_elsewhere() -> None:
+    """It is guarded on the platform, so importing ctypes.windll cannot fail."""
+    import sys
+
+    from codecraft_model.device import _windows_memory_bytes
+
+    if sys.platform != "win32":
+        assert _windows_memory_bytes() is None

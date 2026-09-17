@@ -1648,6 +1648,19 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1114 | Makefiles pinned too: a trailing return becomes part of the command | and the error quotes a command that looks perfectly correct |
 | 1115 | Found by a user on Windows, twice in a row now | port collision, then this |
 
+## The model on Windows, without WSL
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1116 | The model package has no Unix-only dependency | checked: no `fcntl`, `resource`, fork, or Unix sockets |
+| 1117 | Paths go through `pathlib`, and the server is the standard library's | |
+| 1118 | Host memory is read through the Windows kernel where `sysconf` is absent | `doctor` reported "unknown" there, on the platform most likely to read it |
+| 1119 | A machine that will not answer is still reported as not answering | |
+| 1120 | The helper declines to run off Windows, so importing it cannot fail | |
+| 1121 | The README gives the PowerShell form, including the activate script | |
+| 1122 | And notes that PowerShell continues lines with a backtick | a command wrapped for a README does not paste |
+| 1123 | WSL is described as more convenient, not as required | because it is not |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
