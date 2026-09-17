@@ -1339,6 +1339,71 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 890 | Clear every bookmark, offered only when there are some | |
 | 891 | The count is reported in the status bar as they are set | |
 
+## Brackets, and the text between them
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 892 | Go to the matching bracket, Ctrl+Shift+\ | |
+| 893 | Brackets inside strings and comments do not count | a naive matcher walks into `print("(")` and never comes back |
+| 894 | Which reuses the scanner that tells code from prose for a rename | one table, not two |
+| 895 | Works from either end of a pair | pressing the key on a closer should reach its opener as readily |
+| 896 | Either side of the caret is considered | the caret sits between characters, so "the bracket I am on" means either |
+| 897 | Round, square and curly are told apart | |
+| 898 | Matching spans lines | |
+| 899 | Select inside the brackets | |
+| 900 | Select the brackets and what they hold | |
+| 901 | An offset on a bracket counts as inside its pair | so selecting works with the caret at the edge |
+| 902 | The innermost enclosing pair wins | |
+| 903 | Expand the selection, Shift+Alt+Right | |
+| 904 | Each press is a strictly larger, meaningful region | measured: 1, then 3, then 7 characters on `x = g(h(a), b)` |
+| 905 | Which is what makes the key usable by holding it down | |
+| 906 | Unbalanced text still answers for the parts that do match | |
+| 907 | Every unmatched bracket can be listed, in order | |
+| 908 | A mismatched pair reports both ends | |
+
+## One box that takes whatever you paste into it
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 909 | Go to line, position or file, Ctrl+G | |
+| 910 | A bare line number | |
+| 911 | `42:8` for line and column | |
+| 912 | `main.py:42:8`, which is what a compiler prints | |
+| 913 | A leading path is kept, so `src/lib/main.py:42` works | |
+| 914 | `line 42`, `at line 42` and `L42`, which is what a stack frame prints | |
+| 915 | `@@ -42`, which is what a diff hunk prints | |
+| 916 | `+10` and `-5`, relative to where the caret is | |
+| 917 | `50%`, proportionally through the file | |
+| 918 | The spaces people paste with are tolerated | |
+| 919 | A leading colon means no file, so `:42:8` is a position | |
+| 920 | A bare position is never mistaken for a file called `42` | the position forms are tried first, and a file has to contain a non-digit |
+| 921 | The box says what it understood, before you commit to it | a misreading is visible while it is still a keystroke from being corrected |
+| 922 | And where a relative or proportional jump would land | |
+| 923 | A line past the end is clamped, not refused | a stale line number from an old traceback still reaches the file |
+| 924 | A line below the start is clamped too | |
+| 925 | A proportion over 100 does not run past the end | |
+| 926 | An empty file resolves to line 1 rather than line 0 | |
+| 927 | A named file is matched loosely against what is open | the compiler knows a longer path than the workspace does |
+| 928 | An exact name wins, then a path tail, then a containing match | |
+| 929 | Matching ignores case | |
+| 930 | A named file that is not open is refused, and says so | going to line 42 of the wrong file is worse than going nowhere |
+| 931 | Enter does not carry on into the editor | found in a browser: it inserted a newline and moved the caret past the target |
+
+## Bringing back a deleted file
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 932 | Ctrl+Shift+T brings back the last file deleted in this session | |
+| 933 | The whole file is kept, not a reference to it | this workspace lives in the browser: there is no file on disk to reopen |
+| 934 | Repeated presses walk back through the deletions in order | |
+| 935 | The file returns to the position it had in the strip | |
+| 936 | Or to the end, if the strip has since shrunk | |
+| 937 | A file deleted twice appears once, described by the newer deletion | |
+| 938 | Bounded at twenty, so a long session does not grow without limit | the contents are held in memory |
+| 939 | The command names the file that would come back | |
+| 940 | And is hidden when there is nothing to bring back | |
+| 941 | Restoring a file that is somehow already open changes nothing | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

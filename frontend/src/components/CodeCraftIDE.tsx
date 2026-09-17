@@ -48,6 +48,20 @@ import {
   step as stepBookmark,
   toggle as toggleBookmark,
 } from '../lib/bookmarks';
+import {
+  around as aroundBrackets,
+  enclosing as enclosingBrackets,
+  expand as expandSelection,
+  inside as insideBrackets,
+  matchAt as matchBracketAt,
+} from '../lib/brackets';
+import {
+  type ClosedFile,
+  describe as describeClosed,
+  remember as rememberClosed,
+  reopen as reopenClosed,
+  restore as restoreClosed,
+} from '../lib/closed';
 import { describeToggle, toggleBlockComment, toggleLineComment } from '../lib/comments';
 import {
   type CaseStyle,
@@ -163,6 +177,7 @@ import { RunConfigPanel, parseArgs } from './RunConfigPanel';
 import { RuntimePicker } from './RuntimePicker';
 import { DiffView } from './DiffView';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { GoToBox } from './GoToBox';
 import { RenamePanel } from './RenamePanel';
 import { SearchPanel } from './SearchPanel';
 import { TabStrip } from './TabStrip';
@@ -212,6 +227,10 @@ export function CodeCraftIDE() {
   const [renaming, setRenaming] = useState<string | null>(null);
   /** Places worth coming back to, across every open file. */
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  /** Files deleted in this session, newest first, so one can be put back. */
+  const [closedFiles, setClosedFiles] = useState<ClosedFile[]>([]);
+  /** Whether the "go to" box is open. */
+  const [goingTo, setGoingTo] = useState(false);
   const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]);
   // Told apart from "this file declares nothing", which looks identical in an
   // empty list and means something completely different. A message rather than
@@ -222,6 +241,7 @@ export function CodeCraftIDE() {
   // stale as the index is refreshed.
   const symbolsRef = useRef<WorkspaceSymbol[]>([]);
   const bookmarksRef = useRef<Bookmark[]>([]);
+  const closedFilesRef = useRef<ClosedFile[]>([]);
   // A search the editor asked for rather than the user typed. A new object
   // each time, so asking twice for the same name is two requests.
   const [searchRequest, setSearchRequest] = useState<
@@ -539,6 +559,7 @@ export function CodeCraftIDE() {
   filesRef.current = files;
   symbolsRef.current = symbols;
   bookmarksRef.current = bookmarks;
+  closedFilesRef.current = closedFiles;
 
   /**
    * Persist the workspace so a refresh does not discard work in progress.
@@ -1412,6 +1433,118 @@ export function CodeCraftIDE() {
     );
   }, [bookmarks, activeFile?.id, activeFile?.content]);
 
+  /**
+   * Jump to the bracket matching the one at the caret.
+   *
+   * Brackets inside comments and strings do not count, which is the whole
+   * reason this is not a regular expression: a naive matcher walks into
+   * `print("(")` and reports no match on a line where they plainly match.
+   */
+  const handleMatchBracket = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const text = model.getValue();
+    const at = model.getOffsetAt(position);
+    // Either side of the caret, because the caret sits between characters and
+    // "the bracket I am on" means either of them.
+    const match = matchBracketAt(text, at, model.getLanguageId())
+      ?? (at > 0 ? matchBracketAt(text, at - 1, model.getLanguageId()) : null);
+    if (match === null) {
+      notify('No matching bracket here.');
+      return;
+    }
+    const target = model.getPositionAt(match);
+    editor.setPosition(target);
+    editor.revealPositionInCenterIfOutsideViewport(target);
+    editor.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Select what the brackets around the caret enclose, or the pair itself. */
+  const handleSelectBrackets = useCallback((what: 'inside' | 'around') => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const position = editor?.getPosition();
+    if (!editor || !model || !position) return;
+
+    const pair = enclosingBrackets(
+      model.getValue(),
+      model.getOffsetAt(position),
+      model.getLanguageId(),
+    );
+    if (!pair) {
+      notify('The caret is not inside brackets.');
+      return;
+    }
+    const span = what === 'inside' ? insideBrackets(pair) : aroundBrackets(pair);
+    const start = model.getPositionAt(span.start);
+    const end = model.getPositionAt(span.end);
+    editor.setSelection({
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column,
+    });
+    editor.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Grow the selection outwards by one bracket pair.
+   *
+   * Each press is a strictly larger, meaningful region, which is what makes the
+   * key usable by holding it down.
+   */
+  const handleExpandSelection = useCallback(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const range = editor?.getSelection();
+    if (!editor || !model || !range) return;
+
+    const grown = expandSelection(
+      model.getValue(),
+      {
+        start: model.getOffsetAt({
+          lineNumber: range.startLineNumber,
+          column: range.startColumn,
+        }),
+        end: model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }),
+      },
+      model.getLanguageId(),
+    );
+    if (!grown) {
+      notify('Nothing larger to select.');
+      return;
+    }
+    const start = model.getPositionAt(grown.start);
+    const end = model.getPositionAt(grown.end);
+    editor.setSelection({
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column,
+    });
+    editor.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Put back the most recently deleted file. */
+  const handleReopenClosed = useCallback(() => {
+    const result = reopenClosed(closedFilesRef.current);
+    if (!result) {
+      notify('No deleted files to bring back.');
+      return;
+    }
+    setFiles((previous) => restoreClosed(previous, result.entry));
+    setClosedFiles(result.rest);
+    setActiveFileId(result.entry.file.id);
+    notify(`Brought back ${result.entry.file.name}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleJumpToLine = useCallback((line: number) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -2209,6 +2342,47 @@ export function CodeCraftIDE() {
         run: handleFindReferences,
       },
       {
+        id: 'navigate.goto',
+        title: 'Go to line, position or file',
+        category: 'Navigate',
+        shortcut: 'Ctrl+G',
+        run: () => setGoingTo(true),
+      },
+      {
+        id: 'navigate.matchBracket',
+        title: 'Go to matching bracket',
+        category: 'Navigate',
+        shortcut: 'Ctrl+Shift+\\',
+        run: handleMatchBracket,
+      },
+      {
+        id: 'edit.selectInside',
+        title: 'Select inside the brackets',
+        category: 'Edit',
+        run: () => handleSelectBrackets('inside'),
+      },
+      {
+        id: 'edit.selectAround',
+        title: 'Select the brackets and what they hold',
+        category: 'Edit',
+        run: () => handleSelectBrackets('around'),
+      },
+      {
+        id: 'edit.expandSelection',
+        title: 'Expand the selection',
+        category: 'Edit',
+        shortcut: 'Shift+Alt+Right',
+        run: handleExpandSelection,
+      },
+      {
+        id: 'files.reopen',
+        title: closedFiles.length > 0 ? describeClosed(closedFiles) : 'Bring back a deleted file',
+        category: 'View',
+        shortcut: 'Ctrl+Shift+T',
+        when: () => closedFiles.length > 0,
+        run: handleReopenClosed,
+      },
+      {
         id: 'edit.comment.line',
         title: 'Toggle line comment',
         category: 'Edit',
@@ -2873,6 +3047,32 @@ export function CodeCraftIDE() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-obsidian font-sans text-slate-200 antialiased selection:bg-indigo-500/30">
+      {goingTo && (
+        <GoToBox
+          files={files}
+          activeFile={activeFile ?? null}
+          caretLine={caret.line}
+          onClose={() => setGoingTo(false)}
+          onGo={(fileId, line, column) => {
+            setGoingTo(false);
+            const move = () => {
+              const editor = editorRef.current;
+              if (!editor) return;
+              editor.revealLineInCenter(line);
+              editor.setPosition({ lineNumber: line, column: column ?? 1 });
+              editor.focus();
+            };
+            if (fileId && fileId !== activeFileId) {
+              setActiveFileId(fileId);
+              // Let the editor swap models before the caret is moved.
+              window.setTimeout(move, 60);
+              return;
+            }
+            move();
+          }}
+        />
+      )}
+
       {renaming !== null && (
         <RenamePanel
           // A fresh panel per rename, so the selection it computes on mount is
@@ -2978,6 +3178,11 @@ export function CodeCraftIDE() {
           }}
           onDelete={(id) => {
             setFiles((previous) => {
+              const index = previous.findIndex((file) => file.id === id);
+              const going = previous[index];
+              // Kept whole rather than by reference: this workspace lives in
+              // the browser, so there is no file on disk to open again.
+              if (going) setClosedFiles((stack) => rememberClosed(stack, going, index));
               const remaining = previous.filter((file) => file.id !== id);
               if (id === activeFileId && remaining[0]) setActiveFileId(remaining[0].id);
               return remaining;
