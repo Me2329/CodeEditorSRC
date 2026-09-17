@@ -1538,6 +1538,19 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1039 | Default batch and block are 8 and 1024, which is 8192 tokens a step | coherent with the default size rather than left at the old tiny values |
 | 1040 | The README has a table of sizes against what each costs in days | and says the durations are estimated, not measured here |
 
+## The container build, which had stopped working
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1041 | The Rust stage is pinned to a toolchain new enough for the lockfiles | it was 1.82, and the lockfiles need 1.85 |
+| 1042 | Found by a user running `docker compose up --build`, not by a test | the failure had been latent for 117 commits |
+| 1043 | The floor was computed from the lockfiles, not guessed | ureq 3.4.0, ureq-proto 0.6.1 and zeroize 1.9.0 want the 2024 edition |
+| 1044 | And the image tag was checked to exist before being written down | |
+| 1045 | `cargo build --locked`, so the image builds what the lockfile says | and fails loudly when it is stale, rather than resolving something else |
+| 1046 | The declared MSRVs were corrected from 1.75 and 1.70 to 1.85 | they were below what the locked tree needed, so cargo never complained up front |
+| 1047 | Which is why the error named a dependency nobody chose | "failed to parse manifest" for a transitive crate reads like a bug in it |
+| 1048 | A comment in the Dockerfile ties the pin to the lockfiles | the coupling is invisible from either file on its own |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

@@ -13,15 +13,26 @@ COPY frontend/ ./
 RUN npm run build
 
 # ----------------------------------------------------------- core services
-FROM rust:1.82-bookworm AS services
+#
+# This has to be at least as new as the toolchain that generated the two
+# Cargo.lock files, which is not obvious from either file and fails a long way
+# from the cause: a crate locked to an edition this compiler does not know
+# reports "failed to parse manifest" for a dependency nobody chose directly.
+# The lockfiles currently need 1.85 (ureq, zeroize); this is pinned higher, to
+# the toolchain the repository is developed with, so regenerating a lockfile
+# locally cannot produce one the image is too old to build.
+FROM rust:1.94-bookworm AS services
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends g++ make \
     && rm -rf /var/lib/apt/lists/*
 COPY core/supervisor/ core/supervisor/
 COPY core/assistant/ core/assistant/
 COPY core/analyzer/ core/analyzer/
-RUN cd core/supervisor && cargo build --release
-RUN cd core/assistant && cargo build --release
+# --locked so the image builds exactly what the lockfile says, and fails
+# loudly if the lockfile is out of date rather than quietly resolving
+# something else on a machine nobody is watching.
+RUN cd core/supervisor && cargo build --release --locked
+RUN cd core/assistant && cargo build --release --locked
 RUN make -C core/analyzer all
 
 # ----------------------------------------------------------------- runtime

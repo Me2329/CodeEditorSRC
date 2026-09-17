@@ -2,7 +2,9 @@
 name = "codecraft-supervisor"
 version = "2.5.0"
 edition = "2021"
-rust-version = "1.70"
+# What the locked dependency tree actually needs (ureq and zeroize want the
+# 2024 edition). Kept in step with the Rust version in the Dockerfile.
+rust-version = "1.85"
 description = "Process supervisor daemon for the CodeCraft Studio execution sandbox"
 license = "MIT"
 
