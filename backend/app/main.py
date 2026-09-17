@@ -11,8 +11,10 @@ import logging
 import subprocess
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .api.assistant_routes import router as assistant_router
 from .api.routes import VERSION, router as rest_router
@@ -84,6 +86,58 @@ async def lifespan(app: FastAPI):
         await app.state.rate_limiter.close()
 
 
+def mount_frontend(app: FastAPI) -> None:
+    """Serve the built bundle, when one was built.
+
+    The container carries a bundle and had nowhere to serve it from: the image
+    copied `frontend/dist` in, the compose file said the gateway served it, and
+    the gateway had no static mount at all, so `/` answered 404. Anyone
+    following the documented `docker compose up` got a running API and a blank
+    page, which is how the project describes itself working.
+
+    Mounted last, after the routers, so the API keeps every path it claims and
+    the bundle only sees what is left. Conditional on the directory existing,
+    because a development machine runs Vite on its own port and has no `dist`
+    to serve — and mounting a missing directory raises at import.
+    """
+    directory = settings.frontend_dist
+    if not directory.is_dir() or not (directory / "index.html").is_file():
+        return
+
+    index = directory / "index.html"
+
+    # Anything under /assets is a hashed build artefact and can be cached hard;
+    # index.html cannot, or a deploy leaves browsers on the previous bundle.
+    app.mount(
+        "/assets",
+        StaticFiles(directory=directory / "assets", check_dir=False),
+        name="assets",
+    )
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str) -> FileResponse:
+        """Every other path is the application, which routes itself.
+
+        A file that exists is served; anything else gets index.html, because
+        the router in the page owns those paths and a reload on one of them
+        must not 404.
+
+        Except under the API, where a path nobody registered is a mistake and
+        has to say so. A catch-all that answers every URL turns a typo in an
+        endpoint into a page of HTML and a parse error somewhere else entirely.
+        """
+        # Every route this gateway serves, websockets included, lives under
+        # /api/, so that one prefix is the whole of the API surface.
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"no such endpoint: /{path}")
+        candidate = (directory / path).resolve()
+        # Resolved and checked against the root, so `..` in a request cannot
+        # reach a file outside the bundle.
+        if path and candidate.is_file() and candidate.is_relative_to(directory.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="CodeCraft Studio Orchestration API",
@@ -109,6 +163,7 @@ def create_app() -> FastAPI:
     app.include_router(rest_router)
     app.include_router(ws_router)
     app.include_router(assistant_router)
+    mount_frontend(app)
     return app
 
 

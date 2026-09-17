@@ -130,7 +130,12 @@ dev: ## Run the gateway, the assistant and the frontend together
 
 # ---------------------------------------------------------------- test
 .PHONY: test
-test: test-sandbox test-supervisor test-assistant test-analyzer test-backend test-model test-frontend ## Run every test suite
+check-rust-pin: ## Check the container's Rust is new enough for the lockfiles
+	@python3 scripts/check_rust_pin.py
+
+.PHONY: check-rust-pin
+
+test: check-rust-pin test-sandbox test-supervisor test-assistant test-analyzer test-backend test-model test-frontend ## Run every test suite
 	@printf '\n\033[1;32mAll suites passed.\033[0m\n\n'
 
 .PHONY: test-sandbox

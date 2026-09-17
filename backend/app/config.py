@@ -49,6 +49,14 @@ class Settings:
     repo_root: Path = field(default_factory=_repository_root)
     runtimes_path: Path = field(default_factory=lambda: _repository_root() / "scripts" / "runtimes.json")
     runner_path: Path = field(default_factory=lambda: _repository_root() / "scripts" / "sandbox_runner.sh")
+    # Where a built frontend bundle lives, when there is one. The image copies
+    # it here; a development machine runs Vite on its own port instead and
+    # leaves this directory absent, which is why serving it is conditional.
+    frontend_dist: Path = field(
+        default_factory=lambda: Path(
+            os.getenv("CODECRAFT_FRONTEND_DIST", str(_repository_root() / "frontend" / "dist"))
+        )
+    )
     analyzer_path: Path = field(
         default_factory=lambda: Path(
             os.getenv(

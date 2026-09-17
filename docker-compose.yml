@@ -3,7 +3,7 @@
 #   docker compose up --build
 #
 # The gateway is reachable on http://localhost:8000 and serves the built
-# frontend bundle. Redis is optional: the gateway falls back to an in-process
+# frontend bundle from /app/frontend/dist, which the image copies in. Redis is optional: the gateway falls back to an in-process
 # rate limiter when it is absent, so the stack works with `--scale redis=0`.
 
 services:

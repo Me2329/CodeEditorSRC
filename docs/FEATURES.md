@@ -1553,6 +1553,40 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1049 | Verified by running the step that failed, inside the pinned image | `cargo build --release --locked` on both crates, against the real lockfiles |
 | 1050 | The crates that caused the failure compile: ureq 3.4.0, ureq-proto 0.6.1 | assistant in 40.7s, supervisor in 6.5s |
 
+## Continuous integration, which there was none of
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1051 | The container is built on every push, and then started | nothing built the image, which is why it broke for 117 commits |
+| 1052 | The running container has to answer its health endpoint | a build that produces an image nobody can start is half a check |
+| 1053 | And serve a page with the application in it | |
+| 1054 | And report at least eight installed runtimes | a single digit means an apt layer failed silently |
+| 1055 | Container logs are printed whatever happened | |
+| 1056 | The compose file is validated too | it is the file people are told to run |
+| 1057 | A one-second check that the Rust pin matches the lockfiles | the check that only runs inside a 20-minute build is the one nobody runs |
+| 1058 | It reads the editions and MSRVs cargo reports, which is exact | `cargo metadata`, so it works on a machine that has never built the project |
+| 1059 | Falling back to the unpacked registry when there is no cargo | |
+| 1060 | It names the crates responsible, and what the failure will look like | |
+| 1061 | It also catches our own declared MSRV drifting below the real one | which is what made the original error unreadable |
+| 1062 | Verified against both real regressions by reintroducing them | 1.82 pin caught, stale 1.75 MSRV caught |
+| 1063 | `make test` runs it too, so it is not only a CI thing | |
+| 1064 | A weekly schedule, so a dependency moving under a still repository is caught | |
+
+## The bundle the container carried and never served
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1065 | The gateway serves the built frontend | found by writing the CI check that asserts it does |
+| 1066 | The image copied `frontend/dist` in and nothing served it | `docker compose up` gave a working API behind a 404 |
+| 1067 | And the compose file said it was served, which was simply untrue | |
+| 1068 | Hashed assets under `/assets` are served from their own mount | |
+| 1069 | Any other path falls back to the page, so a reload on a client route works | |
+| 1070 | Except under `/api/`, where an unknown path is still a 404 | a catch-all that answers everything turns a typo into a parse error elsewhere |
+| 1071 | A path cannot climb out of the bundle | resolved and checked against the root |
+| 1072 | No bundle means no mount, so a development machine is unaffected | Vite serves its own port, and mounting a missing directory raises at import |
+| 1073 | Half a build is not a build: a directory with no index is not mounted | |
+| 1074 | Nine tests, because this failed silently once already | |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:
