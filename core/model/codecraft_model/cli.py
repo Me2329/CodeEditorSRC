@@ -294,6 +294,74 @@ def largest_that_fits(available: int, vocab_size: int) -> tuple[str, str] | None
     return best
 
 
+#: The size a run uses when nothing says otherwise. Chosen for one 16GB card:
+#: it fits with room to spare, and a corpus proportionate to it is a fortnight
+#: rather than a season. See "Choosing a size" in the README.
+DEFAULT_SIZE = "xl"
+
+
+def choose_fit(config, device, args: argparse.Namespace) -> list[str]:
+    """Fill in the flags that are about fitting, when the user left them open.
+
+    A default size is only a default if the command that uses it runs. `xl`
+    with AdamW wants sixteen gigabytes of optimiser state before anything else,
+    so a default size without matching defaults for the optimiser and the step
+    would be a command that fails on the machine it was chosen for.
+
+    Rather than hard-code the flags that happen to suit one card, the same
+    arithmetic `doctor` uses picks the plainest configuration that fits here,
+    and says which one it picked and why. Anything given explicitly is left
+    exactly as given.
+
+    Returns the lines to print, so the caller decides whether this is a moment
+    for output.
+    """
+    available = available_memory_bytes(device)
+    notes: list[str] = []
+
+    settings = [
+        ("adamw", False, "adamw"),
+        ("adafactor", False, "--optimizer adafactor"),
+        ("adafactor", True, "--optimizer adafactor --fused-step"),
+    ]
+
+    if args.optimizer == "auto":
+        chosen = settings[-1]
+        for optimizer, fused, detail in settings:
+            needed = config.memory_estimate_bytes(optimizer=optimizer, fused=fused)["training"]
+            # Activations, the batch and fragmentation sit on top.
+            if available is None or needed * 1.35 < available:
+                chosen = (optimizer, fused, detail)
+                break
+        args.optimizer = chosen[0]
+        # An explicit --fused-step still wins; auto only fills a blank.
+        if args.fused_step is None:
+            args.fused_step = chosen[1]
+        if chosen[2] == "adamw":
+            notes.append("  optimiser: adamw, which fits here")
+        else:
+            notes.append(
+                f"  optimiser: {chosen[2]}, because adamw's extra copies do not fit here"
+            )
+
+    if args.fused_step is None:
+        args.fused_step = False
+
+    if getattr(args, "checkpointing", None) is None:
+        # Recomputation costs one extra forward pass and stops activation
+        # memory growing with depth. Free memory decides, not the size: a deep
+        # model on a large card does not need it.
+        needed = config.memory_estimate_bytes(
+            optimizer=args.optimizer, fused=args.fused_step
+        )["training"]
+        tight = available is not None and needed * 2.0 > available
+        args.checkpointing = tight
+        if tight:
+            notes.append("  recomputing activations, since memory here is tight")
+
+    return notes
+
+
 def warn_about_memory(config, device, args: argparse.Namespace) -> None:
     """Say so when the run will not fit, and what to do about it.
 
@@ -383,7 +451,24 @@ def command_train(args: argparse.Namespace) -> int:
     else:
         # The vocabulary comes from the tokenizer that was actually trained, not
         # from the preset: a mismatch would index outside the embedding table.
-        config = get_size(args.size or "micro").with_vocab(tokenizer.vocab_size)
+        chosen_size = args.size or DEFAULT_SIZE
+        config = get_size(chosen_size).with_vocab(tokenizer.vocab_size)
+        if args.size is None:
+            # Said before anything is allocated, because the default is now a
+            # size worth knowing about in advance: four gigabytes of weights
+            # and a corpus that takes a fortnight. Someone who typed `train
+            # --resume` with nothing to resume should find that out here rather
+            # than from the fan.
+            from .doctor import TOKENS_PER_PARAMETER
+
+            parameters = config.parameter_count()
+            print(
+                f"no --size given, so '{DEFAULT_SIZE}': {humanise(parameters)} parameters, "
+                f"and a corpus proportionate to it is "
+                f"{parameters * TOKENS_PER_PARAMETER / 1e9:.0f}B tokens.\n"
+                f"  `codecraft_model sizes` lists the others; `plan --size {DEFAULT_SIZE}` "
+                f"prices this one on this machine."
+            )
 
     overrides: dict = {}
     if args.context is not None:
@@ -397,14 +482,17 @@ def command_train(args: argparse.Namespace) -> int:
     # machine has does not fail with an exception: the allocator keeps
     # succeeding until the kernel kills the process, and the user is left with
     # "Killed" and no idea which number was the problem.
+    fit_notes = choose_fit(config, resolve_device(args.device), args)
     warn_about_memory(config, resolve_device(args.device), args)
+    for line in fit_notes:
+        print(line)
 
     model = CodeCraftLM(config)
     if args.checkpointing:
         # Activation memory stops scaling with depth, at the cost of one extra
         # forward pass per step.
         model.enable_gradient_checkpointing()
-    described = "resumed" if resuming else f"'{args.size or 'micro'}'"
+    described = "resumed" if resuming else f"'{args.size or DEFAULT_SIZE}'"
     print(
         f"model {described}: {humanise(model.parameter_count())} parameters, "
         f"vocab {config.vocab_size}, context {config.max_seq_len}, "
@@ -497,17 +585,30 @@ def command_doctor(args: argparse.Namespace) -> int:
 
     trains = largest_trainable(budget, args.vocab)
     serves = largest_servable(budget, args.vocab)
-    print(f"  trains: {describe_recommendation(trains, 'trains')}")
+    print(f"  fits:   {describe_recommendation(trains, 'trains')}")
     print(f"  runs:   {describe_recommendation(serves, 'runs')}")
 
+    # Fitting and finishing are different questions, and the larger answer to
+    # the first is usually the wrong answer to the second. The default size is
+    # chosen for the second.
+    default = get_size(DEFAULT_SIZE).with_vocab(args.vocab)
+    if trains is not None and trains.name != DEFAULT_SIZE:
+        print(
+            f"\n  the default is {DEFAULT_SIZE} ({humanise(default.parameter_count())}), "
+            f"not {trains.name}: the largest size that fits\n"
+            f"  is rarely the largest one you can afford to finish. `plan` prices both."
+        )
+
     if trains is not None:
-        costs = disk_budget(get_size(trains.name).with_vocab(args.vocab))
+        # Priced for the size that will actually be trained, not the largest
+        # that would fit.
+        costs = disk_budget(default)
         where = Path(args.run) if args.run else Path.cwd()
         free = free_disk_bytes(where)
         print(f"\ndisk, where {where} is")
         print(f"  free {describe_bytes(free)}")
         print(
-            f"  two checkpoints of {trains.name}: "
+            f"  two checkpoints of {DEFAULT_SIZE}: "
             f"{describe_bytes(costs.both_checkpoints_bytes)}"
         )
         print(
@@ -529,10 +630,10 @@ def command_doctor(args: argparse.Namespace) -> int:
             f"  a corpus of {costs.corpus_tokens / 1e9:,.0f}B tokens takes as long as this "
             f"machine takes\n  to get through it, and that is the number that decides "
             f"whether the run\n  finishes. Measure it before starting:\n\n"
-            f"    python -m codecraft_model plan --size {trains.name}"
+            f"    python -m codecraft_model plan --size {DEFAULT_SIZE}"
             # The recommendation reads as prose for AdamW, which needs no flag,
             # and as flags for everything else, which do.
-            f"{'' if trains.detail == 'adamw' else ' ' + trains.detail} --hours 168"
+            f" --hours 336"  # a fortnight, which is what xl is chosen for
         )
     return 0
 
@@ -573,6 +674,9 @@ def command_plan(args: argparse.Namespace) -> int:
     config = get_size(args.size).with_vocab(args.vocab)
     block = min(args.block, config.max_seq_len)
 
+    # The same resolution `train` does, so what is measured is what will run.
+    fit_notes = choose_fit(config, device, args)
+
     training = TrainConfig(
         batch_size=args.batch,
         block_size=block,
@@ -592,6 +696,8 @@ def command_plan(args: argparse.Namespace) -> int:
     if args.loss_chunk:
         detail += f" --loss-chunk {args.loss_chunk}"
     print(f"  {args.steps} steps of {args.batch} x {block} tokens, {detail}")
+    for line in fit_notes:
+        print(line)
 
     def too_big() -> int:
         """The failure people actually hit, said in terms of what to change.
@@ -1546,13 +1652,19 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         choices=sorted(SIZES),
         help=(
-            "architecture preset (default: micro). Ignored when resuming, "
-            "where the architecture comes from the checkpoint"
+            f"architecture preset (default: {DEFAULT_SIZE}, about a billion parameters, "
+            "which one 16GB card trains on a proportionate corpus in about a fortnight). "
+            "Ignored when resuming, where the architecture comes from the checkpoint"
         ),
     )
     trainer.add_argument("--steps", type=int, default=2000)
-    trainer.add_argument("--batch", type=int, default=16)
-    trainer.add_argument("--block", type=int, default=256, help="tokens per window")
+    trainer.add_argument(
+        "--batch",
+        type=int,
+        default=8,
+        help="sequences per step; with the default block that is 8192 tokens",
+    )
+    trainer.add_argument("--block", type=int, default=1024, help="tokens per window")
     trainer.add_argument("--accumulate", type=int, default=1)
     trainer.add_argument("--lr", type=float, default=3e-4)
     trainer.add_argument("--warmup", type=int, default=100)
@@ -1566,20 +1678,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     trainer.add_argument(
         "--optimizer",
-        default="adamw",
-        choices=["adamw", "adafactor"],
+        default="auto",
+        choices=["auto", "adamw", "adafactor"],
         help=(
             "adafactor keeps the second moment as one number per row and column "
-            "instead of a full copy, which halves the memory a run needs"
+            "instead of a full copy, which is what decides whether a size fits at "
+            "all. The default measures this machine and picks the plainest thing "
+            "that fits, saying which and why"
         ),
     )
     trainer.add_argument(
         "--fused-step",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "update each parameter during the backward pass and free its gradient there, "
             "so the model is never accompanied by a full copy of itself. Needs "
-            "--optimizer adafactor, and gives up gradient accumulation and global clipping"
+            "--optimizer adafactor, and gives up gradient accumulation and global clipping. "
+            "Chosen automatically when the optimiser is"
         ),
     )
     trainer.add_argument(
@@ -1611,7 +1727,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     trainer.add_argument(
         "--checkpointing",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "recompute activations in the backward pass: roughly a third more "
             "time per step, and activation memory stops scaling with depth"
@@ -1654,7 +1771,7 @@ def main(argv: list[str] | None = None) -> int:
     planner = subparsers.add_parser(
         "plan", help="time real steps at a real size, and say what the run will cost"
     )
-    planner.add_argument("--size", default="base", choices=sorted(SIZES))
+    planner.add_argument("--size", default=DEFAULT_SIZE, choices=sorted(SIZES))
     planner.add_argument("--vocab", type=int, default=32768)
     planner.add_argument("--batch", type=int, default=4)
     planner.add_argument("--block", type=int, default=1024)
@@ -1667,8 +1784,15 @@ def main(argv: list[str] | None = None) -> int:
         default=2,
         help="untimed steps first: the first one allocates everything the run uses",
     )
-    planner.add_argument("--optimizer", default="adamw", choices=("adamw", "adafactor"))
-    planner.add_argument("--fused-step", action="store_true")
+    planner.add_argument(
+        "--optimizer", default="auto", choices=("auto", "adamw", "adafactor")
+    )
+    planner.add_argument(
+        "--fused-step", action=argparse.BooleanOptionalAction, default=None
+    )
+    planner.add_argument(
+        "--checkpointing", action=argparse.BooleanOptionalAction, default=None
+    )
     planner.add_argument(
         "--loss-chunk",
         type=int,
@@ -1676,7 +1800,6 @@ def main(argv: list[str] | None = None) -> int:
         metavar="TOKENS",
         help="score the sequence in pieces of this size; see `train --loss-chunk`",
     )
-    planner.add_argument("--checkpointing", action="store_true")
     planner.add_argument(
         "--hours",
         type=float,

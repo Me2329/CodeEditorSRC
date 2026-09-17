@@ -1518,6 +1518,26 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1024 | Mismatched targets are refused where they are noticed | |
 | 1025 | `plan` measures the flag too, so the trade can be checked on your own card | |
 
+## A default size chosen to finish, not to fit
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1026 | `xl`, about a billion parameters, is the default size | one 16GB card trains it properly in about a fortnight |
+| 1027 | Chosen by what can be finished, not by what fits | the same card holds 2.29B and takes ten weeks to feed it |
+| 1028 | `doctor` reports "fits" and the default separately | and says why they differ |
+| 1029 | Its disk estimate prices the size that will be trained | not the largest that would fit |
+| 1030 | The default announces itself before anything is allocated | `train --resume` with nothing to resume used to start a 1B run in silence |
+| 1031 | Naming a size explicitly says nothing extra | |
+| 1032 | `--optimizer auto` measures the machine and picks what fits | the plainest configuration that works, adamw first |
+| 1033 | It says which it picked and why | |
+| 1034 | `--fused-step` and `--checkpointing` fill themselves in the same way | |
+| 1035 | Both are now `--flag` / `--no-flag`, so a choice can be turned off | |
+| 1036 | Anything given explicitly is left exactly as given | |
+| 1037 | The memory warning still fires for what choosing cannot fix | an explicit optimiser that does not fit |
+| 1038 | `plan` resolves the flags the same way `train` does | so what is measured is what will run |
+| 1039 | Default batch and block are 8 and 1024, which is 8192 tokens a step | coherent with the default size rather than left at the old tiny values |
+| 1040 | The README has a table of sizes against what each costs in days | and says the durations are estimated, not measured here |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

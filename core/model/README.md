@@ -902,8 +902,7 @@ same trade gradient checkpointing makes everywhere else and costs one extra pass
 through a single matrix multiply.
 
 ```bash
-python -m codecraft_model train --run runs/big --size xxl \
-    --optimizer adafactor --fused-step --loss-chunk 512
+python -m codecraft_model train --run runs/xl --loss-chunk 512
 ```
 
 Measured here, on a 32768-token vocabulary at batch 4 and context 1024:
@@ -947,6 +946,45 @@ One deliberate difference from `F.cross_entropy`: a batch in which every target
 is padding returns zero rather than NaN. The division is by the number of tokens
 that counted, and when that is zero there is nothing to average — and one NaN
 poisons every weight in the model on the next step.
+
+## Choosing a size
+
+The default is `xl`, about a billion parameters, and the reason is the arithmetic
+two sections below rather than anything about the architecture.
+
+A 16GB card will hold a 2.29B model in training — Adafactor and the fused step
+see to that — and it will take about ten weeks to feed it the corpus it deserves.
+The same card trains `xl` properly in about a fortnight. A model given a tenth of
+the tokens it wants is beaten by one a fifth the size that got all of them, so
+the larger number is the worse model *and* the longer wait.
+
+| size | parameters | weights + state | a proportionate corpus | on one 16GB card |
+| --- | --- | --- | --- | --- |
+| `base` | 100M | 0.5GB | 2.0B tokens | a few hours |
+| `large` | 673M | 2.9GB | 13B tokens | about a week |
+| **`xl`** | **1.01B** | **4.3GB** | **20B tokens** | **about a fortnight** |
+| `xxl` | 2.29B | 9.5GB | 46B tokens | about ten weeks |
+| `max` | 4.32B | 17.7GB | 86B tokens | does not fit |
+
+Those durations assume a card sustaining around 100 TFLOP/s, which is an RTX
+5080 at a realistic utilisation and *is not measured here* — there is no such
+card in the machine this was written on. `plan` measures yours in about thirty
+seconds and every number in the table scales directly from it.
+
+Nothing about this is a recommendation to stop at a billion. It is a
+recommendation to pick the size you can finish, and to find out which that is
+before starting rather than in the second month.
+
+```bash
+python -m codecraft_model plan --hours 336     # a fortnight, at the default size
+python -m codecraft_model train --run runs/xl  # --size xl, and flags to match
+```
+
+The second command fills in the flags that are about fitting — the optimiser,
+the fused step, activation recomputation — by measuring this machine and taking
+the plainest configuration that works, and it says which one it took and why.
+Anything given explicitly is left exactly as given, and `--optimizer adamw`
+turns the choosing off entirely.
 
 ## The constraint memory arithmetic hides
 

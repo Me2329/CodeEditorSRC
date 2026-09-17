@@ -331,14 +331,19 @@ def test_a_size_given_on_a_resume_says_it_is_ignored(tmp_path, sources, capsys) 
 
 
 def test_resume_without_a_checkpoint_just_trains(tmp_path, sources) -> None:
-    """Asking to continue something that was never started is not an error."""
+    """Asking to continue something that was never started is not an error.
+
+    A size is given because there is no checkpoint to take one from, and the
+    default is a billion parameters: what this checks is the resume path, not
+    how long a fresh run at the default takes.
+    """
     run = tmp_path / "run"
     main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
 
     assert (
         main(
             [
-                "train", "--run", str(run), "--steps", "2", "--batch", "2",
+                "train", "--run", str(run), "--size", "micro", "--steps", "2", "--batch", "2",
                 "--block", "32", "--warmup", "1", "--eval-every", "2",
                 "--resume", "--threads", "2",
             ]
@@ -394,13 +399,13 @@ def test_a_measurement_can_be_kept_off_the_cores_in_use(tmp_path, sources, monke
     assert asked == [1]
 
 
-def test_a_run_that_will_not_fit_says_so_before_allocating(
+def test_a_tight_machine_is_fitted_rather_than_only_warned(
     tmp_path, sources, capsys, monkeypatch
 ) -> None:
-    """The allocator does not fail: the kernel kills the process instead."""
+    """The flags that are about fitting now resolve themselves, and say so."""
     run = tmp_path / "run"
     assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
-    # A machine with a gigabyte, against the smallest size there is.
+    # A machine with a gigabyte, against a size that does not fit in one.
     monkeypatch.setattr("codecraft_model.device.host_memory_bytes", lambda: 1_000_000_000)
 
     capsys.readouterr()
@@ -410,6 +415,39 @@ def test_a_run_that_will_not_fit_says_so_before_allocating(
                 "train", "--run", str(run), "--size", "base", "--steps", "1",
                 "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
                 "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    # It picked the plainest configuration that fits, and named it.
+    assert "adafactor" in output
+    assert "do not fit here" in output
+    assert "recomputing activations" in output
+
+
+def test_a_run_that_still_will_not_fit_says_so_before_allocating(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """The warning is still there for what choosing cannot fix.
+
+    The allocator does not fail when a run is too big: it keeps succeeding
+    until the kernel kills the process, and the user is left with "Killed" and
+    no idea which number was the problem. Asking for an optimiser explicitly
+    turns the automatic choice off, so the warning is what is left.
+    """
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    monkeypatch.setattr("codecraft_model.device.host_memory_bytes", lambda: 1_000_000_000)
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "base", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2", "--optimizer", "adamw", "--no-checkpointing",
             ]
         )
         == 0
@@ -505,13 +543,32 @@ def test_report_on_a_directory_with_no_run_says_so(tmp_path, capsys) -> None:
 
 
 def test_doctor_says_what_this_machine_can_do(capsys) -> None:
+    from codecraft_model import cli
+
     assert main(["doctor"]) == 0
 
     output = capsys.readouterr().out
     assert "torch" in output
-    assert "trains:" in output and "runs:" in output
-    # And what the disk would have to hold for the size it recommends.
+    # Fitting and finishing are different questions and are labelled as such.
+    assert "fits:" in output and "runs:" in output
+    # And what the disk would have to hold for the size it will actually train.
     assert "corpus proportionate to it" in output
+    assert f"two checkpoints of {cli.DEFAULT_SIZE}" in output
+
+
+def test_doctor_says_why_the_default_is_not_the_largest_that_fits(capsys) -> None:
+    """The largest size that fits is rarely the largest you can afford to finish."""
+    from codecraft_model import cli
+
+    assert main(["doctor"]) == 0
+    output = capsys.readouterr().out
+    if f"fits:   {cli.DEFAULT_SIZE}" in output:
+        # On a machine where the default *is* the largest that fits there is
+        # nothing to explain, and nothing is said.
+        assert "afford to finish" not in output
+        return
+    assert f"the default is {cli.DEFAULT_SIZE}" in output
+    assert "afford to finish" in output
 
 
 def test_plan_measures_a_real_step_and_prices_the_run(capsys) -> None:
@@ -584,3 +641,58 @@ def test_plan_refuses_a_fused_step_without_the_optimiser_it_needs(capsys) -> Non
     """A bad combination of flags prints its fix rather than a traceback."""
     assert main(["plan", "--size", "micro", "--fused-step", "--device", "cpu"]) == 1
     assert "use --optimizer adafactor" in capsys.readouterr().err
+
+
+def test_the_default_size_announces_itself_before_allocating(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """A default of a billion parameters is one to hear about in advance.
+
+    Someone who typed `train --resume` with nothing to resume should find out
+    what is about to be built from the terminal, not from the fan.
+    """
+    from codecraft_model import cli
+
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    # Stopped at the announcement: building the real default here would take
+    # four gigabytes and a while, and the announcement is what is under test.
+    class Stop(Exception):
+        pass
+
+    monkeypatch.setattr(cli, "CodeCraftLM", lambda *args, **kwargs: (_ for _ in ()).throw(Stop()))
+    capsys.readouterr()
+    with pytest.raises(Stop):
+        main(
+            [
+                "train", "--run", str(run), "--steps", "1", "--batch", "1",
+                "--block", "32", "--threads", "2",
+            ]
+        )
+
+    output = capsys.readouterr().out
+    assert f"no --size given, so '{cli.DEFAULT_SIZE}'" in output
+    # The count is the one for this tokenizer, not the one from the preset
+    # table: a 300-token vocabulary makes a much smaller embedding.
+    assert "M parameters" in output or "B parameters" in output
+    # And says what a corpus for it would cost, which is the real commitment.
+    assert "B tokens" in output
+    assert "sizes" in output
+
+
+def test_a_size_that_was_asked_for_is_not_announced_as_a_default(
+    tmp_path, sources, capsys
+) -> None:
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "1", "--batch", "2",
+            "--block", "32", "--warmup", "1", "--eval-every", "1", "--threads", "2",
+        ]
+    )
+
+    assert "no --size given" not in capsys.readouterr().out
