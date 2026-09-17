@@ -67,7 +67,13 @@ COPY --from=services /build/core/analyzer/build/codecraft-analyzer \
      /app/core/analyzer/build/codecraft-analyzer
 COPY --from=frontend /build/dist/ /app/frontend/dist/
 
-RUN chmod +x scripts/*.sh scripts/lib/*.sh \
+# Carriage returns are stripped as well as the executable bit being set. A
+# checkout made on Windows arrives with CRLF unless .gitattributes was honoured
+# — a ZIP download never sees it — and a shebang ending in \r makes the kernel
+# look for an interpreter named `bash\r`. The container then dies with a
+# message that names neither the file nor the cause.
+RUN sed -i 's/\r$//' scripts/*.sh scripts/lib/*.sh \
+    && chmod +x scripts/*.sh scripts/lib/*.sh \
     && mkdir -p /var/tmp/codecraft /run/codecraft
 
 ENV CODECRAFT_WORKSPACE_ROOT=/var/tmp/codecraft \
@@ -91,6 +97,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
 # Claude credential its local engine still serves completions and symbols, and
 # the chat panel reports that the model is unavailable.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 CMD ["/usr/local/bin/docker-entrypoint.sh"]

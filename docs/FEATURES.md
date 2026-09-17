@@ -1634,6 +1634,20 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1105 | It still defaults to 8000, so nothing changes for anyone who is fine | |
 | 1106 | Found by a user hitting "port is already allocated" | 8000 is a popular port, and the docs had told them to run something else on it |
 
+## Carriage returns, which killed the container on Windows
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1107 | `.gitattributes` pins LF for everything executed on Linux | Git on Windows checks out CRLF by default, and there was no such file |
+| 1108 | A shebang ending in a carriage return makes the kernel seek `bash\r` | the container exits 127 naming neither the file nor the cause |
+| 1109 | The Dockerfile strips carriage returns from the scripts it copies | a ZIP download never sees `.gitattributes` at all |
+| 1110 | Reproduced and the fix proved, rather than assumed | the same error, then `hello`, from the same file |
+| 1111 | A check refuses carriage returns in committed executable files | which is the one place the problem can start |
+| 1112 | It says which file, and whether the shebang itself is affected | |
+| 1113 | Run by `make test` and by CI | the Linux runner never produces CRLF itself, so it checks the bytes |
+| 1114 | Makefiles pinned too: a trailing return becomes part of the command | and the error quotes a command that looks perfectly correct |
+| 1115 | Found by a user on Windows, twice in a row now | port collision, then this |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

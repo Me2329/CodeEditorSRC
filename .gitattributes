@@ -1,0 +1,65 @@
+# Line endings, and why this file exists.
+#
+# Git on Windows checks files out with CRLF by default. That is fine for source
+# a Windows editor will open, and fatal for anything a Linux kernel has to
+# execute: a shebang line ending in \r makes the kernel look for an interpreter
+# literally named `bash\r`, and the container dies with
+#
+#   /usr/bin/env: 'bash\r': No such file or directory
+#
+# which names neither the file nor the cause. That is exactly what happened to
+# the first person who cloned this on Windows and ran `docker compose up`.
+#
+# So everything the image executes, or that is otherwise whitespace-sensitive,
+# is pinned to LF regardless of the platform it is checked out on.
+
+# Let Git decide for anything not named below.
+* text=auto
+
+# --- executed inside the container, so LF is not a preference -----------------
+*.sh            text eol=lf
+docker-entrypoint.sh text eol=lf
+scripts/**      text eol=lf
+*.cfg           text eol=lf
+*.policy        text eol=lf
+
+# Make treats a trailing \r as part of the command, so a CRLF Makefile fails
+# with errors that quote a command that looks perfectly correct.
+Makefile        text eol=lf
+*.mk            text eol=lf
+
+# Read by tools that do not all tolerate CRLF, and diffed across platforms.
+*.py            text eol=lf
+*.rs            text eol=lf
+*.toml          text eol=lf
+*.json          text eol=lf
+*.jsonl         text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Dockerfile      text eol=lf
+.dockerignore   text eol=lf
+.gitignore      text eol=lf
+
+# Source the editor itself compiles and runs: kept LF so a workspace exported
+# on one platform behaves the same on another.
+*.c             text eol=lf
+*.h             text eol=lf
+*.cpp           text eol=lf
+*.hpp           text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+*.md            text eol=lf
+
+# --- never touched ------------------------------------------------------------
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.pt            binary
+*.bin           binary

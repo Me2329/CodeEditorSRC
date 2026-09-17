@@ -133,9 +133,12 @@ dev: ## Run the gateway, the assistant and the frontend together
 check-rust-pin: ## Check the container's Rust is new enough for the lockfiles
 	@python3 scripts/check_rust_pin.py
 
-.PHONY: check-rust-pin
+check-line-endings: ## Check nothing executed on Linux has carriage returns
+	@python3 scripts/check_line_endings.py
 
-test: check-rust-pin test-sandbox test-supervisor test-assistant test-analyzer test-backend test-model test-frontend ## Run every test suite
+.PHONY: check-rust-pin check-line-endings
+
+test: check-rust-pin check-line-endings test-sandbox test-supervisor test-assistant test-analyzer test-backend test-model test-frontend ## Run every test suite
 	@printf '\n\033[1;32mAll suites passed.\033[0m\n\n'
 
 .PHONY: test-sandbox

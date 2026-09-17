@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   rust-pin:
-    name: the Rust pin matches the lockfiles
+    name: the pins and the bytes are right
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +39,12 @@ jobs:
 
       - name: check
         run: python3 scripts/check_rust_pin.py
+
+      # A CRLF shebang kills the container on start, and the CI runner is
+      # Linux so it never produces one itself — only a Windows checkout does.
+      # Checking the committed bytes is what catches it wherever it came from.
+      - name: line endings
+        run: python3 scripts/check_line_endings.py
 
   image:
     name: the image builds and answers
