@@ -459,7 +459,13 @@ def train(
             # how fast steps were submitted rather than how fast they ran.
             synchronize(device)
             elapsed = time.time() - started
-            throughput = tokens_per_step * (step + 1) / max(elapsed, 1e-6)
+            # Steps run in *this* process, not since step zero. A resumed run
+            # measures its elapsed time from the resume, so counting tokens
+            # from the beginning divides work this process never did by time it
+            # did spend: the first line after resuming from step 400 read six
+            # million tokens a second, and it is the number a reader uses to
+            # estimate what is left.
+            throughput = tokens_per_step * (step + 1 - start_step) / max(elapsed, 1e-6)
             print(
                 f"  step {step:>5}/{config.steps}  loss {total_loss:6.3f}  "
                 f"lr {learning_rate:.2e}  |grad| {grad_norm:5.2f}  "

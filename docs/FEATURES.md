@@ -1661,6 +1661,21 @@ either arrives, work on a list rather than a shape". Navigation arrived.
 | 1122 | And notes that PowerShell continues lines with a backtick | a command wrapped for a README does not paste |
 | 1123 | WSL is described as more convenient, not as required | because it is not |
 
+## Stopping a run and picking it up tomorrow
+
+| # | Feature | Notes |
+| --- | --- | --- |
+| 1124 | `--resume` continues from the last checkpoint | verified by killing a run at step 400 of 2000 and continuing it |
+| 1125 | The architecture comes from the checkpoint, so `--size` is not repeated | |
+| 1126 | Optimiser state is restored, so the loss does not jump on the first step | 4.93 before the kill, 4.72 after |
+| 1127 | Checkpoints are written every `--eval-every` steps, atomically | a machine that dies mid-write loses the write, not the run |
+| 1128 | The live throughput counts only the steps this process ran | |
+| 1129 | Before, a resumed run read 565,850 tok/s against a steady 9,400 | it divided work it never did by time it did spend |
+| 1130 | Which is the number a reader uses to estimate what is left | so it was wrong in the one place it is relied on |
+| 1131 | The same family as a bug fixed earlier in the summary, missed in the log line | |
+| 1132 | The regression test compares two runs, not two lines of one | with the arithmetic wrong, every line of the resumed run is inflated |
+| 1133 | And was checked to fail against the old code before being kept | the first version of it passed either way and guarded nothing |
+
 ## Not implemented
 
 Stated plainly so the list above can be trusted:

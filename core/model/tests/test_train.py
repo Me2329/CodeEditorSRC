@@ -700,3 +700,59 @@ def test_removing_the_hooks_puts_the_ordinary_behaviour_back() -> None:
     _, loss, _ = model(tokens, targets=tokens)
     loss.backward()
     assert any(parameter.grad is not None for parameter in model.parameters())
+
+
+def test_a_resumed_run_reports_its_own_throughput(tmp_path, capsys) -> None:
+    """Tokens this process moved, over time this process spent.
+
+    A resumed run measures elapsed time from the resume, so counting tokens
+    from step zero divides work it never did by time it did spend. Resuming
+    from step 60 reported 565,850 tokens a second against a steady 9,400 for
+    the same model on the same machine — and it is the number a reader uses to
+    estimate what is left.
+
+    The comparison is against the first run rather than within the second,
+    because with the arithmetic wrong every line of the resumed run is inflated,
+    not only the first.
+    """
+    import re
+
+    def rates(output: str) -> list[float]:
+        return [float(n.replace(",", "")) for n in re.findall(r"([\d,]+) tok/s", output)]
+
+    tokens = np.tile(np.arange(1, 17, dtype=np.uint16), 400)
+    write_dataset(tokens, tmp_path, validation_fraction=0.1)
+    dataset = TokenDataset(tmp_path / "train.bin")
+    held_out = TokenDataset(tmp_path / "val.bin")
+
+    config = ModelConfig(
+        vocab_size=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+        d_ff=64, max_seq_len=32,
+    )
+    common = dict(batch_size=2, block_size=16, warmup_steps=1, eval_every=1000)
+
+    capsys.readouterr()
+    train(
+        CodeCraftLM(config), dataset, held_out,
+        TrainConfig(steps=60, log_every=10, **common),
+        output_dir=tmp_path, log=True,
+    )
+    fresh = rates(capsys.readouterr().out)
+
+    capsys.readouterr()
+    train(
+        CodeCraftLM(config), dataset, held_out,
+        TrainConfig(steps=70, log_every=1, **common),
+        output_dir=tmp_path, log=True, resume_from=tmp_path / "model.pt",
+    )
+    resumed = rates(capsys.readouterr().out)
+
+    assert fresh and resumed, "a run reported no throughput at all"
+    # Same model, same data, same machine: the second run cannot legitimately
+    # be an order of magnitude faster than the first. Counting from step zero
+    # made it sixty times faster, because it claimed sixty steps of work in one
+    # step of time.
+    assert max(resumed) < max(fresh) * 10, (
+        f"the resumed run claims {max(resumed):,.0f} tok/s against {max(fresh):,.0f} "
+        "for identical work: it is counting steps this process never ran"
+    )
