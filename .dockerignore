@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/target
+**/build
+**/__pycache__
+**/.venv
+.git
+.github
+docs
+*.log

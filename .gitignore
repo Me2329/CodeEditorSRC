@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+target/
+*.o
+*.so
+*.exe
+main_bin
+frontend/dist/
+core/analyzer/build/
+core/supervisor/target/
+
+# Environment and local state
+.env
+.env.local
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Local supervisor socket
+run/
+
+# Sandbox scratch space
+/var/tmp/codecraft/
+*.meta.json
+
+# Backend virtualenv
+backend/.venv/
+
+# Model runs: tokenizers, token streams and checkpoints are reproducible with
+# "make model-prepare && make model-train", so the artefacts stay out of git.
+core/model/runs/

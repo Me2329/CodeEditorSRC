@@ -1,0 +1,337 @@
+"""Assistant surface tests, run against the real daemon when it is available."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+
+from app import assistant
+from app.config import settings
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ASSISTANT_BINARY = REPO_ROOT / "core" / "assistant" / "target" / "release" / "codecraft-assistant"
+
+WORKSPACE = {
+    "language": "rust",
+    "files": [
+        {
+            "name": "main.rs",
+            "content": (
+                "pub struct Connection { addr: String }\n\n"
+                "pub fn connect(addr: &str) -> Connection {\n"
+                "    Connection { addr: addr.to_string() }\n"
+                "}\n\n"
+                "fn main() { let c = connect(\"x\"); println!(\"{}\", c.addr); }\n"
+            ),
+        }
+    ],
+    "active_file": "main.rs",
+}
+
+
+@pytest.fixture(scope="module")
+def daemon(tmp_path_factory):
+    """Start a real assistant daemon on a private socket."""
+    if not ASSISTANT_BINARY.is_file():
+        pytest.skip("assistant binary is not built")
+
+    socket_path = tmp_path_factory.mktemp("assistant") / "assistant.sock"
+    process = subprocess.Popen(
+        [str(ASSISTANT_BINARY), "--socket", str(socket_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(50):
+        if socket_path.exists():
+            break
+        time.sleep(0.1)
+    if not socket_path.exists():
+        process.terminate()
+        pytest.skip("assistant daemon did not start")
+
+    original = settings.assistant_socket
+    object.__setattr__(settings, "assistant_socket", socket_path)
+    try:
+        yield socket_path
+    finally:
+        object.__setattr__(settings, "assistant_socket", original)
+        process.terminate()
+        process.wait(timeout=10)
+
+
+async def test_health_reports_the_configured_model(daemon) -> None:
+    health = await assistant.health()
+    assert health is not None
+    assert health["model"]
+    # Whether a credential exists depends on the host; the field must be present.
+    assert "remote_available" in health
+
+
+async def test_completions_rank_workspace_symbols_first(daemon) -> None:
+    frames = await assistant.collect(
+        {"op": "complete", "workspace": WORKSPACE, "prefix": "conn", "limit": 10}
+    )
+    items = next(f["items"] for f in frames if f["type"] == "completions")
+
+    labels = [item["label"] for item in items]
+    assert "connect" in labels
+    assert "Connection" in labels
+    # A declared symbol must outrank a plain identifier or keyword.
+    assert items[0]["kind"] in {"function", "struct"}
+
+
+async def test_symbols_lists_every_declaration(daemon) -> None:
+    frames = await assistant.collect({"op": "symbols", "workspace": WORKSPACE})
+    items = next(f["items"] for f in frames if f["type"] == "symbols")
+
+    by_name = {item["name"]: item for item in items}
+    assert by_name["Connection"]["kind"] == "struct"
+    assert by_name["connect"]["kind"] == "function"
+    assert by_name["connect"]["line"] == 3
+
+
+async def test_a_lookup_question_is_answered_locally(daemon) -> None:
+    frames = await assistant.collect(
+        {
+            "op": "chat",
+            "messages": [{"role": "user", "content": "where is connect"}],
+            "workspace": WORKSPACE,
+            "route": "auto",
+        }
+    )
+    routed = next(f for f in frames if f["type"] == "routed")
+    assert routed["engine"] == "local"
+
+    answer = "".join(f["text"] for f in frames if f["type"] == "delta")
+    assert "main.rs" in answer
+    assert "line 3" in answer
+
+
+async def test_an_open_ended_question_is_not_answered_locally(daemon) -> None:
+    """Without a credential this must fail honestly rather than invent an answer."""
+    frames = await assistant.collect(
+        {
+            "op": "chat",
+            "messages": [
+                {"role": "user", "content": "rewrite this to use a connection pool"}
+            ],
+            "workspace": WORKSPACE,
+            "route": "auto",
+        },
+        timeout=30.0,
+    )
+
+    kinds = {frame["type"] for frame in frames}
+    if "error" in kinds:
+        message = next(f["message"] for f in frames if f["type"] == "error")
+        assert "credential" in message.lower() or "claude" in message.lower()
+    else:
+        routed = next(f for f in frames if f["type"] == "routed")
+        assert routed["engine"] == "model"
+
+
+async def test_local_route_refuses_rather_than_guessing(daemon) -> None:
+    frames = await assistant.collect(
+        {
+            "op": "chat",
+            "messages": [{"role": "user", "content": "why does this deadlock?"}],
+            "workspace": WORKSPACE,
+            "route": "local",
+        }
+    )
+    error = next(f for f in frames if f["type"] == "error")
+    assert "local engine" in error["message"]
+
+
+async def test_completions_are_fast_enough_to_type_against(daemon) -> None:
+    """The local path must stay well under a keystroke interval."""
+    import statistics
+
+    timings = []
+    for _ in range(20):
+        start = time.perf_counter()
+        await assistant.collect(
+            {"op": "complete", "workspace": WORKSPACE, "prefix": "co", "limit": 10}
+        )
+        timings.append((time.perf_counter() - start) * 1000)
+
+    median = statistics.median(timings)
+    assert median < 20, f"local completion median was {median:.1f}ms"
+
+
+def test_gateway_reports_the_assistant_in_health(client) -> None:
+    payload = client.get("/api/v1/health").json()
+    assert "assistant" in payload
+
+
+def test_completion_endpoint_reports_a_missing_daemon_clearly(client, tmp_path) -> None:
+    """With no daemon the endpoint must say so, not return empty results.
+
+    Points the setting at a socket that certainly does not exist rather than
+    depending on whether one happens to be running on this machine.
+    """
+    original = settings.assistant_socket
+    object.__setattr__(settings, "assistant_socket", tmp_path / "absent.sock")
+    try:
+        response = client.post(
+            "/api/v1/assistant/complete",
+            json={"workspace": WORKSPACE, "prefix": "co"},
+        )
+    finally:
+        object.__setattr__(settings, "assistant_socket", original)
+
+    assert response.status_code == 503
+    assert "not running" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
+
+
+def test_agent_socket_announces_the_daemon(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        ready = socket.receive_json()
+
+    assert ready["type"] == "ready"
+    assert "available" in ready
+    assert "remote_available" in ready
+
+
+def test_agent_socket_rejects_an_empty_task(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "run", "messages": [], "workspace": {"language": "python"}})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Describe the task" in frame["message"]
+
+
+def test_agent_socket_rejects_an_unknown_action(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "explode"})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Unknown action" in frame["message"]
+
+
+def test_agent_cancel_with_nothing_running_is_harmless(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json({"action": "cancel"})
+        frame = socket.receive_json()
+
+    assert frame["type"] == "idle"
+
+
+def test_agent_socket_rejects_a_hostile_workspace(client) -> None:
+    with client.websocket_connect("/api/v1/ws/agent") as socket:
+        socket.receive_json()
+        socket.send_json(
+            {
+                "action": "run",
+                "messages": [{"role": "user", "content": "go"}],
+                "workspace": {
+                    "language": "python",
+                    "files": [{"name": "../../etc/cron.d/pwn", "content": "x"}],
+                },
+            }
+        )
+        frame = socket.receive_json()
+
+    assert frame["type"] == "failed"
+    assert "Invalid workspace" in frame["message"]
+
+
+async def test_agent_run_without_a_credential_fails_honestly(daemon) -> None:
+    """The daemon must say a credential is missing rather than doing nothing."""
+    from app import assistant as assistant_module
+
+    session = await assistant_module.start_agent(
+        {
+            "op": "agent",
+            "messages": [{"role": "user", "content": "add a docstring"}],
+            "workspace": {
+                "language": "python",
+                "files": [{"name": "main.py", "content": "def f(): pass\n"}],
+            },
+            "mode": "auto",
+            "effort": "high",
+            "max_steps": 4,
+        }
+    )
+    try:
+        frames = [frame async for frame in session.events(timeout=30.0)]
+    finally:
+        await session.close()
+
+    # Either it ran (a credential exists here) or it said why it could not.
+    kinds = {frame.get("type") for frame in frames}
+    if "error" in kinds:
+        message = next(f["message"] for f in frames if f.get("type") == "error")
+        assert "credential" in message.lower()
+    else:
+        assert kinds & {"step", "failed", "finished"}
+
+
+# ------------------------------------------------------- what a workspace may be
+
+
+def test_a_workspace_may_hold_more_files_than_one_that_would_be_run(client) -> None:
+    """Nothing here is run, and dropping a folder in is an ordinary thing to do.
+
+    The execution limit is the size of a sandbox. This one is the size of an
+    index, so two hundred small files is a question worth answering rather than
+    one worth refusing.
+    """
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={"workspace": {"files": [{"name": f"f{i}.py", "content": ""} for i in range(200)]}},
+    )
+    assert response.status_code != 422
+
+
+def test_a_workspace_of_absurdly_many_files_is_still_refused(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={"workspace": {"files": [{"name": f"f{i}.py", "content": ""} for i in range(600)]}},
+    )
+    assert response.status_code == 422
+
+
+def test_a_workspace_larger_than_the_source_limit_is_refused(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/symbols",
+        json={
+            "workspace": {
+                "files": [{"name": "big.py", "content": "x" * (5 * 1024 * 1024)}]
+            }
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_an_empty_workspace_passes_validation(client) -> None:
+    """Unlike an execution request, which has nothing to run.
+
+    With no daemon the request fails at the daemon rather than at the model, and
+    503 is the proof that validation let it through.
+    """
+    response = client.post("/api/v1/assistant/symbols", json={"workspace": {"files": []}})
+
+    assert response.status_code in (200, 503)
+
+
+def test_a_completion_prefix_is_a_word_not_a_document(client) -> None:
+    response = client.post(
+        "/api/v1/assistant/complete",
+        json={"workspace": {"files": []}, "prefix": "x" * 5000},
+    )
+    assert response.status_code == 422

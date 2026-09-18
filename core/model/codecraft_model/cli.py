@@ -1,0 +1,2080 @@
+"""Command line for the model.
+
+    python -m codecraft_model sizes
+    python -m codecraft_model prepare --roots . --vocab 4096 --out runs/demo
+    python -m codecraft_model train   --run runs/demo --size micro --steps 2000
+    python -m codecraft_model sample  --run runs/demo --prompt "def parse("
+    python -m codecraft_model serve   --run runs/demo --port 8940
+"""
+
+from __future__ import annotations
+
+import argparse
+import codecs
+import json
+import math
+import shutil
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from .config import SIZES, get_size, humanise
+from .device import available_memory_bytes, describe_device, memory_total_bytes, resolve_device
+from .corpus import (
+    MEASURED_CHARACTERS_PER_TOKEN,
+    Repository,
+    estimate,
+    iter_repository_sources,
+    parse_repository,
+    read_repository_list,
+)
+from .data import (
+    FILE_MARKER,
+    TokenDataset,
+    iter_sources,
+    sample_corpus,
+    stream_dataset,
+)
+from .model import CodeCraftLM, ModelConfig
+from .tokenizer import Tokenizer
+from .train import TrainConfig, load_checkpoint, train
+
+
+def command_sizes(args: argparse.Namespace) -> int:
+    """Print every named size with its true parameter count."""
+    device = resolve_device(getattr(args, "device", None))
+    budget = available_memory_bytes(device)
+    fused = ", one gradient at a time" if args.fused_step else ""
+    print(f"device: {describe_device(device)}, optimiser: {args.optimizer}{fused}\n")
+
+    header = (
+        f"{'size':8}{'parameters':>12}{'d_model':>9}{'layers':>8}{'heads':>7}"
+        f"{'kv':>5}{'d_ff':>7}{'context':>9}{'train mem':>11}{'run bf16':>10}"
+        + ("  trains here" if budget is not None else "")
+    )
+    print(header)
+    print("-" * len(header))
+
+    for name, config in SIZES.items():
+        estimate = config.memory_estimate_bytes(optimizer=args.optimizer, fused=args.fused_step)
+        needed = estimate["training"]
+        # Activations, the batch and allocator fragmentation all sit on top of
+        # the four fixed copies, and roughly a third again covers them.
+        fits = "" if budget is None else ("          yes" if needed * 1.35 < budget else "           no")
+        print(
+            f"{name:8}{humanise(config.parameter_count()):>12}{config.d_model:>9}"
+            f"{config.n_layers:>8}{config.n_heads:>7}{config.n_kv_heads:>5}"
+            f"{config.d_ff:>7}{config.max_seq_len:>9}{needed / 1e9:>10.1f}G"
+            f"{estimate['inference_bf16'] / 1e9:>9.1f}G{fits}"
+        )
+
+    print(
+        "\nTraining memory is the weights, their gradients and the optimiser's\n"
+        "state, at 4 bytes each, before activations. Mixed precision narrows the\n"
+        "matmuls, not those copies, so it buys speed rather than room — but\n"
+        "--optimizer adafactor does: pass it here to see the same table with a\n"
+        "second moment that is two vectors per matrix instead of a full copy.\n"
+        "\n"
+        "Running a model that is already trained needs one copy at 2 bytes, which\n"
+        "is eight times less: the two columns answer different questions and a\n"
+        "size can easily pass one and fail the other."
+    )
+    if budget is not None:
+        print(
+            "The last column allows about a third again for activations and the\n"
+            "batch. A size marked 'no' still trains with a smaller batch, gradient\n"
+            "accumulation to make the effective batch back up, and a shorter block\n"
+            "— but not by four times, so a size needing several times this card's\n"
+            "memory needs more than one card rather than better flags."
+        )
+    return 0
+
+
+def command_corpus(args: argparse.Namespace) -> int:
+    """Answer the only question that decides whether a corpus is possible."""
+    header = f"{'tokens':>14}{'source text':>14}{'repositories':>14}{'tokens on disk':>16}{'peak, streaming':>18}"
+    print(header)
+    print("-" * len(header))
+
+    targets = args.tokens or [10_000_000, 100_000_000, 1_000_000_000, 10_000_000_000]
+    for target in targets:
+        numbers = estimate(target, args.characters_per_token)
+        print(
+            f"{humanise(target):>14}"
+            f"{numbers['source_text_gb']:>12.1f}GB"
+            f"{numbers['repositories_gb']:>12.1f}GB"
+            f"{numbers['token_stream_gb']:>14.1f}GB"
+            f"{numbers['peak_disk_streaming_gb']:>16.1f}GB"
+        )
+
+    print(
+        "\nA token is two bytes, so the trained corpus is small. What is large is\n"
+        "the source it came from, and the repositories holding that source are\n"
+        "larger again once tests, assets and generated files are counted.\n\n"
+        "'peak, streaming' is what you actually need free: prepare clones one\n"
+        "repository at a time, encodes it, and deletes it before the next. Keeping\n"
+        f"every source instead would need "
+        f"{estimate(targets[-1], args.characters_per_token)['peak_disk_keeping_sources_gb']:.0f}GB "
+        f"for the largest row."
+    )
+    return 0
+
+
+def command_prepare(args: argparse.Namespace) -> int:
+    """Collect source files, train a tokenizer, and write the token stream."""
+    run = Path(args.run)
+    run.mkdir(parents=True, exist_ok=True)
+
+    roots = [Path(root).resolve() for root in args.roots]
+    allow = frozenset(args.allow_dir or ())
+    repositories = _repositories(args)
+
+    if roots:
+        print(f"scanning {', '.join(str(root) for root in roots)}")
+    if repositories:
+        print(f"{len(repositories)} repositories to clone, read and discard")
+    if allow:
+        print(f"  including normally-skipped directories: {', '.join(sorted(allow))}")
+
+    # A resumed build must use the tokenizer the tokens were written with, so
+    # the one on disk is loaded rather than trained again: training it a second
+    # time on a different sample would produce different ids for the same text.
+    existing = run / "tokenizer.json"
+    if args.resume and existing.exists():
+        tokenizer = Tokenizer.load(existing)
+        print(f"resuming with the {tokenizer.vocab_size}-token vocabulary already trained")
+        return _encode_corpus(args, run, tokenizer, roots, repositories, allow)
+
+    print(f"sampling up to {args.sample_mb}MB to train the tokenizer")
+    started = time.time()
+    sample = _tokenizer_sample(args, roots, repositories, allow)
+    if not sample:
+        print("no source files found", file=sys.stderr)
+        return 1
+    print(f"  {len(sample) / 1e6:.1f}MB sampled in {time.time() - started:.1f}s")
+
+    print(f"training a {args.vocab}-token byte-level BPE vocabulary")
+    started = time.time()
+    tokenizer = Tokenizer.train(sample, args.vocab, progress=True)
+    tokenizer.save(run / "tokenizer.json")
+    print(f"  {tokenizer.vocab_size} tokens learned in {time.time() - started:.1f}s")
+
+    # The sample can be large, and encoding the full corpus needs the memory.
+    del sample
+
+    return _encode_corpus(args, run, tokenizer, roots, repositories, allow)
+
+
+def _encode_corpus(args, run: Path, tokenizer, roots, repositories, allow) -> int:
+    """Encode every source into the run's token stream.
+
+    Split out so a resumed build can skip straight here with the tokenizer that
+    was already trained, rather than training a second one whose ids would not
+    match the tokens already written.
+    """
+    print("encoding the corpus")
+    started = time.time()
+    workspace = Path(args.workspace) if args.workspace else run / "checkouts"
+    metadata = stream_dataset(
+        _all_sources(roots, repositories, workspace, allow, depth=args.depth),
+        tokenizer,
+        run,
+        validation_fraction=args.val_fraction,
+        max_tokens=args.max_tokens,
+        fim_probability=args.fim,
+        progress=True,
+        resume=args.resume,
+    )
+    shutil.rmtree(workspace, ignore_errors=True)
+    print(
+        f"  {metadata['files']:,} files, {metadata['characters'] / 1e6:.1f}MB\n"
+        f"  {metadata['total_tokens']:,} tokens "
+        f"({metadata['train_tokens']:,} train / {metadata['val_tokens']:,} val)\n"
+        f"  {metadata['characters_per_token']} characters per token, "
+        f"{time.time() - started:.1f}s\n"
+        f"  {metadata['bytes_on_disk'] / 1e9:.2f}GB on disk as tokens"
+    )
+    if metadata["fim_documents"]:
+        print(
+            f"  {metadata['fim_documents']:,} documents rearranged for "
+            "fill-in-the-middle"
+        )
+    # Worth saying rather than leaving to be inferred: the split is the tail of
+    # the corpus, not a random sample of it, so validation is whole files the
+    # model never sees and, when the corpus is built repository by repository,
+    # whole repositories. A gap between training and validation loss is then
+    # mostly the difference between projects, and reading it as memorisation
+    # leads to adding dropout that was never needed.
+    print(
+        "  validation is the last 5% of the corpus: whole files the model "
+        "never sees, not a sample of the ones it does"
+    )
+    return 0
+
+
+def _repositories(args: argparse.Namespace) -> list[Repository]:
+    repositories = [parse_repository(spec) for spec in (args.repos or ())]
+    if args.repos_file:
+        repositories.extend(read_repository_list(Path(args.repos_file)))
+    return repositories
+
+
+def _all_sources(
+    roots: list[Path],
+    repositories: list[Repository],
+    workspace: Path,
+    allow: frozenset[str],
+    *,
+    depth: int,
+):
+    """Local directories first, then repositories cloned one at a time."""
+    yield from iter_sources(roots, allow=allow)
+    if repositories:
+        yield from iter_repository_sources(
+            repositories, workspace, allow=allow, depth=depth
+        )
+
+
+def _tokenizer_sample(
+    args: argparse.Namespace,
+    roots: list[Path],
+    repositories: list[Repository],
+    allow: frozenset[str],
+) -> str:
+    """Text to learn a vocabulary from, without cloning everything twice.
+
+    Local roots are sampled directly. With only repositories to go on, the
+    first few are cloned for the sample and the rest are read during encoding;
+    a vocabulary does not need to see the whole corpus to be a good one.
+    """
+    if roots:
+        return sample_corpus(
+            roots,
+            max_bytes=args.sample_mb * 1_000_000,
+            allow=allow,
+            stride=args.sample_stride,
+        )
+
+    workspace = Path(args.workspace) if args.workspace else Path(args.run) / "sample"
+    pieces: list[str] = []
+    total = 0
+    for path, text in iter_repository_sources(
+        repositories[: args.sample_repos], workspace, allow=allow, depth=args.depth
+    ):
+        pieces.append(f"{FILE_MARKER}{Path(path).name}\n{text}")
+        total += len(text)
+        if total >= args.sample_mb * 1_000_000:
+            break
+    shutil.rmtree(workspace, ignore_errors=True)
+    return "\n".join(pieces)
+
+
+def largest_that_fits(available: int, vocab_size: int) -> tuple[str, str] | None:
+    """The biggest named size this machine can train, and what it takes.
+
+    Reported when the chosen one does not fit, because "no" is a worse answer
+    than "no, and here is the one that would". Both optimisers are tried at
+    every size, since a size that fits only with Adafactor still fits.
+    """
+    best: tuple[str, str] | None = None
+    for name, preset in SIZES.items():
+        sized = preset.with_vocab(vocab_size)
+        # AdamW first: when both fit there is no reason to recommend the one
+        # that gives up momentum.
+        for optimizer, fused in (("adamw", False), ("adafactor", False), ("adafactor", True)):
+            needed = (
+                sized.memory_estimate_bytes(optimizer=optimizer, fused=fused)["training"] * 1.35
+            )
+            if needed < available:
+                best = (name, optimizer + (" --fused-step" if fused else ""))
+                break
+    return best
+
+
+#: The size a run uses when nothing says otherwise. Chosen for one 16GB card:
+#: it fits with room to spare, and a corpus proportionate to it is a fortnight
+#: rather than a season. See "Choosing a size" in the README.
+DEFAULT_SIZE = "xl"
+
+
+def choose_fit(config, device, args: argparse.Namespace) -> list[str]:
+    """Fill in the flags that are about fitting, when the user left them open.
+
+    A default size is only a default if the command that uses it runs. `xl`
+    with AdamW wants sixteen gigabytes of optimiser state before anything else,
+    so a default size without matching defaults for the optimiser and the step
+    would be a command that fails on the machine it was chosen for.
+
+    Rather than hard-code the flags that happen to suit one card, the same
+    arithmetic `doctor` uses picks the plainest configuration that fits here,
+    and says which one it picked and why. Anything given explicitly is left
+    exactly as given.
+
+    Returns the lines to print, so the caller decides whether this is a moment
+    for output.
+    """
+    available = available_memory_bytes(device)
+    notes: list[str] = []
+
+    settings = [
+        ("adamw", False, "adamw"),
+        ("adafactor", False, "--optimizer adafactor"),
+        ("adafactor", True, "--optimizer adafactor --fused-step"),
+    ]
+
+    if args.optimizer == "auto":
+        chosen = settings[-1]
+        for optimizer, fused, detail in settings:
+            needed = config.memory_estimate_bytes(optimizer=optimizer, fused=fused)["training"]
+            # Activations, the batch and fragmentation sit on top.
+            if available is None or needed * 1.35 < available:
+                chosen = (optimizer, fused, detail)
+                break
+        args.optimizer = chosen[0]
+        # An explicit --fused-step still wins; auto only fills a blank.
+        if args.fused_step is None:
+            args.fused_step = chosen[1]
+        if chosen[2] == "adamw":
+            notes.append("  optimiser: adamw, which fits here")
+        else:
+            notes.append(
+                f"  optimiser: {chosen[2]}, because adamw's extra copies do not fit here"
+            )
+
+    if args.fused_step is None:
+        args.fused_step = False
+
+    if getattr(args, "checkpointing", None) is None:
+        # Recomputation costs one extra forward pass and stops activation
+        # memory growing with depth. Free memory decides, not the size: a deep
+        # model on a large card does not need it.
+        needed = config.memory_estimate_bytes(
+            optimizer=args.optimizer, fused=args.fused_step
+        )["training"]
+        tight = available is not None and needed * 2.0 > available
+        args.checkpointing = tight
+        if tight:
+            notes.append("  recomputing activations, since memory here is tight")
+
+    return notes
+
+
+def warn_about_memory(config, device, args: argparse.Namespace) -> None:
+    """Say so when the run will not fit, and what to do about it.
+
+    A warning rather than a refusal. The estimate covers weights, gradients and
+    two Adam moments; it cannot see swap, a unified memory architecture, or an
+    optimiser someone has offloaded, so refusing on it would block runs that
+    would have worked.
+    """
+    chosen = getattr(args, "optimizer", "adamw")
+    fused = bool(getattr(args, "fused_step", False))
+    needed = config.memory_estimate_bytes(optimizer=chosen, fused=fused)["training"]
+    # Activations, the batch and allocator fragmentation sit on top of the fixed
+    # copies, and roughly a third again covers them.
+    needed = int(needed * 1.35)
+    available = available_memory_bytes(device)
+    if available is None or needed <= available:
+        return
+
+    where = "this card" if device.type == "cuda" else "this machine"
+    advice = []
+    if chosen == "adamw":
+        lighter = config.memory_estimate_bytes(optimizer="adafactor")["training"] * 1.35
+        advice.append(
+            f"--optimizer adafactor needs about {lighter / 1e9:.1f}GB instead, by not keeping "
+            "two full copies of the parameters"
+        )
+    if not fused:
+        least = config.memory_estimate_bytes(optimizer="adafactor", fused=True)["training"]
+        advice.append(
+            f"--optimizer adafactor --fused-step needs about {least * 1.35 / 1e9:.1f}GB, by "
+            "never holding more than one gradient at a time"
+        )
+    if not args.checkpointing:
+        advice.append("--checkpointing trades a third of the step time for activation memory")
+    if args.batch > 1:
+        advice.append(
+            f"--batch 1 --accumulate {args.batch * args.accumulate} keeps the same tokens per step"
+        )
+    if device.type == "cuda" and args.precision in ("auto", "fp32"):
+        advice.append("--precision bf16 halves the activations, though not the four fixed copies")
+
+    fits = largest_that_fits(available, config.vocab_size)
+    if fits is not None:
+        name, optimizer = fits
+        with_flag = "" if optimizer == "adamw" else f" with --optimizer {optimizer}"
+        advice.append(f"the largest size that fits here is '{name}'{with_flag}")
+    else:
+        advice.append("no named size fits here; this is a machine for running a model, not training one")
+
+    print(
+        f"  warning: this configuration needs about {needed / 1e9:.1f}GB and "
+        f"{where} has {available / 1e9:.1f}GB.\n"
+        f"  That is the weights, their gradients and what {chosen} keeps, at 4 "
+        "bytes each, before activations."
+        + ("\n  " + "\n  ".join(advice) if advice else "")
+    )
+
+
+def command_train(args: argparse.Namespace) -> int:
+    run = Path(args.run)
+    tokenizer_path = run / "tokenizer.json"
+    if not tokenizer_path.exists():
+        print(f"no tokenizer at {tokenizer_path}; run 'prepare' first", file=sys.stderr)
+        return 1
+
+    tokenizer = Tokenizer.load(tokenizer_path)
+    metadata = json.loads((run / "meta.json").read_text(encoding="utf-8"))
+
+    resume_path = run / "latest.pt"
+    resuming = args.resume and resume_path.exists()
+
+    if resuming:
+        # The architecture comes from the checkpoint, never from --size.
+        # Rebuilding from the flag is how a resume turns into forty lines of
+        # size mismatches: the default preset is not the one that was trained,
+        # and the flag that says so was given on the first run, not this one.
+        payload = torch.load(resume_path, map_location="cpu", weights_only=False)
+        config = ModelConfig.from_dict(payload["model_config"])
+        del payload
+        if args.size is not None and get_size(args.size).with_vocab(
+            tokenizer.vocab_size
+        ).d_model != config.d_model:
+            print(
+                f"  note: --size {args.size} is ignored; the checkpoint's own "
+                f"architecture (d_model {config.d_model}) is what its weights fit"
+            )
+    else:
+        # The vocabulary comes from the tokenizer that was actually trained, not
+        # from the preset: a mismatch would index outside the embedding table.
+        chosen_size = args.size or DEFAULT_SIZE
+        config = get_size(chosen_size).with_vocab(tokenizer.vocab_size)
+        if args.size is None:
+            # Said before anything is allocated, because the default is now a
+            # size worth knowing about in advance: four gigabytes of weights
+            # and a corpus that takes a fortnight. Someone who typed `train
+            # --resume` with nothing to resume should find that out here rather
+            # than from the fan.
+            from .doctor import TOKENS_PER_PARAMETER
+
+            parameters = config.parameter_count()
+            print(
+                f"no --size given, so '{DEFAULT_SIZE}': {humanise(parameters)} parameters, "
+                f"and a corpus proportionate to it is "
+                f"{parameters * TOKENS_PER_PARAMETER / 1e9:.0f}B tokens.\n"
+                f"  `codecraft_model sizes` lists the others; `plan --size {DEFAULT_SIZE}` "
+                f"prices this one on this machine."
+            )
+
+    overrides: dict = {}
+    if args.context is not None:
+        overrides["max_seq_len"] = args.context
+    if args.dropout is not None:
+        overrides["dropout"] = args.dropout
+    if overrides:
+        config = config.__class__(**{**config.to_dict(), **overrides})
+
+    # Before allocating anything. A run that needs four times the memory the
+    # machine has does not fail with an exception: the allocator keeps
+    # succeeding until the kernel kills the process, and the user is left with
+    # "Killed" and no idea which number was the problem.
+    fit_notes = choose_fit(config, resolve_device(args.device), args)
+    warn_about_memory(config, resolve_device(args.device), args)
+    for line in fit_notes:
+        print(line)
+
+    model = CodeCraftLM(config)
+    if args.checkpointing:
+        # Activation memory stops scaling with depth, at the cost of one extra
+        # forward pass per step.
+        model.enable_gradient_checkpointing()
+    described = "resumed" if resuming else f"'{args.size or DEFAULT_SIZE}'"
+    print(
+        f"model {described}: {humanise(model.parameter_count())} parameters, "
+        f"vocab {config.vocab_size}, context {config.max_seq_len}, "
+        f"dropout {config.dropout}"
+        + (", recomputing activations" if args.checkpointing else "")
+    )
+
+    tokens_per_step = args.batch * min(args.block, config.max_seq_len) * args.accumulate
+    epochs = tokens_per_step * args.steps / max(metadata["train_tokens"], 1)
+    if epochs > 3:
+        print(
+            f"  note: {epochs:.0f} passes over {metadata['train_tokens']:,} training "
+            "tokens. A model this size will start memorising; watch the gap between\n"
+            "  training and validation loss, and raise --dropout or the corpus size."
+        )
+
+    block = min(args.block, config.max_seq_len)
+    train_config = TrainConfig(
+        steps=args.steps,
+        batch_size=args.batch,
+        block_size=block,
+        grad_accumulation=args.accumulate,
+        learning_rate=args.lr,
+        warmup_steps=args.warmup,
+        eval_every=args.eval_every,
+        seed=args.seed,
+        precision=args.precision,
+        compile_model=args.compile,
+        max_hours=args.max_hours,
+        optimizer=args.optimizer,
+        fused_step=args.fused_step,
+        loss_chunk_size=args.loss_chunk,
+    )
+
+    device = resolve_device(args.device)
+    # Threads matter on a CPU run and are irrelevant on a GPU one, where the
+    # host thread only queues work.
+    if device.type == "cpu":
+        torch.set_num_threads(args.threads)
+
+    summary = train(
+        model,
+        TokenDataset(run / "train.bin", metadata["dtype"]),
+        TokenDataset(run / "val.bin", metadata["dtype"]),
+        train_config,
+        output_dir=run,
+        device=device,
+        resume_from=resume_path if resuming else None,
+    )
+
+    print(f"\ncheckpoint written to {run / 'model.pt'}")
+    print(f"  best validation loss {summary['best_val_loss']:.3f}")
+    if summary["stopped_early"]:
+        print("  stopped on the time budget; rerun with --resume to continue")
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    """Answer, on this machine, what it can train and what it can run."""
+    from .device import architecture_warning, available_memory_bytes, host_memory_bytes
+    from .doctor import (
+        describe_bytes,
+        describe_recommendation,
+        disk_budget,
+        free_disk_bytes,
+        largest_servable,
+        largest_trainable,
+    )
+
+    device = resolve_device(args.device)
+    print(f"torch {torch.__version__}")
+    print(f"device: {describe_device(device)}")
+
+    warning = architecture_warning(device)
+    if warning:
+        print(f"\n  warning: {warning}\n")
+
+    card = available_memory_bytes(device)
+    host = host_memory_bytes()
+    print("\nmemory")
+    if device.type == "cuda":
+        print(f"  card {describe_bytes(card)}, system {describe_bytes(host)}")
+    else:
+        print(f"  system {describe_bytes(host)}, and no card to use")
+
+    budget = card or host
+    if budget is None:
+        print("  this machine will not say how much memory it has")
+        return 0
+
+    trains = largest_trainable(budget, args.vocab)
+    serves = largest_servable(budget, args.vocab)
+    print(f"  fits:   {describe_recommendation(trains, 'trains')}")
+    print(f"  runs:   {describe_recommendation(serves, 'runs')}")
+
+    # Fitting and finishing are different questions, and the larger answer to
+    # the first is usually the wrong answer to the second. The default size is
+    # chosen for the second.
+    default = get_size(DEFAULT_SIZE).with_vocab(args.vocab)
+    if trains is not None and trains.name != DEFAULT_SIZE:
+        print(
+            f"\n  the default is {DEFAULT_SIZE} ({humanise(default.parameter_count())}), "
+            f"not {trains.name}: the largest size that fits\n"
+            f"  is rarely the largest one you can afford to finish. `plan` prices both."
+        )
+
+    if trains is not None:
+        # Priced for the size that will actually be trained, not the largest
+        # that would fit.
+        costs = disk_budget(default)
+        where = Path(args.run) if args.run else Path.cwd()
+        free = free_disk_bytes(where)
+        print(f"\ndisk, where {where} is")
+        print(f"  free {describe_bytes(free)}")
+        print(
+            f"  two checkpoints of {DEFAULT_SIZE}: "
+            f"{describe_bytes(costs.both_checkpoints_bytes)}"
+        )
+        print(
+            f"  a corpus proportionate to it: {costs.corpus_tokens / 1e9:.0f}B tokens, "
+            f"{describe_bytes(costs.corpus_bytes)}"
+        )
+        print(f"  together {describe_bytes(costs.total_bytes)}")
+        if free is not None and costs.total_bytes > free:
+            print(
+                "\n  that does not fit. Train a smaller size, or a corpus smaller than "
+                "the size deserves, and know which of the two you chose."
+            )
+
+        # Memory and disk are the answers people come here for. Time is the one
+        # that ends runs, and it cannot be computed from a spec sheet: it has to
+        # be measured on the card, which is a different command.
+        print(
+            f"\ntime, which none of the above measures\n"
+            f"  a corpus of {costs.corpus_tokens / 1e9:,.0f}B tokens takes as long as this "
+            f"machine takes\n  to get through it, and that is the number that decides "
+            f"whether the run\n  finishes. Measure it before starting:\n\n"
+            f"    python -m codecraft_model plan --size {DEFAULT_SIZE}"
+            # The recommendation reads as prose for AdamW, which needs no flag,
+            # and as flags for everything else, which do.
+            f" --hours 336"  # a fortnight, which is what xl is chosen for
+        )
+    return 0
+
+
+def command_plan(args: argparse.Namespace) -> int:
+    """Time a few real steps at a real size, and say what the run will cost.
+
+    `doctor` says whether a size fits. This says how long it takes, which is
+    the constraint that actually binds: a 2.29B model fits on a 16GB card, and
+    a corpus proportionate to it is forty-six billion tokens, and one card does
+    not get through forty-six billion tokens in a week.
+    """
+    from .device import (
+        autocast_dtype,
+        describe_device,
+        enable_fast_matmul,
+        peak_memory_bytes,
+        reset_peak_memory,
+        synchronize,
+    )
+    from .doctor import TOKENS_PER_PARAMETER, describe_bytes
+    from .kernels import attention_support, describe_attention
+    from .model import CodeCraftLM
+    from .report import describe_duration
+    from .schedule import (
+        Plan,
+        corpus_within,
+        describe_rate,
+        describe_tokens,
+        largest_size_within,
+        measure,
+        plan_for,
+    )
+    from .train import TrainConfig, build_optimizer, check_fused_step, install_fused_step
+
+    device = resolve_device(args.device)
+    enable_fast_matmul(device)
+    config = get_size(args.size).with_vocab(args.vocab)
+    block = min(args.block, config.max_seq_len)
+
+    # The same resolution `train` does, so what is measured is what will run.
+    fit_notes = choose_fit(config, device, args)
+
+    training = TrainConfig(
+        batch_size=args.batch,
+        block_size=block,
+        optimizer=args.optimizer,
+        fused_step=args.fused_step,
+    )
+    if training.fused_step:
+        check_fused_step(training, scaler_enabled=False)
+
+    parameters = config.parameter_count()
+    print(f"measuring {args.size} ({humanise(parameters)}) on {describe_device(device)}")
+    detail = f"--optimizer {args.optimizer}"
+    if args.fused_step:
+        detail += " --fused-step"
+    if args.checkpointing:
+        detail += " --checkpointing"
+    if args.loss_chunk:
+        detail += f" --loss-chunk {args.loss_chunk}"
+    print(f"  {args.steps} steps of {args.batch} x {block} tokens, {detail}")
+    for line in fit_notes:
+        print(line)
+
+    def too_big() -> int:
+        """The failure people actually hit, said in terms of what to change.
+
+        A traceback out of the allocator names a number of bytes and a pool,
+        and neither is a thing the person running this can act on.
+        """
+        remedies = ["a smaller --batch"]
+        if not args.checkpointing:
+            remedies.append("--checkpointing")
+        print(
+            f"\n  {args.size} does not fit here at batch {args.batch}.\n"
+            f"  Run `doctor` for what does, or try {' or '.join(remedies)}."
+        )
+        return 1
+
+    torch.manual_seed(training.seed)
+    try:
+        model = CodeCraftLM(config).to(device)
+    except torch.OutOfMemoryError:
+        return too_big()
+    if args.checkpointing:
+        model.enable_gradient_checkpointing()
+    model.loss_chunk_size = args.loss_chunk
+    model.train()
+    optimizer = build_optimizer(model, training)
+    hooks = install_fused_step(model, optimizer) if training.fused_step else []
+    amp_dtype = autocast_dtype(device, training.precision)
+
+    # Random tokens. The model learns nothing from them, which is the point:
+    # this measures the cost of a step, and a step costs the same whatever the
+    # tokens say.
+    inputs = torch.randint(
+        1, config.vocab_size, (args.batch, block), device=device, dtype=torch.long
+    )
+    targets = torch.randint(
+        1, config.vocab_size, (args.batch, block), device=device, dtype=torch.long
+    )
+
+    def step() -> None:
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+        ):
+            _, loss, _ = model(inputs, targets=targets)
+        loss.backward()
+        if not training.fused_step:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), training.grad_clip)
+            optimizer.step()
+        # CUDA queues asynchronously: without this the measurement times how
+        # fast steps were submitted, not how fast they ran.
+        synchronize(device)
+
+    dtype = amp_dtype if amp_dtype is not None else torch.float32
+    reset_peak_memory(device)
+    try:
+        throughput = measure(
+            step,
+            tokens_per_step=args.batch * block,
+            steps=args.steps,
+            warmup=args.warmup,
+            peak=lambda: peak_memory_bytes(device),
+        )
+    except torch.OutOfMemoryError:
+        return too_big()
+    finally:
+        for handle in hooks:
+            handle.remove()
+
+    support = attention_support(config, device, batch=args.batch, seq=block, dtype=dtype)
+    rate = throughput.tokens_per_second
+    print("\nthroughput")
+    print(f"  {rate:,.0f} tokens/s")
+    print(f"  {describe_rate(throughput.flops_per_second(parameters))} sustained")
+    if throughput.peak_bytes:
+        print(f"  peak memory {describe_bytes(throughput.peak_bytes)}")
+    if support is not None:
+        # Which kernel ran is not visible in the number above, and landing on
+        # the unfused one is slow enough to be mistaken for the model being big.
+        print(f"  {describe_attention(*support)}")
+
+    full = plan_for(parameters, rate)
+    print(f"\na corpus proportionate to {args.size}")
+    print(
+        f"  {describe_tokens(full.tokens)} tokens, at "
+        f"{TOKENS_PER_PARAMETER} per parameter"
+    )
+    print(f"  {describe_duration(full.seconds)} of continuous training")
+
+    if args.hours:
+        budget = args.hours * 3600
+        affordable = corpus_within(budget, rate)
+        within = Plan(parameters, affordable, rate)
+        print(f"\nwhat {describe_duration(budget)} buys at this size")
+        print(
+            f"  {describe_tokens(affordable)} tokens, "
+            f"{within.tokens_per_parameter:.1f} per parameter"
+        )
+        print(f"  {within.verdict}")
+
+        fits = largest_size_within(budget, throughput.flops_per_second(parameters), args.vocab)
+        if fits is None:
+            print("  no named size trains properly in that time on this machine")
+        elif fits != args.size:
+            trained = get_size(fits).with_vocab(args.vocab)
+            print(
+                f"  {fits} ({humanise(trained.parameter_count())}) is the largest size "
+                f"this machine trains properly in that time"
+            )
+
+    # Twenty tokens per parameter costs 6N x 20N, so the time to train a model
+    # properly goes with the square of its size. That is the number worth
+    # having before a run rather than after one.
+    print(
+        "\nThe cost of training a size properly grows with the square of it: twice "
+        "the\nmodel is four times the wait, because it also wants twice the corpus. "
+        "A model\ntrained on a fifth of what it deserves is beaten by one a fifth "
+        "the size that\ngot all of it."
+    )
+    return 0
+
+
+def command_report(args: argparse.Namespace) -> int:
+    """Read a training run: how far in, still falling, and when it will finish."""
+    from .report import (
+        describe_duration,
+        memorisation,
+        progress_of,
+        sparkline,
+        trend,
+    )
+
+    run = Path(args.run)
+    summary_path = run / "training.json"
+    if not summary_path.exists():
+        print(f"no training.json in {run}; nothing has been trained there", file=sys.stderr)
+        return 1
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    history = summary.get("history") or []
+    progress = progress_of(summary)
+
+    optimizer = summary.get("optimizer", "adamw")
+    if summary.get("fused_step"):
+        optimizer += ", one gradient at a time"
+
+    print(
+        f"{humanise(summary.get('parameters', 0))} parameters on "
+        f"{summary.get('device', 'an unrecorded device')}, "
+        f"{summary.get('precision', '?')}, {optimizer}\n"
+    )
+    print(
+        f"  step            {progress.step:,} of {progress.steps:,} "
+        f"({progress.fraction:.1%})\n"
+        f"  tokens          {progress.tokens_seen:,} this run at "
+        f"{progress.tokens_per_second:,.0f}/s\n"
+        f"  elapsed         {describe_duration(progress.elapsed_seconds)}\n"
+        f"  remaining       {describe_duration(progress.remaining_seconds)}"
+    )
+
+    if history:
+        best = float(summary.get("best_val_loss", float("nan")))
+        print(
+            f"\n  held-out loss   {best:.4f}  "
+            f"(perplexity {math.exp(min(best, 20)):.1f}), {trend(history)}"
+        )
+        gap = memorisation(history)
+        if gap is not None:
+            # Said in words as well as a number, because the number only means
+            # something to someone who has seen a few runs.
+            verdict = (
+                "learning the corpus rather than the language"
+                if gap > 1.0
+                else "healthy" if gap < 0.4 else "worth watching"
+            )
+            print(f"  train/val gap   {gap:+.3f}  ({verdict})")
+
+        curve = sparkline([float(entry["val_loss"]) for entry in history])
+        if curve:
+            first = float(history[0]["val_loss"])
+            last = float(history[-1]["val_loss"])
+            print(f"\n  {first:.2f} {curve} {last:.2f}")
+
+    if summary.get("stopped_early"):
+        print("\n  stopped on its time budget; rerun with --resume to continue")
+    failed = int(summary.get("checkpoint_writes_failed", 0))
+    if failed:
+        print(f"  {failed} checkpoint writes failed; check the disk before relying on this run")
+    return 0
+
+
+def command_sample(args: argparse.Namespace) -> int:
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    device = resolve_device(args.device)
+    tokenizer = Tokenizer.load(run / "tokenizer.json")
+    model, payload = load_checkpoint(checkpoint, device)
+
+    adapter_note = ""
+    if getattr(args, "adapter", None):
+        from .lora import load_adapter, merge_lora
+
+        adapter_path = Path(args.adapter)
+        if not adapter_path.exists():
+            print(f"no adapter at {adapter_path}", file=sys.stderr)
+            return 1
+        lora_config = load_adapter(adapter_path, model)
+        merge_lora(model)
+        model.to(device)
+        adapter_note = f", adapter rank {lora_config.rank}"
+
+    print(
+        f"# {humanise(model.parameter_count())} parameters, "
+        f"step {payload['step']}, val loss {payload['val_loss']:.3f}, "
+        f"on {describe_device(device)}{adapter_note}\n"
+    )
+
+    tokens = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long, device=device)
+    print(args.prompt, end="", flush=True)
+
+    # An incremental decoder holds back the bytes of a character that spans
+    # several tokens, so nothing prints as a replacement that is about to
+    # become a real character.
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    for token in model.generate(
+        tokens,
+        max_new_tokens=args.tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        min_p=args.min_p,
+        repetition_penalty=args.repetition_penalty,
+        stop_tokens={tokenizer.special_id("<|end|>")},
+    ):
+        piece = tokenizer.vocab.get(token)
+        if piece is not None:
+            print(decoder.decode(piece), end="", flush=True)
+
+    print(decoder.decode(b"", final=True))
+    print()
+    return 0
+
+
+def command_chat(args: argparse.Namespace) -> int:
+    """A conversation at the terminal, for trying a model without a client.
+
+    The point is to see what a checkpoint actually does. Everything else here
+    measures a model; this is for reading it, which catches the failures no
+    number shows: a model that has learned the format and none of the task, or
+    one that answers and then keeps going.
+
+    The history is kept in the prompt rather than in a cache, because the
+    context here is a few hundred tokens and the code that would manage a cache
+    across turns is more than the feature is worth.
+    """
+    from .instruct import render_for_inference
+    from .serve import Engine
+
+    run = Path(args.run)
+    try:
+        engine = Engine(run, args.device, adapter=Path(args.adapter) if args.adapter else None)
+    except FileNotFoundError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    described = engine.describe()
+    print(
+        f"{described['parameters_human']} parameters, step {described['trained_steps']}, "
+        f"on {described['device']}\n"
+        "Type a message. Ctrl+C or an empty line to leave; /reset forgets the conversation.\n"
+    )
+
+    turns: list[tuple[str, str]] = []
+
+    while True:
+        try:
+            message = input("you > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+        if not message:
+            return 0
+        if message == "/reset":
+            turns.clear()
+            print("(forgotten)\n")
+            continue
+
+        # Built as ids rather than as text. The turn markers are special
+        # tokens, and decoding them to hand over a string drops them: the model
+        # would be asked the question with no format around it at all.
+        end = engine.tokenizer.special_id("<|end|>")
+        ids: list[int] = []
+        for earlier, reply in turns[-args.history :]:
+            ids += render_for_inference(earlier, engine.tokenizer)
+            ids += engine.tokenizer.encode(reply) + [end]
+        ids += render_for_inference(message, engine.tokenizer, args.system)
+
+        print("bot > ", end="", flush=True)
+        answer: list[str] = []
+        for delta, _ in engine.stream(
+            "",
+            prompt_ids=ids,
+            max_tokens=args.tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+        ):
+            if delta:
+                answer.append(delta)
+                print(delta, end="", flush=True)
+        print("\n")
+
+        turns.append((message, "".join(answer)))
+
+
+def command_tokens(args: argparse.Namespace) -> int:
+    """Show how the tokenizer splits a piece of text.
+
+    Worth having as a command rather than a note in a notebook: nearly every
+    surprise about what a model does with a prompt turns out to be a surprise
+    about how the prompt was split, and reading the split takes seconds.
+    """
+    run = Path(args.run)
+    tokenizer_path = run / "tokenizer.json"
+    if not tokenizer_path.exists():
+        print(f"no tokenizer at {tokenizer_path}", file=sys.stderr)
+        return 1
+
+    tokenizer = Tokenizer.load(tokenizer_path)
+    text = args.text if args.text is not None else sys.stdin.read()
+    ids = tokenizer.encode(text)
+
+    print(f"{len(text)} characters, {len(ids)} tokens", end="")
+    if ids:
+        print(f", {len(text) / len(ids):.3f} characters per token")
+    else:
+        print()
+
+    if not args.quiet:
+        print()
+        for token_id in ids:
+            piece = tokenizer.vocab.get(token_id, b"")
+            shown = piece.decode("utf-8", "replace")
+            # Whitespace is where a split is most often surprising, so it is
+            # shown rather than printed.
+            shown = shown.replace("\n", "\\n").replace("\t", "\\t").replace(" ", "·")
+            print(f"  {token_id:>6}  {shown}")
+
+    # The round trip is the property that matters: a tokenizer that cannot
+    # rebuild its input is one that silently changes code.
+    rebuilt = tokenizer.decode(ids)
+    if rebuilt != text:
+        print("\nwarning: decoding did not reproduce the input", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_finetune(args: argparse.Namespace) -> int:
+    """Teach a base model to answer instead of continuing."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train a base model first", file=sys.stderr)
+        return 1
+
+    examples_path = Path(args.examples)
+    if not examples_path.exists():
+        print(f"no examples at {examples_path}", file=sys.stderr)
+        return 1
+
+    from .instruct import InstructionDataset, load_examples, masked_loss
+    from .train import build_optimizer, learning_rate_at, save_checkpoint
+
+    tokenizer = Tokenizer.load(run / "tokenizer.json")
+    device = resolve_device(args.device)
+    model, payload = load_checkpoint(checkpoint, device)
+    model.train()
+
+    print(f"reading {examples_path}")
+    examples = load_examples(examples_path)
+    if not examples:
+        print("no usable examples", file=sys.stderr)
+        return 1
+
+    dataset = InstructionDataset(examples, tokenizer, max_length=model.config.max_seq_len)
+    print(
+        f"  {len(dataset)} examples"
+        + (f", {dataset.skipped} too long and dropped" if dataset.skipped else "")
+    )
+    if len(dataset) == 0:
+        print("every example was longer than the model's context", file=sys.stderr)
+        return 1
+
+    lora_config = None
+    if args.lora:
+        from .lora import LoRAConfig, apply_lora, describe as describe_lora
+
+        lora_config = LoRAConfig(
+            rank=args.lora,
+            alpha=args.lora_alpha if args.lora_alpha is not None else args.lora * 2,
+        )
+        apply_lora(model, lora_config)
+        measured = describe_lora(model)
+        print(
+            f"  adapter rank {lora_config.rank} on {measured['adapters']} projections: "
+            f"{humanise(measured['trainable'])} trainable of "
+            f"{humanise(measured['total'])} ({measured['fraction'] * 100:.1f}%)"
+        )
+
+    # A much lower rate than pretraining: fine-tuning is meant to adjust a model
+    # that already works, and a large step undoes what it learned. An adapter
+    # takes a larger rate: it starts at zero and has far fewer numbers to move.
+    learning_rate = args.lr * 10 if args.lora and args.lr == 2e-5 else args.lr
+    config = TrainConfig(
+        steps=args.steps,
+        batch_size=args.batch,
+        learning_rate=learning_rate,
+        min_learning_rate=learning_rate / 10,
+        warmup_steps=min(args.warmup, args.steps // 4),
+    )
+    optimizer = build_optimizer(model, config)
+    generator = np.random.default_rng(args.seed)
+    torch.manual_seed(args.seed)
+
+    print(
+        f"fine-tuning {humanise(model.parameter_count())} parameters for "
+        f"{args.steps} steps at lr {config.learning_rate:g} on {describe_device(device)}"
+    )
+
+    for step in range(args.steps):
+        rate = learning_rate_at(step, config)
+        for group in optimizer.param_groups:
+            group["lr"] = rate
+
+        tokens, labels = dataset.batch(args.batch, generator)
+        # project_all rather than targets: the model would otherwise score the
+        # labels itself, and the whole point is the different mask below.
+        logits, _, _ = model(tokens.to(device), project_all=True)
+        loss = masked_loss(logits, labels.to(device))
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+        optimizer.step()
+
+        if step % max(1, args.steps // 10) == 0 or step == args.steps - 1:
+            print(f"  step {step:>4}/{args.steps}  loss {loss.item():6.3f}  lr {rate:.2e}")
+
+    if lora_config is not None:
+        from .lora import merge_lora, save_adapter
+
+        adapter_path = run / "adapter.pt"
+        size = save_adapter(
+            adapter_path,
+            model,
+            lora_config,
+            metadata={
+                "base_step": payload.get("step"),
+                "examples": len(dataset),
+                "steps": args.steps,
+                "loss": loss.item(),
+            },
+        )
+        print(f"\nadapter written to {adapter_path} ({size / 1000:.0f}KB)")
+
+        if not args.merge:
+            print("  the base checkpoint is untouched; --merge also writes a whole one")
+            return 0
+
+        # Folding it in produces an ordinary checkpoint, servable by code that
+        # knows nothing about adapters.
+        merge_lora(model)
+        print("  merged into the weights")
+
+    destination = run / "instruct.pt"
+    save_checkpoint(destination, model, optimizer, payload.get("step", 0), loss.item(), config)
+    print(f"\nwritten to {destination}")
+    return 0
+
+
+def command_average(args: argparse.Namespace) -> int:
+    """Average several checkpoints of one run into one."""
+    from .average import average_checkpoints
+    from .train import save_checkpoint
+
+    paths = [Path(name) for name in args.checkpoints]
+    missing = [path for path in paths if not path.exists()]
+    if missing:
+        print(f"no checkpoint at {missing[0]}", file=sys.stderr)
+        return 1
+    if len(paths) < 2:
+        print("averaging needs at least two checkpoints", file=sys.stderr)
+        return 1
+
+    weights = None
+    if args.weights:
+        if len(args.weights) != len(paths):
+            print(
+                f"{len(args.weights)} weights for {len(paths)} checkpoints",
+                file=sys.stderr,
+            )
+            return 1
+        weights = args.weights
+
+    try:
+        state, config, record = average_checkpoints(paths, weights)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    model = CodeCraftLM(config)
+    model.load_state_dict(state)
+
+    for source in record["sources"]:
+        loss = source["val_loss"]
+        print(
+            f"  {Path(source['path']).name:<20} weight {source['weight']:.2f}"
+            + (f"  step {source['step']}" if source["step"] is not None else "")
+            + (f"  val loss {loss:.3f}" if isinstance(loss, float) else "")
+        )
+
+    destination = Path(args.out)
+    save_checkpoint(destination, model, None, 0, float("nan"), TrainConfig())
+    print(f"\naveraged into {destination}")
+    print("  evaluate it before using it: averaging usually helps and sometimes does not")
+    return 0
+
+
+def command_export(args: argparse.Namespace) -> int:
+    """Write a checkpoint in a format that does not execute anything to load."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .export import export_model
+
+    model, payload = load_checkpoint(checkpoint)
+    if args.quantize:
+        from .quantize import quantize_model
+
+        measured = quantize_model(model)
+        print(f"quantized to int8 ({measured.compression:.2f}x smaller)")
+
+    destination = Path(args.out) if args.out else run / "model.cclm"
+    header = export_model(
+        model,
+        destination,
+        metadata={
+            "step": payload.get("step"),
+            "val_loss": payload.get("val_loss"),
+            "parameters": model.parameter_count(),
+        },
+    )
+
+    size = destination.stat().st_size
+    print(
+        f"wrote {destination} ({size / 1e6:.1f}MB)\n"
+        f"  {len(header['tensors'])} tensors, "
+        f"{humanise(model.parameter_count())} parameters\n"
+        f"  header is JSON; loading reads bytes and reshapes, and evaluates nothing"
+    )
+    return 0
+
+
+def limit_threads(args: argparse.Namespace) -> None:
+    """Keep a measurement off cores something else is using.
+
+    A number taken while the machine is training is a number about the machine,
+    not about the model. Left alone PyTorch takes every core, so the run being
+    measured and the run being trained slow each other down and neither result
+    means anything.
+    """
+    if getattr(args, "threads", None) and resolve_device(args.device).type == "cpu":
+        torch.set_num_threads(args.threads)
+
+
+def command_evaluate(args: argparse.Namespace) -> int:
+    """Measure a checkpoint, rather than reading samples and forming a view."""
+    limit_threads(args)
+    run = Path(args.run)
+    # Any checkpoint, not only the run's own: a soup, a fine-tune or an
+    # adapter-merged model is measured against the same held-out data, which is
+    # the only way to say whether it is better.
+    checkpoint = Path(args.checkpoint) if args.checkpoint else run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .evaluate import (
+        measure_infill_perplexity,
+        measure_perplexity,
+        measure_throughput,
+        report,
+    )
+
+    device = resolve_device(args.device)
+    model, payload = load_checkpoint(checkpoint, device)
+    print(
+        f"{checkpoint.name}: {humanise(model.parameter_count())} parameters, "
+        f"step {payload['step']}, on {describe_device(device)}\n"
+    )
+
+    if args.quantize:
+        from .quantize import quantize_model
+
+        measured = quantize_model(model)
+        model.to(device)
+        print(
+            f"int8 weights: {measured.original_bytes / 1e6:.1f}MB -> "
+            f"{measured.quantized_bytes / 1e6:.1f}MB ({measured.compression:.2f}x), "
+            f"mean error {measured.mean_error:.6f}\n"
+        )
+
+    perplexity = None
+    infill = None
+    validation = run / "val.bin"
+    if validation.exists():
+        metadata = json.loads((run / "meta.json").read_text(encoding="utf-8"))
+        perplexity = measure_perplexity(
+            model,
+            TokenDataset(validation, metadata["dtype"]),
+            batches=args.batches,
+            batch_size=args.batch,
+            block_size=min(args.block, model.config.max_seq_len),
+            characters_per_token=metadata.get("characters_per_token"),
+            device=device,
+        )
+        print(
+            f"held-out loss        {perplexity.loss:.4f}\n"
+            f"perplexity           {perplexity.perplexity:.2f}\n"
+            f"bits per token       {perplexity.bits_per_token:.3f}\n"
+            f"bits per character   {perplexity.bits_per_character:.3f}"
+            "   (comparable across tokenizers)\n"
+            f"tokens scored        {perplexity.tokens_scored:,}\n"
+        )
+
+        # The same held-out data, scored only where the model is being asked to
+        # write rather than to read. A checkpoint can improve at one and not the
+        # other, and the editor only ever asks for the second.
+        tokenizer_file = run / "tokenizer.json"
+        if not args.no_infill and tokenizer_file.exists():
+            from .tokenizer import Tokenizer
+
+            tokenizer = Tokenizer.load(tokenizer_file)
+            if tokenizer.vocab_size == model.config.vocab_size:
+                infill = measure_infill_perplexity(
+                    model,
+                    TokenDataset(validation, metadata["dtype"]),
+                    fim_middle=tokenizer.fim_middle,
+                    boundaries=(tokenizer.fim_prefix, tokenizer.fim_suffix),
+                    windows=args.infill_windows,
+                    batch_size=max(1, args.batch // 2),
+                    block_size=min(args.block, model.config.max_seq_len),
+                    device=device,
+                )
+            if infill is None:
+                print("no fill-in-the-middle documents in the held-out set\n")
+            else:
+                print(
+                    f"middles only         {infill.loss:.4f}\n"
+                    f"middle perplexity    {infill.perplexity:.2f}\n"
+                    f"middle tokens        {infill.middle_tokens:,}"
+                    f"   ({infill.coverage:.1%} of what was read)\n"
+                )
+    else:
+        print("no val.bin in the run directory; skipping perplexity\n")
+
+    throughput = measure_throughput(
+        model,
+        prompt_tokens=args.prompt_tokens,
+        generate_tokens=args.generate_tokens,
+        device=device,
+    )
+    print(
+        f"prefill              {throughput.prefill_tokens_per_second:,.0f} tok/s\n"
+        f"decode               {throughput.decode_tokens_per_second:,.1f} tok/s\n"
+        f"time to first token  {throughput.first_token_ms:.0f}ms"
+    )
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(report(perplexity, throughput, infill), indent=2), encoding="utf-8"
+        )
+        print(f"\nwritten to {args.json}")
+    return 0
+
+
+def command_infill(args: argparse.Namespace) -> int:
+    """Complete at a caret, with the code on both sides of it."""
+    run = Path(args.run)
+    checkpoint = run / "model.pt"
+    if not checkpoint.exists():
+        print(f"no checkpoint at {checkpoint}; train first", file=sys.stderr)
+        return 1
+
+    from .serve import Engine
+
+    engine = Engine(run, args.device)
+    prefix = Path(args.prefix_file).read_text(encoding="utf-8") if args.prefix_file else args.prefix
+    suffix = Path(args.suffix_file).read_text(encoding="utf-8") if args.suffix_file else args.suffix
+
+    text, count = engine.infill(
+        prefix,
+        suffix,
+        max_tokens=args.tokens,
+        temperature=args.temperature,
+    )
+
+    print(f"# {count} tokens on {describe_device(engine.device)}\n")
+    # The caret is marked so it is obvious what the model contributed.
+    print(f"{prefix}\033[1;32m{text}\033[0m{suffix}")
+    return 0
+
+
+def command_probe(args: argparse.Namespace) -> int:
+    """Ask one checkpoint, or two, the same fixed set of questions."""
+    limit_threads(args)
+    from .probe import Answer, labels, load_cases, caret_line, report, show, summarise
+    from .serve import Engine
+
+    try:
+        cases = load_cases(Path(args.cases) if args.cases else None)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"could not read the cases: {error}", file=sys.stderr)
+        return 1
+
+    runs = [Path(args.run)] + ([Path(args.compare)] if args.compare else [])
+    engines = []
+    for run, label in zip(runs, labels(runs)):
+        if not (run / "model.pt").exists():
+            print(f"no checkpoint at {run / 'model.pt'}; train first", file=sys.stderr)
+            return 1
+        engines.append((label, Engine(run, args.device)))
+
+    label_width = max(len(name) for name, _ in engines)
+    collected: dict[str, list] = {name: [] for name, _ in engines}
+
+    for case in cases:
+        print(f"\n\033[1m{case.name}\033[0m  {caret_line(case)!r}")
+        for name, engine in engines:
+            recorded: dict = {}
+            # Every case starts from the same state, so a difference between
+            # two rows is the model rather than where the sampler had got to.
+            torch.manual_seed(args.seed)
+            options = dict(
+                max_tokens=args.tokens,
+                temperature=args.temperature,
+                line_comment=case.line_comment,
+                heal=not args.no_heal,
+                scope=not args.no_scope,
+                report=recorded,
+            )
+            if args.candidates > 1:
+                # Sampling, not greedy: several candidates at temperature zero
+                # would be the same candidate several times.
+                text, count = engine.infill_best_of(
+                    case.prefix, case.suffix,
+                    candidates=args.candidates,
+                    **{key: value for key, value in options.items() if key != "temperature"},
+                )
+            else:
+                text, count = engine.infill(
+                    case.prefix, case.suffix, use_cache=False, **options
+                )
+            answer = Answer(
+                case=case.name,
+                completion=text,
+                tokens=count,
+                confidence=float(recorded.get("confidence") or 0.0),
+                trimmed=recorded.get("trimmed"),
+            )
+            collected[name].append(answer)
+            why = f"  \033[33m[{answer.trimmed}]\033[0m" if answer.trimmed else ""
+            print(f"  {name:<{label_width}}  \033[32m{show(text)}\033[0m{why}")
+
+    print()
+    for name, _ in engines:
+        print(f"{name:<{label_width}}  {summarise(collected[name])}")
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(
+                {name: report(answers) for name, answers in collected.items()}, indent=2
+            ),
+            encoding="utf-8",
+        )
+        print(f"\nwritten to {args.json}")
+    return 0
+
+
+def command_serve(args: argparse.Namespace) -> int:
+    from .serve import serve
+
+    # Serving on a CPU box usually shares it with something else: an editor, a
+    # build, or the training run that produced the checkpoint. Left alone,
+    # PyTorch takes every core and all of them slow down together.
+    if args.threads and resolve_device(args.device).type == "cpu":
+        torch.set_num_threads(args.threads)
+
+    return serve(
+        Path(args.run),
+        host=args.host,
+        port=args.port,
+        device=args.device,
+        quantize=args.quantize,
+        half=args.half,
+        adapter=Path(args.adapter) if args.adapter else None,
+        reload_seconds=args.reload,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="codecraft_model",
+        description="Train and run CodeCraft LM, a small code model built from scratch.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_device(parser_: argparse.ArgumentParser) -> None:
+        parser_.add_argument(
+            "--device",
+            default="auto",
+            help="auto, cuda, cuda:1, cpu or mps (auto takes the best available)",
+        )
+
+    sizes = subparsers.add_parser("sizes", help="list the named model sizes")
+    sizes.add_argument(
+        "--optimizer",
+        default="adamw",
+        choices=["adamw", "adafactor"],
+        help="which optimiser the training column should assume",
+    )
+    sizes.add_argument(
+        "--fused-step",
+        action="store_true",
+        help="assume each gradient is consumed and freed during the backward pass",
+    )
+    add_device(sizes)
+    sizes.set_defaults(func=command_sizes)
+
+    corpus = subparsers.add_parser(
+        "corpus", help="what a corpus of a given size costs on disk"
+    )
+    corpus.add_argument(
+        "--tokens",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="N",
+        help="token counts to price, e.g. 1000000000",
+    )
+    corpus.add_argument(
+        "--characters-per-token",
+        type=float,
+        default=MEASURED_CHARACTERS_PER_TOKEN,
+        help="the default is measured, not assumed; a smaller vocabulary compresses less",
+    )
+    corpus.set_defaults(func=command_corpus)
+
+    prepare = subparsers.add_parser("prepare", help="build a corpus and tokenizer")
+    prepare.add_argument("--run", required=True, help="directory for this run")
+    prepare.add_argument(
+        "--roots", nargs="*", default=[], help="local directories to scan"
+    )
+    prepare.add_argument(
+        "--repos",
+        nargs="+",
+        default=None,
+        metavar="OWNER/NAME",
+        help="repositories to clone, read and delete one at a time",
+    )
+    prepare.add_argument(
+        "--repos-file",
+        default=None,
+        help="a file of repositories, one per line, # for comments",
+    )
+    prepare.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="stop once the corpus reaches this many tokens",
+    )
+    prepare.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="clone depth; history is bandwidth spent on near-duplicate text",
+    )
+    prepare.add_argument(
+        "--workspace",
+        default=None,
+        help="where clones are staged; each is deleted after it is read",
+    )
+    prepare.add_argument(
+        "--sample-repos",
+        type=int,
+        default=3,
+        help="repositories to clone for the tokenizer sample when there are no local roots",
+    )
+    prepare.add_argument("--vocab", type=int, default=4096, help="tokenizer vocabulary size")
+    prepare.add_argument("--val-fraction", type=float, default=0.05)
+    prepare.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "continue an interrupted build: keep the tokenizer and the tokens already "
+            "written, skip the sources already read, and append the rest"
+        ),
+    )
+    prepare.add_argument(
+        "--sample-mb",
+        type=int,
+        default=32,
+        help="how much text to train the tokenizer on; the corpus itself is unbounded",
+    )
+    prepare.add_argument(
+        "--sample-stride",
+        type=int,
+        default=1,
+        help="take every nth file for the sample, so it spans the whole tree",
+    )
+    prepare.add_argument(
+        "--fim",
+        type=float,
+        default=0.0,
+        metavar="P",
+        help=(
+            "rewrite this fraction of documents as prefix/suffix/middle, which is "
+            "what teaches the model to complete at a caret rather than only at the end"
+        ),
+    )
+    prepare.add_argument(
+        "--allow-dir",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help="include directories normally skipped, e.g. site-packages node_modules",
+    )
+    prepare.set_defaults(func=command_prepare)
+
+    trainer = subparsers.add_parser("train", help="train a model")
+    trainer.add_argument("--run", required=True)
+    trainer.add_argument(
+        "--size",
+        default=None,
+        choices=sorted(SIZES),
+        help=(
+            f"architecture preset (default: {DEFAULT_SIZE}, about a billion parameters, "
+            "which one 16GB card trains on a proportionate corpus in about a fortnight). "
+            "Ignored when resuming, where the architecture comes from the checkpoint"
+        ),
+    )
+    trainer.add_argument("--steps", type=int, default=2000)
+    trainer.add_argument(
+        "--batch",
+        type=int,
+        default=8,
+        help="sequences per step; with the default block that is 8192 tokens",
+    )
+    trainer.add_argument("--block", type=int, default=1024, help="tokens per window")
+    trainer.add_argument("--accumulate", type=int, default=1)
+    trainer.add_argument("--lr", type=float, default=3e-4)
+    trainer.add_argument("--warmup", type=int, default=100)
+    trainer.add_argument("--eval-every", type=int, default=200)
+    trainer.add_argument("--context", type=int, default=None, help="override max_seq_len")
+    trainer.add_argument(
+        "--dropout",
+        type=float,
+        default=None,
+        help="dropout rate; worth setting on a corpus small enough to memorise",
+    )
+    trainer.add_argument(
+        "--optimizer",
+        default="auto",
+        choices=["auto", "adamw", "adafactor"],
+        help=(
+            "adafactor keeps the second moment as one number per row and column "
+            "instead of a full copy, which is what decides whether a size fits at "
+            "all. The default measures this machine and picks the plainest thing "
+            "that fits, saying which and why"
+        ),
+    )
+    trainer.add_argument(
+        "--fused-step",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "update each parameter during the backward pass and free its gradient there, "
+            "so the model is never accompanied by a full copy of itself. Needs "
+            "--optimizer adafactor, and gives up gradient accumulation and global clipping. "
+            "Chosen automatically when the optimiser is"
+        ),
+    )
+    trainer.add_argument(
+        "--loss-chunk",
+        type=int,
+        default=None,
+        metavar="TOKENS",
+        help=(
+            "score the sequence this many tokens at a time instead of projecting all of "
+            "it at once, recomputing each piece during the backward pass. Measured on a "
+            "32768-token vocabulary: about a third less peak memory for about a tenth "
+            "more time per step, and the same loss to the last digit. 512 is a good "
+            "starting point"
+        ),
+    )
+    trainer.add_argument("--threads", type=int, default=4, help="CPU threads; ignored on a GPU")
+    trainer.add_argument("--seed", type=int, default=1337)
+    add_device(trainer)
+    trainer.add_argument(
+        "--precision",
+        default="auto",
+        choices=["auto", "bf16", "fp16", "fp32"],
+        help="auto picks bf16 on a card that supports it",
+    )
+    trainer.add_argument(
+        "--compile",
+        action="store_true",
+        help="fuse the graph with torch.compile: faster steps, slow first step",
+    )
+    trainer.add_argument(
+        "--checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "recompute activations in the backward pass: roughly a third more "
+            "time per step, and activation memory stops scaling with depth"
+        ),
+    )
+    trainer.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="stop after this long, checkpointing first; resume with --resume",
+    )
+    trainer.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from latest.pt, restoring the optimiser state too",
+    )
+    trainer.set_defaults(func=command_train)
+
+    checker = subparsers.add_parser(
+        "doctor", help="what this machine can train and what it can run"
+    )
+    checker.add_argument(
+        "--run", default=None, help="where the run will be written; defaults to here"
+    )
+    checker.add_argument(
+        "--vocab",
+        type=int,
+        default=32768,
+        help="the vocabulary the sizes are measured with",
+    )
+    add_device(checker)
+    checker.set_defaults(func=command_doctor)
+
+    reporter = subparsers.add_parser(
+        "report", help="how far a training run is, and when it will finish"
+    )
+    reporter.add_argument("--run", required=True)
+    reporter.set_defaults(func=command_report)
+
+    planner = subparsers.add_parser(
+        "plan", help="time real steps at a real size, and say what the run will cost"
+    )
+    planner.add_argument("--size", default=DEFAULT_SIZE, choices=sorted(SIZES))
+    planner.add_argument("--vocab", type=int, default=32768)
+    planner.add_argument("--batch", type=int, default=4)
+    planner.add_argument("--block", type=int, default=1024)
+    planner.add_argument(
+        "--steps", type=int, default=6, help="timed steps; more is steadier, not faster"
+    )
+    planner.add_argument(
+        "--warmup",
+        type=int,
+        default=2,
+        help="untimed steps first: the first one allocates everything the run uses",
+    )
+    planner.add_argument(
+        "--optimizer", default="auto", choices=("auto", "adamw", "adafactor")
+    )
+    planner.add_argument(
+        "--fused-step", action=argparse.BooleanOptionalAction, default=None
+    )
+    planner.add_argument(
+        "--checkpointing", action=argparse.BooleanOptionalAction, default=None
+    )
+    planner.add_argument(
+        "--loss-chunk",
+        type=int,
+        default=None,
+        metavar="TOKENS",
+        help="score the sequence in pieces of this size; see `train --loss-chunk`",
+    )
+    planner.add_argument(
+        "--hours",
+        type=float,
+        default=None,
+        help="the time actually available, to price a corpus against it",
+    )
+    add_device(planner)
+    planner.set_defaults(func=command_plan)
+
+    sampler = subparsers.add_parser("sample", help="generate from a checkpoint")
+    sampler.add_argument("--run", required=True)
+    sampler.add_argument(
+        "--adapter",
+        default=None,
+        help="a low-rank adapter to apply to the checkpoint before sampling",
+    )
+    sampler.add_argument("--prompt", default="def ")
+    sampler.add_argument("--tokens", type=int, default=200)
+    sampler.add_argument("--temperature", type=float, default=0.8)
+    sampler.add_argument("--top-k", type=int, default=40)
+    sampler.add_argument("--top-p", type=float, default=0.95)
+    sampler.add_argument(
+        "--min-p",
+        type=float,
+        default=None,
+        help="keep tokens within this fraction of the most likely one; adapts to confidence",
+    )
+    sampler.add_argument("--repetition-penalty", type=float, default=1.1)
+    add_device(sampler)
+    sampler.set_defaults(func=command_sample)
+
+    tuner = subparsers.add_parser(
+        "finetune", help="teach a base model to answer instructions"
+    )
+    tuner.add_argument("--run", required=True)
+    tuner.add_argument("--examples", required=True, help="JSON Lines: prompt, response")
+    tuner.add_argument("--steps", type=int, default=300)
+    tuner.add_argument("--batch", type=int, default=4)
+    tuner.add_argument(
+        "--lr",
+        type=float,
+        default=2e-5,
+        help="much lower than pretraining: a large step undoes what the model learned",
+    )
+    tuner.add_argument("--warmup", type=int, default=20)
+    tuner.add_argument("--seed", type=int, default=1337)
+    tuner.add_argument(
+        "--lora",
+        type=int,
+        default=0,
+        metavar="RANK",
+        help=(
+            "train a low-rank adapter of this rank instead of the whole model: "
+            "a fraction of the parameters, a file of a few hundred kilobytes, "
+            "and the base checkpoint left untouched"
+        ),
+    )
+    tuner.add_argument(
+        "--lora-alpha",
+        type=float,
+        default=None,
+        help="adapter scaling; defaults to twice the rank",
+    )
+    tuner.add_argument(
+        "--merge",
+        action="store_true",
+        help="fold the adapter into the weights and write a whole checkpoint too",
+    )
+    add_device(tuner)
+    tuner.set_defaults(func=command_finetune)
+
+    averager = subparsers.add_parser(
+        "average", help="average several checkpoints of one run into one"
+    )
+    averager.add_argument(
+        "--checkpoints",
+        nargs="+",
+        required=True,
+        help="two or more checkpoints from the same run",
+    )
+    averager.add_argument("--out", required=True)
+    averager.add_argument(
+        "--weights",
+        nargs="+",
+        type=float,
+        default=None,
+        help="relative weights, one per checkpoint; equal by default",
+    )
+    averager.set_defaults(func=command_average)
+
+    chatter = subparsers.add_parser("chat", help="talk to a checkpoint at the terminal")
+    chatter.add_argument("--run", required=True)
+    chatter.add_argument("--adapter", default=None, help="a low-rank adapter to merge in first")
+    chatter.add_argument("--system", default="", help="a system prompt for every turn")
+    chatter.add_argument("--tokens", type=int, default=200)
+    chatter.add_argument("--temperature", type=float, default=0.7)
+    chatter.add_argument("--top-k", type=int, default=40)
+    chatter.add_argument("--top-p", type=float, default=0.95)
+    chatter.add_argument(
+        "--history",
+        type=int,
+        default=6,
+        help="how many earlier exchanges to replay into the prompt",
+    )
+    add_device(chatter)
+    chatter.set_defaults(func=command_chat)
+
+    inspector = subparsers.add_parser("tokens", help="show how text is split into tokens")
+    inspector.add_argument("--run", required=True)
+    inspector.add_argument("--text", default=None, help="the text to split; omit to read stdin")
+    inspector.add_argument("--quiet", action="store_true", help="counts only, no listing")
+    inspector.set_defaults(func=command_tokens)
+
+    exporter = subparsers.add_parser(
+        "export", help="write a checkpoint that loads without unpickling"
+    )
+    exporter.add_argument("--run", required=True)
+    exporter.add_argument("--out", default=None, help="defaults to model.cclm in the run")
+    exporter.add_argument(
+        "--quantize", action="store_true", help="export int8 weights instead"
+    )
+    exporter.set_defaults(func=command_export)
+
+    evaluator = subparsers.add_parser(
+        "evaluate", help="measure held-out perplexity and throughput"
+    )
+    evaluator.add_argument("--run", required=True)
+    evaluator.add_argument(
+        "--checkpoint",
+        default=None,
+        help="a specific checkpoint to measure, instead of the run's model.pt",
+    )
+    evaluator.add_argument("--batches", type=int, default=50)
+    evaluator.add_argument("--batch", type=int, default=8)
+    evaluator.add_argument("--block", type=int, default=512)
+    evaluator.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to measure with; leave unset to take every core",
+    )
+    evaluator.add_argument("--prompt-tokens", type=int, default=256)
+    evaluator.add_argument("--generate-tokens", type=int, default=64)
+    evaluator.add_argument(
+        "--quantize", action="store_true", help="measure the int8 model instead"
+    )
+    evaluator.add_argument(
+        "--infill-windows",
+        type=int,
+        default=48,
+        help="how many fill-in-the-middle markers to score the answer after",
+    )
+    evaluator.add_argument(
+        "--no-infill",
+        action="store_true",
+        help="skip the middles-only score, which costs a second pass over the data",
+    )
+    evaluator.add_argument("--json", default=None, help="also write the numbers to a file")
+    add_device(evaluator)
+    evaluator.set_defaults(func=command_evaluate)
+
+    infill = subparsers.add_parser(
+        "infill", help="complete between a prefix and a suffix"
+    )
+    infill.add_argument("--run", required=True)
+    infill.add_argument("--prefix", default="def parse(text):\n    ")
+    infill.add_argument("--suffix", default="\n    return result\n")
+    infill.add_argument("--prefix-file", default=None, help="read the prefix from a file")
+    infill.add_argument("--suffix-file", default=None, help="read the suffix from a file")
+    infill.add_argument("--tokens", type=int, default=64)
+    infill.add_argument("--temperature", type=float, default=0.2)
+    add_device(infill)
+    infill.set_defaults(func=command_infill)
+
+    prober = subparsers.add_parser(
+        "probe",
+        help="ask a checkpoint a fixed set of caret questions, and compare two",
+    )
+    prober.add_argument("--run", required=True)
+    prober.add_argument(
+        "--compare",
+        default=None,
+        help="a second run, answered beside the first at every caret",
+    )
+    prober.add_argument(
+        "--cases",
+        default=None,
+        help="JSON list of {name, prefix, suffix, line_comment}; omit for the built-in set",
+    )
+    prober.add_argument("--tokens", type=int, default=48)
+    prober.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="zero, so the same checkpoint answers the same way twice",
+    )
+    prober.add_argument("--seed", type=int, default=1337)
+    prober.add_argument(
+        "--candidates",
+        type=int,
+        default=1,
+        help="sample this many per caret and keep the best; ignores --temperature",
+    )
+    prober.add_argument(
+        "--no-heal",
+        action="store_true",
+        help="ask from the caret as it falls, without cutting back to a token boundary",
+    )
+    prober.add_argument(
+        "--no-scope",
+        action="store_true",
+        help="do not cut a completion that runs past the caret it belongs to",
+    )
+    prober.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to answer with; leave unset to take every core",
+    )
+    prober.add_argument("--json", default=None, help="write the answers to this file")
+    add_device(prober)
+    prober.set_defaults(func=command_probe)
+
+    server = subparsers.add_parser("serve", help="serve the model over HTTP")
+    server.add_argument("--run", required=True)
+    server.add_argument("--host", default="127.0.0.1")
+    server.add_argument("--port", type=int, default=8940)
+    server.add_argument(
+        "--quantize",
+        action="store_true",
+        help="int8 weights: roughly 2.3x smaller overall, for a model that would not otherwise fit",
+    )
+    server.add_argument(
+        "--half",
+        action="store_true",
+        help=(
+            "hold the weights in bfloat16: half the memory, and what makes a 2B model "
+            "fit on a card with room for the cache"
+        ),
+    )
+    server.add_argument(
+        "--adapter",
+        default=None,
+        help="a low-rank adapter to merge into the checkpoint before serving",
+    )
+    server.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CPU threads to serve with; leave unset to take every core",
+    )
+    server.add_argument(
+        "--reload",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "poll the checkpoint this often and load it again when training "
+            "replaces it; 0 never reloads"
+        ),
+    )
+    add_device(server)
+    server.set_defaults(func=command_serve)
+
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except (RuntimeError, ValueError) as error:
+        # A device that cannot be used, or a combination of flags that cannot
+        # mean anything, is a configuration problem with a known fix rather
+        # than a crash. Every message raised on these paths names the fix, so
+        # printing it beats a traceback through code the reader did not write.
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

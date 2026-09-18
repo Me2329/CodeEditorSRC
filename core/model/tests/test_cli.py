@@ -1,0 +1,698 @@
+"""The command line, driven end to end at a size that fits in a test run."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from codecraft_model.cli import main
+from codecraft_model.tokenizer import Tokenizer
+
+
+@pytest.fixture
+def sources(tmp_path):
+    """A source tree with enough repetition to be learnable."""
+    directory = tmp_path / "src"
+    directory.mkdir()
+    for index in range(6):
+        (directory / f"module_{index}.py").write_text(
+            f"def parse_{index}(text):\n"
+            "    result = []\n"
+            "    for line in text.splitlines():\n"
+            "        result.append(line.strip())\n"
+            "    return result\n" * 12
+        )
+    return directory
+
+
+def test_sizes_reports_every_preset(capsys) -> None:
+    assert main(["sizes"]) == 0
+
+    output = capsys.readouterr().out
+    for name in ["micro", "tiny", "small", "base", "large", "xl"]:
+        assert name in output
+    # The billion-parameter configuration is reported as such.
+    assert "1.01B" in output
+
+
+def test_prepare_train_sample_round_trip(tmp_path, sources, capsys) -> None:
+    """The whole pipeline, from source files to generated text.
+
+    Every stage is exercised for real: a tokenizer is trained, a corpus is
+    encoded, weights are updated by gradient descent, a checkpoint is written
+    and reloaded, and tokens are sampled from it.
+    """
+    run = tmp_path / "run"
+
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (run / "tokenizer.json").exists()
+    assert json.loads((run / "meta.json").read_text())["total_tokens"] > 0
+
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "30",
+                "--batch", "4", "--block", "64", "--warmup", "5", "--eval-every", "15",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+    summary = json.loads((run / "training.json").read_text())
+    assert summary["history"][-1]["val_loss"] < summary["history"][0]["val_loss"]
+
+    capsys.readouterr()
+    assert main(["sample", "--run", str(run), "--prompt", "def parse", "--tokens", "20"]) == 0
+    assert "def parse" in capsys.readouterr().out
+
+
+def test_probe_asks_every_case_and_says_what_came_back(tmp_path, sources, capsys) -> None:
+    """The whole command, against a real checkpoint, comparing a run with itself."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "5",
+                "--batch", "2", "--block", "64", "--warmup", "2", "--eval-every", "5",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([{"name": "only", "prefix": "def f(", "suffix": "):\n    pass\n"}]))
+    written = tmp_path / "probe.json"
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "probe", "--run", str(run), "--compare", str(run),
+                "--cases", str(cases), "--tokens", "4", "--json", str(written),
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "only" in output
+    assert "1 cases" in output
+    answers = json.loads(written.read_text())
+    # Compared with itself, which is the one comparison whose answer is known:
+    # two rows, told apart by number, saying exactly the same thing.
+    assert len(answers) == 2
+    first, second = answers.values()
+    assert first["cases"] == 1
+    assert first["answers"] == second["answers"]
+
+
+def test_probe_without_a_checkpoint_says_to_train_first(tmp_path, capsys) -> None:
+    assert main(["probe", "--run", str(tmp_path)]) == 1
+    assert "train first" in capsys.readouterr().err
+
+
+def test_probe_refuses_a_cases_file_it_cannot_use(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    broken = tmp_path / "cases.json"
+    broken.write_text("not json at all")
+
+    assert main(["probe", "--run", str(run), "--cases", str(broken)]) == 1
+    assert "could not read the cases" in capsys.readouterr().err
+
+
+def test_prepare_reports_a_tree_with_nothing_in_it(tmp_path, capsys) -> None:
+    assert main(["prepare", "--run", str(tmp_path / "run"), "--roots", str(tmp_path)]) == 1
+    assert "no source files" in capsys.readouterr().err
+
+
+def test_train_without_a_tokenizer_says_to_prepare_first(tmp_path, capsys) -> None:
+    assert main(["train", "--run", str(tmp_path)]) == 1
+    assert "prepare" in capsys.readouterr().err
+
+
+def test_sample_without_a_checkpoint_says_to_train_first(tmp_path, capsys) -> None:
+    assert main(["sample", "--run", str(tmp_path)]) == 1
+    assert "train first" in capsys.readouterr().err
+
+
+def test_serve_without_a_checkpoint_fails_cleanly(tmp_path, capsys) -> None:
+    assert main(["serve", "--run", str(tmp_path), "--port", "0"]) == 1
+    assert "missing" in capsys.readouterr().out
+
+
+def test_the_model_is_sized_for_the_tokenizer_that_was_trained(
+    tmp_path, sources, capsys
+) -> None:
+    """A preset's vocabulary would index outside the embedding table.
+
+    `prepare` learns as many merges as the corpus supports, which is often fewer
+    than asked for, so the model has to take its vocabulary from the tokenizer.
+    """
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--threads", "2",
+        ]
+    )
+    reported = capsys.readouterr().out
+    tokenizer = Tokenizer.load(run / "tokenizer.json")
+
+    assert f"vocab {tokenizer.vocab_size}" in reported
+
+
+def test_serving_can_be_told_how_many_threads_to_use(tmp_path, monkeypatch) -> None:
+    """Serving usually shares a box with an editor, a build, or the training run
+    that produced the checkpoint."""
+    import torch
+
+    from codecraft_model import cli
+
+    asked: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", lambda count: asked.append(count))
+    monkeypatch.setattr(cli, "serve", lambda *args, **kwargs: 0, raising=False)
+
+    # The run is empty, so serve refuses after the thread count is applied.
+    cli.main(["serve", "--run", str(tmp_path), "--port", "0", "--threads", "2", "--device", "cpu"])
+
+    assert asked == [2]
+
+
+def test_prepare_says_what_the_validation_set_is(tmp_path, sources, capsys) -> None:
+    """The pair "training 2.77, validation 4.11" reads as overfitting and is not.
+
+    The split is the tail of the corpus, so validation is whole files the model
+    never sees. Leaving that to be worked out from the split point leads to
+    adding dropout that was never needed.
+    """
+    run = tmp_path / "run"
+
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    assert "whole files the model never sees" in capsys.readouterr().out
+
+
+def test_tokens_shows_the_split(tmp_path, sources, capsys) -> None:
+    """Nearly every surprise about what a model does with a prompt turns out to
+    be a surprise about how the prompt was split."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    assert main(["tokens", "--run", str(run), "--text", "def parse(text):"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "16 characters" in printed
+    assert "characters per token" in printed
+
+    # One row per token, whatever this tokenizer's merges happen to be: a small
+    # vocabulary splits "def" into two pieces and a large one does not.
+    reported = int(printed.split("characters, ")[1].split(" tokens")[0])
+    rows = [line for line in printed.splitlines() if line.startswith("  ") and line.strip()]
+    assert len(rows) == reported
+
+
+def test_tokens_marks_whitespace(tmp_path, sources, capsys) -> None:
+    """Whitespace is where a split is most often surprising."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(["tokens", "--run", str(run), "--text", "a b"])
+
+    assert "·" in capsys.readouterr().out
+
+
+def test_tokens_counts_without_listing(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(["tokens", "--run", str(run), "--text", "def parse", "--quiet"])
+    printed = capsys.readouterr().out
+
+    assert "characters" in printed
+    assert "def" not in printed
+
+
+def test_tokens_without_a_tokenizer_says_so(tmp_path, capsys) -> None:
+    assert main(["tokens", "--run", str(tmp_path), "--text", "x"]) == 1
+    assert "no tokenizer" in capsys.readouterr().err
+
+
+def test_a_chat_prompt_keeps_its_turn_markers(tmp_path, sources) -> None:
+    """Decoding the rendered prompt to text drops them, and the model is then
+    asked the question with no format around it at all."""
+    from codecraft_model.instruct import render_for_inference
+    from codecraft_model.tokenizer import Tokenizer as Tok
+
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    tokenizer = Tok.load(run / "tokenizer.json")
+
+    ids = render_for_inference("a question", tokenizer, "be terse")
+
+    assert tokenizer.special_id("<|user|>") in ids
+    assert tokenizer.special_id("<|assistant|>") in ids
+    # The round trip that does not hold, which is why the ids are used directly.
+    assert tokenizer.encode(tokenizer.decode(ids)) != ids
+
+
+def test_resuming_takes_the_architecture_from_the_checkpoint(
+    tmp_path, sources, capsys
+) -> None:
+    """Otherwise a resume rebuilds the default preset and fails to load.
+
+    The flag that named the size was given on the first run, not on the one that
+    continues it, and the failure is forty lines of size mismatches rather than
+    a sentence saying what happened.
+    """
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    main(
+        [
+            "train", "--run", str(run), "--size", "tiny", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--threads", "2",
+        ]
+    )
+    trained = json.loads((run / "training.json").read_text())["parameters"]
+    capsys.readouterr()
+
+    # No --size this time, which is the whole point.
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--steps", "4", "--batch", "2",
+                "--block", "32", "--warmup", "1", "--eval-every", "2",
+                "--resume", "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    reported = capsys.readouterr().out
+    assert "model resumed" in reported
+    assert "resuming from step 2" in reported
+    assert json.loads((run / "training.json").read_text())["parameters"] == trained
+
+
+def test_a_size_given_on_a_resume_says_it_is_ignored(tmp_path, sources, capsys) -> None:
+    """Silently ignoring a flag is worse than refusing it; saying so is better
+    than either."""
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    main(
+        [
+            "train", "--run", str(run), "--size", "tiny", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--threads", "2",
+        ]
+    )
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "4",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--resume", "--threads", "2",
+        ]
+    )
+
+    assert "--size micro is ignored" in capsys.readouterr().out
+
+
+def test_resume_without_a_checkpoint_just_trains(tmp_path, sources) -> None:
+    """Asking to continue something that was never started is not an error.
+
+    A size is given because there is no checkpoint to take one from, and the
+    default is a billion parameters: what this checks is the resume path, not
+    how long a fresh run at the default takes.
+    """
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "2", "--batch", "2",
+                "--block", "32", "--warmup", "1", "--eval-every", "2",
+                "--resume", "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+
+def test_context_and_dropout_can_be_overridden(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "2",
+            "--batch", "2", "--block", "32", "--warmup", "1", "--eval-every", "2",
+            "--context", "128", "--dropout", "0.2", "--threads", "2",
+        ]
+    )
+    output = capsys.readouterr().out
+    assert "context 128" in output and "dropout 0.2" in output
+
+
+def test_a_measurement_can_be_kept_off_the_cores_in_use(tmp_path, sources, monkeypatch) -> None:
+    """A number taken while the machine is training is a number about the machine."""
+    import torch
+
+    asked: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", asked.append)
+
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "3",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "3",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+    asked.clear()
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([{"prefix": "def f(", "suffix": ")"}]))
+    assert (
+        main(["probe", "--run", str(run), "--cases", str(cases), "--tokens", "2", "--threads", "1"])
+        == 0
+    )
+
+    assert asked == [1]
+
+
+def test_a_tight_machine_is_fitted_rather_than_only_warned(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """The flags that are about fitting now resolve themselves, and say so."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    # A machine with a gigabyte, against a size that does not fit in one.
+    monkeypatch.setattr("codecraft_model.device.host_memory_bytes", lambda: 1_000_000_000)
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "base", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    # It picked the plainest configuration that fits, and named it.
+    assert "adafactor" in output
+    assert "do not fit here" in output
+    assert "recomputing activations" in output
+
+
+def test_a_run_that_still_will_not_fit_says_so_before_allocating(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """The warning is still there for what choosing cannot fix.
+
+    The allocator does not fail when a run is too big: it keeps succeeding
+    until the kernel kills the process, and the user is left with "Killed" and
+    no idea which number was the problem. Asking for an optimiser explicitly
+    turns the automatic choice off, so the warning is what is left.
+    """
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    monkeypatch.setattr("codecraft_model.device.host_memory_bytes", lambda: 1_000_000_000)
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "base", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2", "--optimizer", "adamw", "--no-checkpointing",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "warning:" in output
+    assert "GB" in output
+    # And says what would help, rather than only that it will not fit.
+    assert "--checkpointing" in output
+
+
+def test_a_run_that_fits_says_nothing_about_memory(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "1",
+                "--batch", "2", "--block", "64", "--warmup", "1", "--eval-every", "1",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    assert "warning:" not in capsys.readouterr().out
+
+
+def test_a_size_that_does_not_fit_names_one_that_does() -> None:
+    """"No" is a worse answer than "no, and here is the one that would"."""
+    from codecraft_model.cli import largest_that_fits
+
+    # A 16GB card reaches 2.29B, but only by never holding two gradients.
+    assert largest_that_fits(16e9, 32768) == ("xxl", "adafactor --fused-step")
+    # With 12GB the same billion-parameter size fits the ordinary way, and the
+    # plainer option is the one to recommend when it works.
+    assert largest_that_fits(12e9, 32768) == ("xl", "adafactor")
+    # And a machine with a gigabyte trains something, just not much.
+    assert largest_that_fits(1e9, 32768) == ("base", "adafactor --fused-step")
+
+
+def test_a_machine_too_small_for_any_size_is_told_so() -> None:
+    from codecraft_model.cli import largest_that_fits
+
+    assert largest_that_fits(1e6, 32768) is None
+
+
+def test_preparing_again_with_resume_keeps_the_tokenizer(tmp_path, sources, capsys) -> None:
+    """Training a second tokenizer would give different ids for the same text."""
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    first = (run / "tokenizer.json").read_bytes()
+
+    capsys.readouterr()
+    assert (
+        main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "500", "--resume"])
+        == 0
+    )
+
+    assert (run / "tokenizer.json").read_bytes() == first
+    assert "resuming with the" in capsys.readouterr().out
+
+
+def test_report_reads_a_run_that_has_been_trained(tmp_path, sources, capsys) -> None:
+    run = tmp_path / "run"
+    assert main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"]) == 0
+    assert (
+        main(
+            [
+                "train", "--run", str(run), "--size", "micro", "--steps", "10",
+                "--batch", "2", "--block", "64", "--warmup", "2", "--eval-every", "5",
+                "--threads", "2",
+            ]
+        )
+        == 0
+    )
+
+    capsys.readouterr()
+    assert main(["report", "--run", str(run)]) == 0
+
+    output = capsys.readouterr().out
+    assert "step" in output and "10 of 10" in output
+    assert "held-out loss" in output
+    assert "train/val gap" in output
+
+
+def test_report_on_a_directory_with_no_run_says_so(tmp_path, capsys) -> None:
+    assert main(["report", "--run", str(tmp_path)]) == 1
+    assert "nothing has been trained" in capsys.readouterr().err
+
+
+def test_doctor_says_what_this_machine_can_do(capsys) -> None:
+    from codecraft_model import cli
+
+    assert main(["doctor"]) == 0
+
+    output = capsys.readouterr().out
+    assert "torch" in output
+    # Fitting and finishing are different questions and are labelled as such.
+    assert "fits:" in output and "runs:" in output
+    # And what the disk would have to hold for the size it will actually train.
+    assert "corpus proportionate to it" in output
+    assert f"two checkpoints of {cli.DEFAULT_SIZE}" in output
+
+
+def test_doctor_says_why_the_default_is_not_the_largest_that_fits(capsys) -> None:
+    """The largest size that fits is rarely the largest you can afford to finish."""
+    from codecraft_model import cli
+
+    assert main(["doctor"]) == 0
+    output = capsys.readouterr().out
+    if f"fits:   {cli.DEFAULT_SIZE}" in output:
+        # On a machine where the default *is* the largest that fits there is
+        # nothing to explain, and nothing is said.
+        assert "afford to finish" not in output
+        return
+    assert f"the default is {cli.DEFAULT_SIZE}" in output
+    assert "afford to finish" in output
+
+
+def test_plan_measures_a_real_step_and_prices_the_run(capsys) -> None:
+    """The command exists because memory arithmetic hides the real constraint."""
+    assert (
+        main(
+            [
+                "plan",
+                "--size",
+                "micro",
+                "--vocab",
+                "512",
+                "--batch",
+                "2",
+                "--block",
+                "64",
+                "--steps",
+                "2",
+                "--warmup",
+                "1",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "tokens/s" in output
+    assert "FLOP/s sustained" in output
+    assert "a corpus proportionate to micro" in output
+    assert "20 per parameter" in output
+
+
+def test_plan_prices_a_corpus_against_the_time_someone_has(capsys) -> None:
+    assert (
+        main(
+            [
+                "plan",
+                "--size",
+                "micro",
+                "--vocab",
+                "512",
+                "--batch",
+                "2",
+                "--block",
+                "64",
+                "--steps",
+                "2",
+                "--warmup",
+                "0",
+                "--hours",
+                "1",
+                "--optimizer",
+                "adafactor",
+                "--fused-step",
+                "--checkpointing",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "--optimizer adafactor --fused-step --checkpointing" in output
+    assert "buys at this size" in output
+    assert "per parameter" in output
+
+
+def test_plan_refuses_a_fused_step_without_the_optimiser_it_needs(capsys) -> None:
+    """A bad combination of flags prints its fix rather than a traceback."""
+    assert main(["plan", "--size", "micro", "--fused-step", "--device", "cpu"]) == 1
+    assert "use --optimizer adafactor" in capsys.readouterr().err
+
+
+def test_the_default_size_announces_itself_before_allocating(
+    tmp_path, sources, capsys, monkeypatch
+) -> None:
+    """A default of a billion parameters is one to hear about in advance.
+
+    Someone who typed `train --resume` with nothing to resume should find out
+    what is about to be built from the terminal, not from the fan.
+    """
+    from codecraft_model import cli
+
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+
+    # Stopped at the announcement: building the real default here would take
+    # four gigabytes and a while, and the announcement is what is under test.
+    class Stop(Exception):
+        pass
+
+    monkeypatch.setattr(cli, "CodeCraftLM", lambda *args, **kwargs: (_ for _ in ()).throw(Stop()))
+    capsys.readouterr()
+    with pytest.raises(Stop):
+        main(
+            [
+                "train", "--run", str(run), "--steps", "1", "--batch", "1",
+                "--block", "32", "--threads", "2",
+            ]
+        )
+
+    output = capsys.readouterr().out
+    assert f"no --size given, so '{cli.DEFAULT_SIZE}'" in output
+    # The count is the one for this tokenizer, not the one from the preset
+    # table: a 300-token vocabulary makes a much smaller embedding.
+    assert "M parameters" in output or "B parameters" in output
+    # And says what a corpus for it would cost, which is the real commitment.
+    assert "B tokens" in output
+    assert "sizes" in output
+
+
+def test_a_size_that_was_asked_for_is_not_announced_as_a_default(
+    tmp_path, sources, capsys
+) -> None:
+    run = tmp_path / "run"
+    main(["prepare", "--run", str(run), "--roots", str(sources), "--vocab", "300"])
+    capsys.readouterr()
+
+    main(
+        [
+            "train", "--run", str(run), "--size", "micro", "--steps", "1", "--batch", "2",
+            "--block", "32", "--warmup", "1", "--eval-every", "1", "--threads", "2",
+        ]
+    )
+
+    assert "no --size given" not in capsys.readouterr().out

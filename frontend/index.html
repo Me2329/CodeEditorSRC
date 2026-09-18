@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="CodeCraft Studio - a browser IDE that compiles and runs code in isolated, ephemeral sandboxes."
+    />
+    <title>CodeCraft Studio</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      No web-font CDN is referenced on purpose. CodeCraft Studio is built to run
+      on airgapped and self-hosted networks, where a third-party font request
+      simply hangs. The stylesheet uses Fira Code and Inter when the host has
+      them and falls back to the platform's own UI and monospace faces.
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
